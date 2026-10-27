@@ -16,6 +16,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
 export ARGUS_READY_TIMEOUT="${ARGUS_READY_TIMEOUT:-150}"
+# Step 4 counts the accounts the smoke tests create, so they must stay.
+export SMOKE_KEEP_ACCOUNT=1
 URL="${E2E_URL:-http://127.0.0.1:8080}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
