@@ -69,6 +69,23 @@ def test_exceptions_render_with_traceback_and_context(capsys):
     assert "Traceback" in parsed["exception"] and "RuntimeError: kaboom" in parsed["exception"]
 
 
+async def test_unhandled_exception_on_write_is_audited(app, client, auth):
+    import asyncio
+
+    _boom_route(app)
+    r = await client.post("/api/v1/_test/boom", headers=auth)
+    assert r.status_code == 500
+    for _ in range(100):  # audit rows are written asynchronously
+        events = (
+            await client.get("/api/v1/audit", headers=auth, params={"all": "true", "success": "false"})
+        ).json()["events"]
+        row = next((e for e in events if e["action"] == "POST /api/v1/_test/boom"), None)
+        if row:
+            break
+        await asyncio.sleep(0.05)
+    assert row is not None and row["detail"]["status"] == 500
+
+
 async def test_domain_error_envelope_includes_request_id(client):
     r = await client.get("/api/v1/councils", headers={"X-Request-ID": "trace-401"})
     assert r.status_code == 401
