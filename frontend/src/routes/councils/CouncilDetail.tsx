@@ -1,13 +1,13 @@
-import { ArrowLeft, History, Plus, Users } from "lucide-react";
+import { History, Plus, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 
 import { CouncilHeader, StartRunLink } from "@/components/councils/CouncilHeader";
 import { GuardrailsEditor } from "@/components/councils/GuardrailsEditor";
 import { ConfirmDeleteDialog } from "@/components/councils/parts";
 import { ResizePanel, SeatCard, SeatEditDialog } from "@/components/councils/seats";
-import { RunRow } from "@/components/run/RunRow";
-import { Button, Card, EmptyState, ErrorState, Skeleton, Tabs } from "@/components/ui";
+import { RunRowList } from "@/components/run/RunRow";
+import { Button, ButtonLink, Card, EmptyState, ErrorState, FormActions, Page, PageHeader, SectionTitle, Skeleton, Tabs } from "@/components/ui";
 import { deepEqual, fieldErrorsFrom, nextSeatName, previewResize, type Dict } from "@/features/councils/logic";
 import {
   useAddMember, useDeleteCouncil, useRemoveMember, useResizeCouncil, useUpdateCouncil, useUpdateMember,
@@ -110,23 +110,25 @@ function SeatsTab({ council }: { council: Council }) {
         newSeatRoute={ref ? `${ref.provider}/${ref.model}` : "mock/mock-1"}
         onTarget={(n) => { setTarget(n === current ? null : n); setResizeError(undefined); }} onApply={() => void applyResize()} />
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg">Seats <span className="text-fg-subtle font-normal tabular">({current})</span></h2>
-        <div className="flex items-center gap-3">
-          {(atMin || atMax) && (
-            <span className="text-xs text-fg-subtle">
-              {atMax ? `At the maximum of ${council.max_size}; raise it in Edit details to add seats.` : `At the minimum of ${council.min_size}; seats can't be removed.`}
-            </span>
-          )}
-          <Button size="sm" icon={Plus} disabled={atMax || !roles.data} onClick={() => { setEditError(undefined); setEditing("new"); }}>
-            Add seat
-          </Button>
-        </div>
-      </div>
+      <SectionTitle count={current} flush
+        actions={
+          <div className="flex items-center gap-3">
+            {(atMin || atMax) && (
+              <span className="text-xs text-fg-subtle">
+                {atMax ? `At the maximum of ${council.max_size}; raise it in Edit details to add seats.` : `At the minimum of ${council.min_size}; seats can't be removed.`}
+              </span>
+            )}
+            <Button size="sm" icon={Plus} disabled={atMax || !roles.data} onClick={() => { setEditError(undefined); setEditing("new"); }}>
+              Add seat
+            </Button>
+          </div>
+        }>
+        Seats
+      </SectionTitle>
 
       {members.length === 0 ? (
         <Card as="div">
-          <EmptyState icon={Users} title="No seats" body="Use the size stepper above to seat the default roster for this mode." />
+          <EmptyState titleAs="h3" icon={Users} title="No seats" body="Use the size stepper above to seat the default roster for this mode." />
         </Card>
       ) : (
         <ol ref={listRef} className="flex flex-col gap-2" aria-label="Seats in speaking order">
@@ -175,11 +177,10 @@ function GuardrailsTab({ council, draft, setDraft }: { council: Council; draft: 
       <h2 className="sr-only">Guardrails</h2>
       <GuardrailsEditor value={draft} onChange={setDraft} onValidChange={setValid} />
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-      <div className="sticky bottom-16 md:bottom-0 z-sticky -mx-1 px-1 py-3 bg-canvas/95 border-t border-border flex flex-wrap items-center gap-2">
+      <FormActions sticky meta={<span aria-live="polite">{dirty ? "Unsaved changes" : "All changes saved"}</span>}>
         <Button variant="primary" disabled={!dirty || !valid} loading={update.isPending} onClick={() => void save()}>Save guardrails</Button>
         <Button disabled={!dirty} onClick={() => setDraft(null)}>Discard changes</Button>
-        <span className="text-xs text-fg-subtle" aria-live="polite">{dirty ? "Unsaved changes" : "All changes saved"}</span>
-      </div>
+      </FormActions>
     </div>
   );
 }
@@ -190,19 +191,16 @@ function RunsTab({ council }: { council: Council }) {
   const mine = useMemo(() => (runs.data ?? []).filter((r) => r.council_id === council.id), [runs.data, council.id]);
   return (
     <div className="flex flex-col gap-3 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg">Runs</h2>
-        <StartRunLink />
-      </div>
+      <SectionTitle flush actions={<StartRunLink variant="secondary" />}>Runs</SectionTitle>
       {runs.isLoading ? (
         <div className="space-y-2" aria-hidden><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
       ) : runs.error ? (
         <Card as="div"><ErrorState error={runs.error} onRetry={() => void runs.refetch()} /></Card>
       ) : mine.length ? (
-        <Card as="div"><ul className="divide-y divide-border" aria-label={`Runs of ${council.name}`}>{mine.map((r) => <RunRow key={r.id} run={r} />)}</ul></Card>
+        <Card as="div"><RunRowList runs={mine} label={`Runs of ${council.name}`} /></Card>
       ) : (
         <Card as="div">
-          <EmptyState icon={History} title="No runs yet"
+          <EmptyState titleAs="h3" icon={History} title="No runs yet"
             body={<>Start a run from Home and pick <span className="font-medium text-fg">{council.name}</span> as the council.</>} />
         </Card>
       )}
@@ -224,38 +222,35 @@ export default function CouncilDetail() {
   const [guardrailsDraft, setGuardrailsDraft] = useState<Dict | null>(null);
   const tab = TABS.includes(params.get("tab") as (typeof TABS)[number]) ? params.get("tab")! : "seats";
 
-  const back = (
-    <Link to="/councils" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-3">
-      <ArrowLeft className="size-4" aria-hidden />Councils
-    </Link>
-  );
-
   if (council.isLoading) {
     return (
-      <div className="p-4 md:p-6 max-w-5xl mx-auto" aria-busy="true">
-        {back}
-        <Skeleton className="h-7 w-64" />
-        <Skeleton className="h-4 w-96 max-w-full mt-3" />
-        <Skeleton className="h-9 w-72 mt-8" />
-        <div className="mt-4 space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-16" />)}</div>
-      </div>
+      <Page aria-busy="true">
+        <span role="status" className="sr-only">Loading council…</span>
+        <div aria-hidden>
+          <Skeleton className="h-7 w-64" />
+          <Skeleton className="h-4 w-96 max-w-full mt-3" />
+          <Skeleton className="h-9 w-72 mt-8" />
+          <div className="mt-4 space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-16" />)}</div>
+        </div>
+      </Page>
     );
   }
   if (council.error || !council.data) {
     const notFound = council.error instanceof ApiError && council.error.status === 404;
     return (
-      <div className="p-4 md:p-6 max-w-5xl mx-auto">
-        {back}
-        <h1 className="sr-only">Council</h1>
-        <Card as="div">
-          {notFound ? (
-            <EmptyState icon={Users} title="Council not found" body="It may have been deleted."
-              action={<Link to="/councils" className="text-sm text-accent underline">Back to councils</Link>} />
-          ) : (
-            <ErrorState error={council.error} onRetry={() => void council.refetch()} />
-          )}
-        </Card>
-      </div>
+      <Page>
+        {notFound ? (
+          <Card as="div">
+            <EmptyState titleAs="h1" icon={Users} title="Council not found" body="It may have been deleted."
+              action={<ButtonLink to="/councils">All councils</ButtonLink>} />
+          </Card>
+        ) : (
+          <>
+            <PageHeader title="Could not load this council" />
+            <Card as="div"><ErrorState error={council.error} onRetry={() => void council.refetch()} /></Card>
+          </>
+        )}
+      </Page>
     );
   }
 
@@ -273,8 +268,7 @@ export default function CouncilDetail() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl mx-auto">
-      {back}
+    <Page>
       <CouncilHeader council={c} onDelete={() => setConfirmDelete(true)} />
       <Tabs value={tab} className="[&>div[role=tablist]]:px-0"
         onValueChange={(v) => setParams(v === "seats" ? {} : { tab: v }, { replace: true })}
@@ -290,6 +284,6 @@ export default function CouncilDetail() {
       <ConfirmDeleteDialog open={confirmDelete} onOpenChange={setConfirmDelete} kind="council" name={c.name}
         pending={del.isPending} onConfirm={() => void doDelete()}
         body={<>Its {c.members.length} seats and guardrails are removed. Past runs keep their own snapshot.</>} />
-    </div>
+    </Page>
   );
 }
