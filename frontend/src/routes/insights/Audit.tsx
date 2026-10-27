@@ -111,7 +111,8 @@ export default function Audit() {
         <Card as="div"><EmptyState icon={ScrollText} title="No audit events match" body="Try a broader action filter or clear the result filter." /></Card>
       ) : (
         <Card as="div" className="overflow-hidden">
-          <div tabIndex={0} role="region" aria-label="Audit events" className="overflow-x-auto">
+          {/* relative: contains the sr-only header label, which would otherwise escape the scroll box and widen the page */}
+          <div tabIndex={0} role="region" aria-label="Audit events" className="relative overflow-x-auto">
             <table className="w-full text-sm">
               <caption className="sr-only">Audit events, newest first. Use the expand button on a row to see its detail.</caption>
               <thead className="bg-surface-2 text-left text-xs text-fg-subtle">

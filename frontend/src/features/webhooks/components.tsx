@@ -239,7 +239,7 @@ export function DeliveriesDrawer({ hook, onClose }: { hook: Webhook | null; onCl
             ) : rows.length === 0 ? (
               <EmptyState icon={History} title="No deliveries yet" body="Send a test event or wait for a subscribed event to fire." />
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full text-sm">
                   <caption className="sr-only">Last {rows.length} delivery attempts</caption>
                   <thead>

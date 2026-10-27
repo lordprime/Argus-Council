@@ -106,7 +106,7 @@ export function ChartCard({ title, summary, table, actions, children, className 
         </div>
       </div>
       {asTable ? (
-        <div tabIndex={0} role="region" aria-label={`${title} data`} className="overflow-x-auto max-h-80 overflow-y-auto">
+        <div tabIndex={0} role="region" aria-label={`${title} data`} className="relative overflow-x-auto max-h-80 overflow-y-auto">
           <table className="w-full text-sm">
             <caption className="sr-only">{title}</caption>
             <thead className="bg-surface-2 text-left text-xs text-fg-subtle">

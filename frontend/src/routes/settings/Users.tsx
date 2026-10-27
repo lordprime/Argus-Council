@@ -89,7 +89,7 @@ function UsersTable() {
             className="h-9 w-full rounded-md border border-border-strong bg-surface pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle" />
         </div>
       </div>
-      <Card as="div" className="overflow-x-auto">
+      <Card as="div" className="relative overflow-x-auto">
         {users.length === 0 ? (
           <EmptyState icon={UsersIcon} title={query ? "No matching users" : "No users"} body={query ? "Try a different search." : undefined} />
         ) : (

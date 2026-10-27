@@ -72,7 +72,7 @@ export function SelectAll({ runs, selected, onToggleAll }: { runs: Run[]; select
 
 export function RunsTable({ runs, selected, onToggle, onToggleAll }: SelectionProps & { onToggleAll: (on: boolean) => void }) {
   return (
-    <div role="region" aria-label="Runs table" tabIndex={0} className="overflow-x-auto rounded-lg">
+    <div role="region" aria-label="Runs table" tabIndex={0} className="relative overflow-x-auto rounded-lg">
       <table className="w-full text-sm border-collapse">
         <caption className="sr-only">Runs, newest first. Only finished runs can be selected for deletion.</caption>
         <thead>
