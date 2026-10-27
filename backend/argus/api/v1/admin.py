@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from argus.api.deps import AdminPrincipal, AdminWriter, DbDep
 from argus.core.errors import Conflict, NotFound
 from argus.db.models import Run, User
+from argus.services.connections import disable_stdio_servers
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -92,6 +93,11 @@ async def update_user(
     if data.is_active is not None and data.is_active != user.is_active:
         changes["is_active"] = {"from": user.is_active, "to": data.is_active}
         user.is_active = data.is_active
+    if demoting or deactivating:
+        # stdio MCP servers run commands on the host; only active admins may keep them.
+        disabled = await disable_stdio_servers(db, user.id)
+        if disabled:
+            changes["stdio_mcp_servers_disabled"] = disabled
     request.state.audit_detail = {"email": user.email, "changes": changes}
     await db.flush()
     return _out(user, await _run_count(db, user.id))

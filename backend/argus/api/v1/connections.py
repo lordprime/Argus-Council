@@ -27,6 +27,7 @@ from argus.services.connections import (
     outbound_client,
     public_card,
     set_agent_card,
+    stdio_permitted,
 )
 from argus.services.llm import validate_base_url
 
@@ -141,6 +142,12 @@ async def update_mcp(
     server = await _get(db, McpServer, principal.id, server_id)
     box = SecretBox(settings)
     values = data.model_dump(exclude_unset=True)
+    if (
+        values.get("enabled")
+        and server.transport == "stdio"
+        and not stdio_permitted(principal.user, settings)
+    ):
+        raise Forbidden("Only administrators can enable stdio MCP servers")
     if "headers" in values:
         h = values.pop("headers")
         server.headers_enc = box.encrypt(json.dumps(h)) if h else None
@@ -172,6 +179,8 @@ async def discover_mcp(
     server_id: uuid.UUID, request: Request, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ) -> dict:
     server = await _get(db, McpServer, principal.id, server_id)
+    if server.transport == "stdio" and not stdio_permitted(principal.user, settings):
+        raise Forbidden("stdio MCP servers need an administrator and ARGUS_MCP_ALLOW_STDIO")
     box = SecretBox(settings)
     try:
         client, tools = await connect_mcp(
