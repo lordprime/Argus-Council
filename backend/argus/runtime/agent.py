@@ -118,6 +118,14 @@ class AgentRunner:
             ),
             extra,
         ]
+        if self.ctx.skills and self._allowed("use_skill"):
+            index = "\n".join(
+                f"- {p.name}: {p.description}" for p in sorted(self.ctx.skills.values(), key=lambda p: p.name)
+            )
+            parts.append(
+                "\nAvailable skills (call use_skill with the name to load full instructions "
+                f"before relying on one):\n{index}"
+            )
         _, standing = self.ctx.corrections_for_peek(self.member.id)
         if standing:
             parts.append("\nStanding orders (always follow):\n" + "\n".join(f"- {c.text}" for c in standing))

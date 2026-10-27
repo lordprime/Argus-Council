@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, councils, health, providers, runs
+from argus.api.v1 import auth, councils, health, providers, runs, skills
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
@@ -140,4 +140,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(councils.router, prefix=api)
     app.include_router(providers.router, prefix=api)
     app.include_router(runs.router, prefix=api)
+    app.include_router(skills.router, prefix=api)
     return app

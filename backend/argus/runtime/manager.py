@@ -20,8 +20,10 @@ from argus.runtime.events import TERMINAL_STATUSES, Actor, Broker, EventSink
 from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Guardrails
 from argus.runtime.orchestrator import CouncilOrchestrator
 from argus.services.llm import LLMRouter
+from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
 from argus.tools.builtin import builtin_tools
+from argus.tools.skills import skill_tools
 
 log = get_logger(__name__)
 
@@ -47,7 +49,7 @@ class RunManager:
         self.sessionmaker = sessionmaker
         self.broker = broker
         self.llm = llm
-        self.tool_factory = tool_factory or (lambda run: ToolRegistry(builtin_tools()))
+        self.tool_factory = tool_factory or (lambda run: ToolRegistry([*builtin_tools(), *skill_tools()]))
         self.live: dict[uuid.UUID, LiveRun] = {}
 
     # ------------------------------------------------------------ lifecycle
@@ -85,6 +87,10 @@ class RunManager:
             llm=self.llm,
             sessionmaker=self.sessionmaker,
         )
+        skills = await skills_for_owner(self.sessionmaker, run.owner_id)
+        ctx.skills = {
+            n: p for n, p in skills.items() if skill_permitted(n, rails.skills.allow, rails.skills.deny)
+        }
         members = [
             MemberSpec.from_snapshot(m)
             for m in run.council_snapshot.get("members", [])

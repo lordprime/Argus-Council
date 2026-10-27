@@ -157,3 +157,21 @@ class Artifact(IdMixin, TimestampMixin, Base):
     blob_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by: Mapped[str] = mapped_column(String(80), default="")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Skill(IdMixin, TimestampMixin, Base):
+    """A user-installed or user-authored skill package."""
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text)
+    version: Mapped[str] = mapped_column(String(40), default="1.0.0")
+    body: Mapped[str] = mapped_column(Text)
+    allowed_tools: Mapped[list[Any]] = mapped_column(default=list)
+    meta: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    files: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(20), default="created")

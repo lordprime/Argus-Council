@@ -67,6 +67,7 @@ class Guardrails(_Strict):
     max_agent_iterations: int = Field(default=12, ge=1, le=200)
     max_subcouncil_depth: int = Field(default=2, ge=0, le=5)
     tools: ToolPolicy = Field(default_factory=ToolPolicy)
+    skills: ToolPolicy = Field(default_factory=ToolPolicy)
     network: NetworkPolicy = Field(default_factory=NetworkPolicy)
     approval_required: list[str] = Field(
         default_factory=lambda: ["shell", "package_install", "remote_agent", "network_write"]
@@ -105,6 +106,7 @@ class Guardrails(_Strict):
             data["tools"]["allow"] = [t for t in self.tools.allow if _matches(t, parent.tools.allow)] or list(
                 parent.tools.allow
             )
+        data["skills"]["deny"] = sorted(set(self.skills.deny) | set(parent.skills.deny))
         data["approval_required"] = sorted(set(self.approval_required) | set(parent.approval_required))
         return Guardrails.model_validate(data)
 

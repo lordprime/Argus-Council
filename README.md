@@ -121,6 +121,31 @@ How a run works:
 Every event is stored in an append-only log with a per-run sequence number, so runs can be replayed
 (`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`.
 
+## Skills
+
+Skills are packaged instructions, the same idea as Claude Code skills: a folder with a `SKILL.md` and any
+templates or references it needs.
+
+```markdown
+---
+name: research-report
+description: Plan, evidence and write a rigorous research report with inline citations. Use for ...
+allowed-tools: [web_search, web_fetch, notes_write]
+---
+# Research report
+1. Frame ... 2. Gather ... 3. Analyse ... 4. Write using templates/report.md ...
+```
+
+- Every agent sees each available skill's **name and description**. It calls `use_skill` to load the full
+  instructions only when needed, and `skill_read` to open bundled files (progressive disclosure).
+- Built-in skills: `research-report`, `latex-paper`, `code-review`, `python-project`, `source-evaluation`,
+  `executive-summary`.
+- Add your own with `POST /api/v1/skills` (SKILL.md + files), import a zip with `POST /api/v1/skills/import`, and
+  export any skill with `GET /api/v1/skills/{name}/export`. A user skill with the same name as a built-in overrides it.
+- Guardrails control which skills a council may use: `"skills": {"allow": ["*"], "deny": ["latex-*"]}`.
+- Uploads are validated: frontmatter rules, text files only, no hidden files or path traversal, and size limits
+  checked before extraction.
+
 ## Roadmap
 
 - [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI
@@ -129,7 +154,7 @@ Every event is stored in an append-only log with a per-run sequence number, so r
 - [ ] M4 Protocols: MCP (server + client), A2A, ACP
 - [ ] M5 Modes: coding sandbox, research pipeline, chat; exporters (txt, md, LaTeX, PDF, HTML)
 - [ ] M6 Web UI
-- [ ] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
+- [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
 
 ## License
 

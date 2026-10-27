@@ -197,6 +197,7 @@ class RunContext:
         self.depth = depth
         self.by_member: dict[str, dict[str, float]] = defaultdict(lambda: {"usd": 0.0, "tokens": 0})
         self.extra: dict[str, Any] = {}
+        self.skills: dict[str, Any] = {}  # name -> SkillPackage available to this run
 
     # -------------------------------------------------- control flow
     async def checkpoint(self, member_id: str | None = None) -> None:

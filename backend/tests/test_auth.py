@@ -85,7 +85,12 @@ async def test_registration_can_be_disabled(settings):
         await _reset_state(app)
 
 
-async def test_login_throttled(client, auth):
+async def test_login_throttled(client, auth, monkeypatch):
+    import argus.cache.store as store
+
+    # Pin the clock: the limiter uses fixed one-minute windows, so real time could split attempts
+    # across two windows and never trip the limit.
+    monkeypatch.setattr(store.time, "time", lambda: 1_700_000_000.0)
     codes = [
         (
             await client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "bad"})

@@ -22,6 +22,8 @@ dependencies = [
     "orjson>=3.10",
     "anthropic>=1.0",
     "cryptography>=43",
+    "pyyaml>=6.0",
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]

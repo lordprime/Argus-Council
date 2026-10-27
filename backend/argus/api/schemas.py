@@ -269,3 +269,14 @@ class ApprovalDecisionIn(BaseModel):
     decision: Literal["approve", "reject"]
     edited_args: dict[str, Any] | None = None
     reason: str | None = Field(default=None, max_length=2000)
+
+
+# ---------------------------------------------------------------- skills
+class SkillIn(BaseModel):
+    skill_md: str = Field(min_length=1, max_length=200_000)
+    files: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class SkillPatch(BaseModel):
+    enabled: bool
