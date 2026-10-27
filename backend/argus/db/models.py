@@ -6,7 +6,18 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.elements import ColumnElement
@@ -132,8 +143,11 @@ class Run(IdMixin, TimestampMixin, Base):
     """One autonomous council session working on a topic."""
 
     __tablename__ = "runs"
+    # Serves the run list and insights (owner, top-level, newest first, id as tie-breaker) and any
+    # owner_id lookup, so owner_id needs no index of its own.
+    __table_args__ = (Index("ix_runs_owner_parent_created", "owner_id", "parent_run_id", "created_at", "id"),)
 
-    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"))
     council_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -159,13 +173,15 @@ class RunEvent(Base):
     """Append-only, durable event log for a run (ephemeral deltas are not stored)."""
 
     __tablename__ = "run_events"
+    # The unique (run_id, seq) index serves every lookup by run; no separate run_id or type index
+    # (the hottest table, so each extra index is write cost on every durable event).
     __table_args__ = (UniqueConstraint("run_id", "seq"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"))
     seq: Mapped[int] = mapped_column(Integer)
     event_id: Mapped[str] = mapped_column(String(40))
-    type: Mapped[str] = mapped_column(String(40), index=True)
+    type: Mapped[str] = mapped_column(String(40))
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
