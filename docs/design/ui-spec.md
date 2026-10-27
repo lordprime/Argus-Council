@@ -486,6 +486,10 @@ Single-key shortcuts are active only when focus is not in a text field, and user
   approvals, and artifacts index.
 - **Commands are REST:** they are auditable, idempotent with an `Idempotency-Key` header, and never sent over the
   stream. Each command produces events, and the UI reconciles optimistic state against those events.
+- **Ephemeral events (as implemented):** `thought.delta`, `tool.call.output` and `budget.update` are fanned out live
+  but not stored. They carry the latest durable `seq` plus `"ephemeral": true` and must bypass the
+  `seq <= lastSeq` drop rule. Their content is always recoverable: `thought.completed` carries the full `text`, and
+  a final durable `budget.update` (`"final": true`) is stored when the run ends.
 - **Ordering:** `seq` is strictly increasing per run. Sub-council runs have their own stream, and the parent receives
   summary events (`subcouncil.*`). The client drops `seq <= lastSeq`, which makes it idempotent across reconnects.
 - **Gap handling:** if `seq > lastSeq + 1`, fetch the gap via `/events`. If retention expired (`410 gone`), load the

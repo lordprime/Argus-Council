@@ -73,7 +73,7 @@ class Envelope(BaseModel):
 
 class Broker(Protocol):
     async def publish(self, run_id: str, payload: bytes) -> None: ...
-    def subscribe(self, run_id: str) -> AsyncIterator[bytes]: ...
+    def subscribe(self, run_id: str, ready: asyncio.Event | None = None) -> AsyncIterator[bytes]: ...
     async def close(self) -> None: ...
 
 
@@ -90,9 +90,13 @@ class MemoryBroker:
                     q.get_nowait()
             q.put_nowait(payload)
 
-    async def subscribe(self, run_id: str) -> AsyncIterator[bytes]:  # type: ignore[override]
+    async def subscribe(  # type: ignore[override]
+        self, run_id: str, ready: asyncio.Event | None = None
+    ) -> AsyncIterator[bytes]:
         q: asyncio.Queue[bytes] = asyncio.Queue(self._maxsize)
         self._subs[run_id].add(q)
+        if ready:
+            ready.set()
         try:
             while True:
                 yield await q.get()
@@ -113,9 +117,13 @@ class RedisBroker:
     async def publish(self, run_id: str, payload: bytes) -> None:
         await self.client.publish(f"{self.prefix}{run_id}", payload)
 
-    async def subscribe(self, run_id: str) -> AsyncIterator[bytes]:  # type: ignore[override]
+    async def subscribe(  # type: ignore[override]
+        self, run_id: str, ready: asyncio.Event | None = None
+    ) -> AsyncIterator[bytes]:
         pubsub = self.client.pubsub()
         await pubsub.subscribe(f"{self.prefix}{run_id}")
+        if ready:
+            ready.set()
         try:
             async for msg in pubsub.listen():
                 if msg.get("type") == "message":
@@ -155,8 +163,9 @@ class EventSink:
         actor: Actor | None = None,
         step_id: str | None = None,
         causation_id: str | None = None,
+        durable: bool = False,
     ) -> Envelope:
-        ephemeral = type in EPHEMERAL_TYPES
+        ephemeral = type in EPHEMERAL_TYPES and not durable
         async with self._lock:
             if not ephemeral:
                 self.seq += 1

@@ -60,9 +60,64 @@ class MockProvider(Provider):
             return self._build(request, self.script.pop(0))
         if self.responder:
             return self._build(request, self.responder(request))
+        if request.metadata.get("phase"):
+            return self._build(request, council_responder(request))
         last = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
         digest = hashlib.sha256(last.encode()).hexdigest()[:8]
         return self._build(request, f"[{request.model}#{digest}] {last[:400]}")
 
     async def list_models(self) -> list[str]:
         return ["mock-1", "mock-large"]
+
+
+def council_responder(req: CompletionRequest) -> dict[str, Any]:
+    """Plausible, deterministic council behaviour for offline demos and tests."""
+    import json
+
+    meta = req.metadata
+    phase = meta.get("phase")
+    topic = meta.get("topic") or "the topic"
+    role = meta.get("role") or "agent"
+    if phase == "plan":
+        mode = meta.get("mode", "general")
+        plans = {
+            "research": [
+                ("Scope the questions", "analyst"),
+                ("Gather evidence", "researcher"),
+                ("Analyse findings", "analyst"),
+                ("Draft the report", "writer"),
+            ],
+            "coding": [("Design the solution", "architect"), ("Implement", "coder"), ("Test", "tester")],
+            "chat": [("Answer", "assistant")],
+        }.get(mode, [("Analyse the request", "analyst"), ("Produce the work", "writer")])
+        steps = [
+            {
+                "id": f"s{i + 1}",
+                "title": t,
+                "assignee": r,
+                "instructions": f"{t} for: {topic}",
+                "depends_on": [f"s{i}"] if i else [],
+            }
+            for i, (t, r) in enumerate(plans)
+        ]
+        return {"content": json.dumps({"steps": steps})}
+    if phase == "review":
+        return {
+            "content": json.dumps(
+                {
+                    "action": "pass",
+                    "reason": "scope",
+                    "severity": "low",
+                    "note": "On track.",
+                    "correction": None,
+                }
+            )
+        }
+    if phase == "vote":
+        return {"content": json.dumps({"option": "approve", "rationale": "Meets the brief."})}
+    if phase == "synthesize":
+        return {
+            "content": f"# {topic}\n\n## Summary\nOffline demo deliverable produced by the mock council.\n\n"
+            "## Findings\n- Planned, executed, reviewed and approved by the council.\n"
+        }
+    return {"content": f"{role.title()} notes on {topic}: completed the assigned work (offline demo)."}

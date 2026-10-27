@@ -215,10 +215,12 @@ class RunContext:
     async def violation(self, v: Violation, target: dict[str, Any] | None = None, actor: Actor | None = None):
         await self.sink.emit("guardrail.violation", v.as_event(target), actor=actor)
 
-    async def budget_update(self) -> None:
+    async def budget_update(self, *, final: bool = False) -> None:
         snap = self.engine.budget_snapshot()
         snap["by_member"] = {k: dict(v) for k, v in self.by_member.items()}
-        await self.sink.emit("budget.update", snap)
+        if final:
+            snap["final"] = True
+        await self.sink.emit("budget.update", snap, durable=final)
 
     # -------------------------------------------------- approvals
     async def request_approval(
@@ -262,3 +264,10 @@ class RunContext:
         one_shot = self.controls.pending.pop(member_id, [])
         standing = self.controls.standing.get(member_id, []) + self.controls.standing.get("council", [])
         return one_shot, standing
+
+    def corrections_for_peek(self, member_id: str) -> tuple[list[Correction], list[Correction]]:
+        """Like ``corrections_for`` but without consuming one-shot corrections."""
+        return (
+            list(self.controls.pending.get(member_id, [])),
+            self.controls.standing.get(member_id, []) + self.controls.standing.get("council", []),
+        )

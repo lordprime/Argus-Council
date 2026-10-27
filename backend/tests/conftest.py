@@ -11,11 +11,11 @@ from argus.main import create_app
 
 
 @pytest.fixture
-def settings() -> Settings:
+def settings(tmp_path) -> Settings:
     return Settings(
         env="test",
         # CI sets these to run the same suite against real Postgres and Redis.
-        database_url=os.environ.get("ARGUS_TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:"),
+        database_url=os.environ.get("ARGUS_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path}/argus.db"),
         redis_url=os.environ.get("ARGUS_TEST_REDIS_URL"),
         secret_key="test-secret-key-that-is-long-enough-1234567890",
         rate_limit_per_minute=10_000,

@@ -88,11 +88,44 @@ curl -X POST localhost:8000/api/v1/councils/$ID/resize -H "Authorization: Bearer
 
 `min_size`/`max_size` bound every resize and membership change.
 
+## Running a council
+
+```bash
+# start an autonomous research run (uses the offline mock council unless you pick a provider)
+curl -X POST localhost:8000/api/v1/runs -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"topic":"Solid-state batteries in 2026","mode":"research","outputs":["md","pdf"],
+       "provider":"anthropic","model":"claude-opus-5-5","guardrails":{"budget":{"usd":3}}}'
+
+# watch it live (Server-Sent Events): get a short-lived ticket, then stream
+curl -X POST localhost:8000/api/v1/runs/$RUN/stream-ticket -H "Authorization: Bearer $TOKEN"
+curl -N "localhost:8000/api/v1/runs/$RUN/events/stream?ticket=$TICKET"
+
+# step in: correct an agent, message the council, pause, or cancel
+curl -X POST localhost:8000/api/v1/runs/$RUN/interventions -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"kind":"correct","text":"Prioritise peer-reviewed sources","scope":"council"}'
+```
+
+How a run works:
+
+1. **Plan**: the chair turns the topic into steps with assignees and dependencies.
+2. **Execute**: independent steps run in parallel (bounded by `max_parallel_agents`). Each agent loops LLM ↔ tools.
+3. **Oversight**: every thought passes the *thought bus* before it is acted on. Deterministic guardrails, a loop
+   detector and overseer agents (security > monitor > critic) can annotate, hold (regenerate with a correction)
+   or block it. `oversight.intercept_mode` caps what overseers may do; the user outranks everyone.
+4. **Approvals**: tools tagged with risks listed in `approval_required` (e.g. `shell`) wait for a human decision,
+   which can also edit the arguments.
+5. **Synthesise and vote**: the writer produces the deliverable, the council votes, and one revision round follows
+   critiques if the vote fails.
+6. **Limits**: budget ($ and tokens), steps, runtime and file size are enforced throughout; a breach halts the run.
+
+Every event is stored in an append-only log with a per-run sequence number, so runs can be replayed
+(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`.
+
 ## Roadmap
 
 - [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI
 - [x] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp)
-- [ ] M3 Council runtime: thought bus, interception and correction, guardrails, live streaming
+- [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
 - [ ] M4 Protocols: MCP (server + client), A2A, ACP
 - [ ] M5 Modes: coding sandbox, research pipeline, chat; exporters (txt, md, LaTeX, PDF, HTML)
 - [ ] M6 Web UI

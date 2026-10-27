@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.cache.store import Cache
 from argus.core.config import Settings
@@ -96,8 +96,15 @@ class UsageLedger:
 
 
 class LLMRouter:
-    def __init__(self, settings: Settings, cache: Cache, system: dict[str, Provider] | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        cache: Cache,
+        system: dict[str, Provider] | None = None,
+        sessionmaker: async_sessionmaker | None = None,
+    ) -> None:
         self.settings = settings
+        self.sessionmaker = sessionmaker
         self.cache = cache
         self.system = system if system is not None else system_providers_from_env()
         self.box = SecretBox(settings)
@@ -113,6 +120,10 @@ class LLMRouter:
 
     # ------------------------------------------------------------ resolution
     async def resolve(self, db: AsyncSession | None, owner_id: uuid.UUID | None, name: str) -> Provider:
+        if db is None and owner_id is not None and self.sessionmaker is not None:
+            # Background work (council runs) has no request session; open a short-lived one.
+            async with self.sessionmaker() as session:
+                return await self.resolve(session, owner_id, name)
         if db is not None and owner_id is not None:
             cfg = (
                 await db.execute(

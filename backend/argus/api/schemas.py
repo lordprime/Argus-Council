@@ -211,3 +211,61 @@ class CompleteIn(BaseModel):
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     cache: bool | None = None
     fallbacks: list[dict[str, str]] = Field(default_factory=list, max_length=5)
+
+
+# ---------------------------------------------------------------- runs
+OutputFormat = Literal["txt", "md", "latex", "pdf", "html", "docx", "json"]
+
+
+class RunIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=20_000)
+    mode: CouncilMode = "general"
+    council_id: uuid.UUID | None = None
+    size: int | None = Field(default=None, ge=1, le=64)
+    provider: str = Field(default="mock", max_length=64)
+    model: str = Field(default="mock-1", max_length=120)
+    outputs: list[OutputFormat] = Field(default_factory=lambda: ["md"], max_length=7)
+    guardrails: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunOut(ORM):
+    id: uuid.UUID
+    council_id: uuid.UUID | None
+    parent_run_id: uuid.UUID | None
+    topic: str
+    description: str
+    mode: str
+    status: str
+    outputs: list[str]
+    guardrails: dict[str, Any]
+    usage: dict[str, Any]
+    error: str | None
+    last_seq: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class RunDetail(RunOut):
+    result: str
+    council_snapshot: dict[str, Any]
+
+
+class InterventionIn(BaseModel):
+    kind: Literal["message", "intercept", "hold", "release", "correct", "halt_all", "release_all"]
+    target: dict[str, Any] = Field(default_factory=dict)
+    text: str | None = Field(default=None, max_length=20_000)
+    scope: Literal["thought", "member", "council"] | None = None
+
+    @model_validator(mode="after")
+    def _needs_text(self) -> InterventionIn:
+        if self.kind in ("message", "correct") and not self.text:
+            raise ValueError(f"'{self.kind}' requires text")
+        return self
+
+
+class ApprovalDecisionIn(BaseModel):
+    decision: Literal["approve", "reject"]
+    edited_args: dict[str, Any] | None = None
+    reason: str | None = Field(default=None, max_length=2000)
