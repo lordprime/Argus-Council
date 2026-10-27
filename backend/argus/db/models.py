@@ -96,3 +96,64 @@ class ProviderConfig(IdMixin, TimestampMixin, Base):
     default_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     options: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class Run(IdMixin, TimestampMixin, Base):
+    """One autonomous council session working on a topic."""
+
+    __tablename__ = "runs"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    council_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    topic: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(Text, default="")
+    mode: Mapped[str] = mapped_column(String(32), default="general")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    outputs: Mapped[list[Any]] = mapped_column(default=list)
+    guardrails: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    council_snapshot: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    usage: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    result: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_seq: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RunEvent(Base):
+    """Append-only, durable event log for a run (ephemeral deltas are not stored)."""
+
+    __tablename__ = "run_events"
+    __table_args__ = (UniqueConstraint("run_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    event_id: Mapped[str] = mapped_column(String(40))
+    type: Mapped[str] = mapped_column(String(40), index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class Artifact(IdMixin, TimestampMixin, Base):
+    """A file or document produced by a run. Every write creates a new version row."""
+
+    __tablename__ = "artifacts"
+    __table_args__ = (UniqueConstraint("run_id", "path", "version"),)
+
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    path: Mapped[str] = mapped_column(String(500))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(20), default="file")
+    mime: Mapped[str] = mapped_column(String(120), default="text/plain")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64))
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blob_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(80), default="")
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
