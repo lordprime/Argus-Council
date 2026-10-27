@@ -12,10 +12,10 @@ import hashlib
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import orjson
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -26,6 +26,20 @@ GENESIS = "0" * 64
 # Serialises appends per owner within a process; the (owner_id, seq) unique constraint plus a
 # retry covers concurrent writers in other processes.
 _locks: dict[tuple[int, uuid.UUID], asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+Purpose = Literal["run", "discover", "refresh"]
+_TAGGED: tuple[str, ...] = ("run", "discover", "refresh")
+
+
+def purpose_is(purpose: Purpose) -> ColumnElement[bool]:
+    """SQL condition for an entry's purpose: ``detail.purpose`` when it is one of the known values,
+    otherwise "run" for entries tied to a run. Mirrors ``entryPurpose`` in the frontend."""
+    tag = LedgerEntry.detail["purpose"].as_string()
+    if purpose != "run":
+        return tag == purpose
+    untagged = func.coalesce(tag, "").not_in(_TAGGED)
+    return or_(tag == "run", and_(untagged, LedgerEntry.run_id.is_not(None)))
 
 
 def digest(obj: Any) -> str:

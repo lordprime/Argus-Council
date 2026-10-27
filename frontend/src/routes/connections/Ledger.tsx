@@ -136,9 +136,9 @@ export default function Ledger() {
   const [params, setParams] = useSearchParams();
   const runId = params.get("run") ?? "";
   const setRun = (id: string) => setParams((p) => { const n = new URLSearchParams(p); if (id) n.set("run", id); else n.delete("run"); return n; }, { replace: true });
-  const q = useLedgerPage(protocol === "all" ? undefined : protocol, limit, runId || undefined);
+  const q = useLedgerPage(protocol === "all" ? undefined : protocol, limit, runId || undefined, purpose === "all" ? undefined : purpose);
   const runs = useMemo(() => [...new Set([runId, ...(q.data ?? []).map((e) => e.run_id ?? "")].filter(Boolean))], [q.data, runId]);
-  const rows = useMemo(() => (q.data ?? []).filter((e) => purpose === "all" || entryPurpose(e) === purpose), [q.data, purpose]);
+  const rows = q.data ?? [];
   const filtered = protocol !== "all" || purpose !== "all" || Boolean(runId);
 
   return (
@@ -184,7 +184,7 @@ export default function Ledger() {
               title={!filtered ? "No protocol calls recorded yet" : "No calls match these filters"}
               body={!filtered
                 ? "Calls to MCP servers and remote agents, and calls other systems make to Argus, are appended here with their hashes."
-                : `Nothing${protocol === "all" ? "" : ` over ${protocol.toUpperCase()}`}${purpose === "all" ? "" : ` for ${PURPOSE[purpose].label.toLowerCase()}`}${runId ? " in this run" : ""} among the latest ${limit} entries.`} />
+                : `Nothing${protocol === "all" ? "" : ` over ${protocol.toUpperCase()}`}${purpose === "all" ? "" : ` for ${PURPOSE[purpose].label.toLowerCase()}`}${runId ? " in this run" : ""}.`} />
           </Card>
         ) : (
           <Card as="div" className="overflow-hidden">
