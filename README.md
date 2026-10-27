@@ -30,7 +30,8 @@ guardrail breaches, and you can step in and correct the council at any point.
 | API | FastAPI, Pydantic v2, async SQLAlchemy 2, Alembic migrations |
 | Database | PostgreSQL 17 (SQLite for local dev/tests) |
 | Cache | Redis 7 (JSON cache, request coalescing, rate limiting); in-memory fallback |
-| Auth | Argon2id passwords, short-lived JWT access tokens, rotating single-use refresh tokens, scoped API keys |
+| Auth | Argon2id passwords, short-lived JWT access tokens, rotating single-use refresh tokens, scoped API keys, roles (admin, member, viewer) |
+| Web UI | React, served by the web container on the same origin as the API |
 | Containers | Multi-stage builds, non-root users, read-only root FS, all capabilities dropped, internal DB network |
 
 ## Quick start (Docker)
@@ -47,7 +48,8 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent protocols
 (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a strict Content-Security-Policy.
 
-The first account that registers becomes the administrator. Set `ARGUS_ALLOW_REGISTRATION=false` after that.
+The first account that registers becomes an `admin`; later accounts are `member`s. Set
+`ARGUS_ALLOW_REGISTRATION=false` after that. See [Roles](#roles) for what each role may do.
 
 ## Local development
 
@@ -81,6 +83,18 @@ Every agent seat names a provider and a model. Providers come from three places:
 The router adds retries with backoff, fallback chains, response caching for deterministic calls, and
 token and cost accounting. Claude uses the official `anthropic` SDK with adaptive thinking and server-side
 refusal fallback on the models that support it; OpenAI-compatible servers and Gemini use plain HTTP.
+Anthropic connections use only the configured key and base URL, never ambient environment credentials.
+
+**Key hints and health.** Provider responses never include the key, only a masked `key_hint` (`sk-…abcd`) and
+the last known health: `health_status` (`unknown`, `ok`, `unreachable`, `auth_failed`, `rate_limited`, `error`),
+`health_detail`, `health_latency_ms` and `health_checked_at`.
+
+- `POST /api/v1/providers/{name}/test` probes a provider now (needs `providers:write`). With `{"model": "..."}` it
+  sends a tiny completion; without, it lists models (no tokens spent) and falls back to a completion against the
+  default model if the provider cannot list. The result is persisted on your config (`persisted: true`); system
+  providers can be tested but nothing is stored. Disabled configs can be tested before enabling them.
+- Health is also updated passively from real completions and model listings (throttled, written in the background).
+- Changing a provider's key or base URL resets its health to `unknown`.
 
 ## Councils
 
@@ -129,7 +143,26 @@ How a run works:
 6. **Limits**: budget ($ and tokens), steps, runtime and file size are enforced throughout; a breach halts the run.
 
 Every event is stored in an append-only log with a per-run sequence number, so runs can be replayed
-(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`.
+(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`. Every outbound
+MCP, A2A or ACP call an agent makes is announced on the stream as a `protocol.call` event carrying the
+protocol, peer, method, status, latency and the matching ledger entry's `ledger_id` and `hash`, so external
+traffic shows up live and links to the [ledger](#agent-protocols).
+
+### Sub-councils
+
+A member can hand a self-contained task to a smaller child council with the `subcouncil` tool
+(arguments: `task`, `mode`, `size` 2-6, default 3). Only the chair has it by default; give it to other seats
+through their tools.
+
+| Aspect | Behaviour |
+| --- | --- |
+| Linkage | The child is a real run with `parent_run_id` set. `GET /api/v1/runs` lists top-level runs only. |
+| Seats | An ephemeral roster for the chosen mode, using the calling member's provider and model. |
+| Guardrails | Clamped to the parent's: budgets, steps, runtime, parallelism and iterations take the minimum; tool and skill deny lists and `approval_required` are unioned; a restricted tool allow list is intersected. |
+| Budget | Capped at what the parent has left; the child's tokens and cost are charged back to the parent. No budget left means the tool refuses. |
+| Depth | `guardrails.max_subcouncil_depth` (default 2, max 5) drops by one per level; at 0 the tool refuses. |
+| Live relay | `subcouncil.started` and `subcouncil.completed` are stored in the parent's log. Plan, step, thought, tool, intercept, approval, vote, `protocol.call` and status events from the child are relayed live as ephemeral `subcouncil.event` envelopes (with `child_run_id`). |
+| Lifetime | The child is stopped if it exceeds its runtime or the parent is cancelled. The tool returns the child's deliverable, or an error if it did not complete. |
 
 ## Skills
 
@@ -153,6 +186,7 @@ allowed-tools: [web_search, web_fetch, notes_write]
 - Add your own with `POST /api/v1/skills` (SKILL.md + files), import a zip with `POST /api/v1/skills/import`, and
   export any skill with `GET /api/v1/skills/{name}/export`. A user skill with the same name as a built-in overrides it.
 - Guardrails control which skills a council may use: `"skills": {"allow": ["*"], "deny": ["latex-*"]}`.
+  `GET /api/v1/skills/{name}` and `GET /api/v1/skills/{name}/usage` report `used_by_councils`.
 - Uploads are validated: frontmatter rules, text files only, no hidden files or path traversal, and size limits
   checked before extraction.
 
@@ -186,9 +220,23 @@ Argus speaks the main agent interoperability protocols, in both directions.
 
 | Protocol | Argus as a server | Argus as a client |
 | --- | --- | --- |
-| **MCP** | `POST /mcp` (Streamable HTTP, JSON-RPC). Tools: `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`. Run deliverables are **resources**, skills are **prompts**. | Register external MCP servers (`/api/v1/mcp-servers`, HTTP or admin-only stdio). Their tools appear to agents as `mcp__<server>__<tool>`, filtered by `tool_allow` and gated by `risk` tags. |
-| **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`). Each task is a council run. | Register remote agents (`/api/v1/remote-agents`, `protocol: a2a`). Councils delegate through the `remote_agent` tool (requires approval by default). |
-| **ACP** | REST under `/acp`: `GET /agents` (modes plus your saved councils), `POST /runs` (sync/async), `GET /runs/{id}`, `POST /runs/{id}/cancel`. | Register remote ACP agents (`protocol: acp`, `agent_name`), used through the same `remote_agent` tool. |
+| **MCP** | `POST /mcp` (Streamable HTTP, JSON-RPC). Tools: `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`. Run deliverables are **resources**, skills are **prompts**. | Register external MCP servers (`/api/v1/mcp-servers`, HTTP or admin-only stdio). Their tools appear to agents as `mcp__<server>__<tool>`, filtered by `tool_allow`, gated by `risk` tags and by the server's trust level (below). |
+| **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`). Each task is a council run. | Register remote agents (`/api/v1/remote-agents`, `protocol: a2a`). Councils delegate through the `remote_agent` tool; `requires_approval` (default `true`) gates each delegation. |
+| **ACP** | REST under `/acp`: `GET /agents` (modes plus your saved councils), `POST /runs` (sync/async), `GET /runs/{id}`, `POST /runs/{id}/cancel`. | Register remote ACP agents (`protocol: acp`, `agent_name`), used through the same `remote_agent` tool. `agent_name` can be changed with `PATCH /api/v1/remote-agents/{id}`. |
+
+Inbound protocol calls that start, steer or cancel runs need the `runs:write` scope, like `POST /api/v1/runs`:
+A2A `message/send` and `tasks/cancel` (JSON-RPC error `-32010` otherwise), ACP run cancel, and the MCP
+`intervene` and `cancel_run` tools. Read-only keys can still query.
+
+**MCP trust levels.** Each MCP server has a `trust` level and an optional `require_approval` list of tool names:
+
+| `trust` | Effect |
+| --- | --- |
+| `trusted` | Tools run without extra approval (servers registered before trust levels existed behave this way). |
+| `ask` | Default for new servers. Every tool call goes through the approval flow. |
+| `blocked` | The server is not contacted during runs and its tools are never attached. |
+
+Tools named in `require_approval` always need approval, whatever the trust level.
 
 Connect Claude Code (or any MCP client) to Argus with an API key:
 
@@ -199,7 +247,9 @@ claude mcp add --transport http argus http://localhost:8000/mcp --header "Author
 **Ledger.** Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user, hash-chained
 ledger. Each entry holds SHA-256 digests of the request and response, the peer, method, status, latency and
 run, with `hash = sha256(prev_hash ‖ entry)`. `GET /api/v1/ledger` lists entries and `GET /api/v1/ledger/verify`
-detects any edit, deletion or reordering.
+detects any edit, deletion or reordering. Connection housekeeping is ledgered too: MCP discovery (`initialize`,
+`tools/list`, from `POST /mcp-servers/{id}/discover` or when a run attaches the server) and A2A/ACP card
+refreshes (`POST /remote-agents/{id}/refresh`), with the run id when they happen during a run.
 
 ## Integrating with the API
 
@@ -230,6 +280,18 @@ the next page. `GET /api/v1/audit` uses `?before_id=`.
 `skills:write`, `connections:write`, `webhooks:write`, or `*` for all of them. A key with no scopes (or `read`)
 is read-only. Creating or revoking keys and changing the password need a signed-in session, never a key.
 
+### Roles
+
+| Role | Can do |
+| --- | --- |
+| `admin` | Everything a member can, plus user management and `?all=true` on the audit log. |
+| `member` | Create and change their own councils, runs, skills, providers, connections, webhooks and keys. |
+| `viewer` | Read only. Every state-changing route and protocol write returns `403`, whatever the key's scopes, and viewers can only create keys with `scopes: ["read"]`. |
+
+Admins manage accounts with `GET /api/v1/admin/users` (role, active flag, last sign-in, run count) and
+`PATCH /api/v1/admin/users/{id}` (`role`, `is_active`). An admin cannot demote or deactivate themselves, and the
+last active admin cannot be demoted or deactivated (`409`). `GET /api/v1/auth/me` returns the caller's `role`.
+
 ## Observability
 
 - **Metrics**: `GET /metrics` (Prometheus) covers HTTP traffic and latency, runs started/finished/active, LLM
@@ -239,7 +301,35 @@ is read-only. Creating or revoking keys and changing the password need a signed-
   including failed sign-ins. Secrets are never stored. `GET /api/v1/audit`; admins can add `?all=true`.
 - **Insights**: `GET /api/v1/insights?days=30` analyses your runs and their event logs: success rate, spend and
   latency per model, tool error rates, intercepts by reason, guardrail violations and top failure reasons.
+  The web UI shows it at `/insights` and the audit log at `/insights/audit`.
 - **Structured logs**: JSON logs with request ids in production.
+
+## Web UI
+
+| Area | Route | What it shows |
+| --- | --- | --- |
+| Home, runs | `/`, `/runs` | Run composer, command palette, runs list |
+| Run workspace | `/runs/:runId` | Live run with a view switcher (below), intercept/correct, approvals, votes, budget meter, inspector, deliverable and exports |
+| Councils | `/councils`, `/councils/new`, `/councils/:id` | Council builder and detail (resize, seats, guardrails, runs by council) |
+| Skills | `/skills`, `/skills/new`, `/skills/:name` | Library, editor and detail |
+| Connections | `/connections/providers`, `/mcp`, `/agents`, `/ledger` | Providers with key hint, health and Test connection; MCP servers; remote agents; ledger browser with verification |
+| Insights | `/insights` | KPIs with sparklines (runs, success rate, spend, tokens, average runtime), spend by model, runs over time, model and provider health, tool reliability, oversight (intercepts by reason, approvals), run distribution by status and mode, top failures, guardrail violations |
+| Audit log | `/insights/audit` | Audit events filtered by action and result (admins: all users), paged, with CSV export |
+| Settings | `/settings/profile`, `/api-keys`, `/webhooks`, `/users` | Profile and appearance; API keys; webhooks (secret shown once, rotate, test, recent deliveries); user management (admins only: role, active) |
+
+**Run views.** All views read one communication log derived from the run stream (who sent what to whom,
+including relayed sub-council traffic and ledgered `protocol.call`s). Selecting an item in a view jumps to it
+in the timeline.
+
+| View | Shows |
+| --- | --- |
+| Timeline | Chronological feed of plan, thoughts, tool calls, intercepts, corrections, approvals and votes, with density control |
+| Map | Isometric map of agents, overseers, sub-councils, tools, MCP servers and remote agents, with live message pulses along the links, filters, pause/live, zoom/pan and a details panel including ledger id and hash |
+| Gantt | Steps and per-agent activity over time with a live now-line |
+| Heatmap | Who talks when: rows for agents, sub-agents and external peers, auto-sized time bins, intensity by messages, tokens, cost or errors |
+| Route | The plan as a trail from start to deliverable (solid where covered, dashed ahead) with pins for intercepts, corrections, approvals, votes, sub-councils and protocol calls, beside a chronological run log |
+
+Views are keyboard-navigable, have text alternatives, and stop animating under reduced motion.
 
 ## Roadmap
 
@@ -253,6 +343,18 @@ is read-only. Creating or revoking keys and changing the password need a signed-
   (resize, seats, guardrails), skills library and editor, connections (providers, MCP servers, remote agents,
   ledger), settings (profile, appearance, API keys)
 - [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
+- [x] API integration: webhooks, idempotent run creation, write scopes on every router and protocol write path
+- [x] Sub-councils (`subcouncil` tool, clamped guardrails, budget charge-back, depth limit, live relay)
+- [x] Live `protocol.call` events; MCP discovery and A2A/ACP refreshes ledgered
+- [x] MCP trust levels and per-tool approval; remote-agent approval flag
+- [x] Provider health checks and masked key hints
+- [x] Roles (admin, member, viewer) and admin user management
+- [x] Run views: Timeline, Map, Gantt, Heatmap, Route
+- [x] Insights dashboard, audit log UI, settings for webhooks and users
+- [ ] M7 Dev-council review passes
+- [ ] Memory and knowledge base
+- [ ] Backup and retention
+- [ ] Notifications, run templates and replay
 
 ## License
 
