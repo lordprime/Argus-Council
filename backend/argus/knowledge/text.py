@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import re
 from collections import Counter
 from pathlib import PurePosixPath
@@ -11,7 +12,7 @@ from bs4 import BeautifulSoup
 CHUNK_CHARS = 800
 CHUNK_OVERLAP = 150
 
-# Extension -> canonical content type. PDF is recognised so it can be refused explicitly.
+# Extension -> canonical content type.
 TEXT_TYPES = {
     ".md": "text/markdown",
     ".markdown": "text/markdown",
@@ -21,6 +22,12 @@ TEXT_TYPES = {
     ".htm": "text/html",
 }
 _DECLARED_OK = {"text/markdown", "text/x-markdown", "text/plain", "text/html", "application/octet-stream", ""}
+
+PDF_TYPE = "application/pdf"
+_PDF_DECLARED_OK = {PDF_TYPE, "application/x-pdf", "application/octet-stream", ""}
+# Bounds on what one PDF may cost to parse; the upload byte limit applies first.
+MAX_PDF_PAGES = 500
+MAX_EXTRACTED_CHARS = 2_000_000
 
 STOPWORDS = frozenset(
     """a about above after again against all am an and any are as at be because been before being below
@@ -39,6 +46,10 @@ class UnsupportedType(ValueError):
     pass
 
 
+class TooLarge(ValueError):
+    pass
+
+
 def tokenize(text: str) -> list[str]:
     """Lowercase alphanumeric tokens without stopwords or single letters."""
     return [t for t in _TOKEN.findall(text.lower()) if t not in STOPWORDS and (len(t) > 1 or t.isdigit())]
@@ -53,8 +64,12 @@ def detect_type(filename: str, declared: str | None) -> str:
     """Return the canonical content type, or raise ``UnsupportedType``."""
     ext = PurePosixPath(filename.lower()).suffix
     declared = (declared or "").split(";")[0].strip().lower()
-    if ext == ".pdf" or declared == "application/pdf":
-        raise UnsupportedType("PDF is not supported yet; upload Markdown, plain text or HTML")
+    if ext == ".pdf":
+        if declared not in _PDF_DECLARED_OK:
+            raise UnsupportedType(f"Content type '{declared}' does not match a PDF document")
+        return PDF_TYPE
+    if declared in (PDF_TYPE, "application/x-pdf"):
+        raise UnsupportedType(f"A PDF must have a .pdf file name, not '{ext or 'none'}'")
     ctype = TEXT_TYPES.get(ext)
     if ctype is None:
         raise UnsupportedType(f"Unsupported file type '{ext or declared or 'unknown'}'")
@@ -63,7 +78,36 @@ def detect_type(filename: str, declared: str | None) -> str:
     return ctype
 
 
+def _pdf_text(data: bytes) -> str:
+    """Text layer of a PDF, page by page. Refuses encrypted, oversized or unreadable files."""
+    if not data.startswith(b"%PDF-"):
+        raise UnsupportedType("File is not a valid PDF")
+    from pypdf import PdfReader
+
+    parts: list[str] = []
+    try:
+        reader = PdfReader(io.BytesIO(data), strict=False)
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise UnsupportedType("Password-protected PDFs are not supported")
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise TooLarge(f"PDF has more than {MAX_PDF_PAGES} pages")
+        total = 0
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            parts.append(text)
+            total += len(text)
+            if total >= MAX_EXTRACTED_CHARS:
+                break
+    except (UnsupportedType, TooLarge):
+        raise
+    except Exception as exc:  # pypdf raises many types for malformed input
+        raise UnsupportedType("The PDF could not be read") from exc
+    return "\n\n".join(parts)[:MAX_EXTRACTED_CHARS]
+
+
 def extract_text(data: bytes, content_type: str) -> str:
+    if content_type == PDF_TYPE:
+        return _normalise(_pdf_text(data))
     if b"\x00" in data[:8192]:
         raise UnsupportedType("File looks binary, not text")
     try:
@@ -75,6 +119,10 @@ def extract_text(data: bytes, content_type: str) -> str:
         for tag in soup(["script", "style", "noscript", "template"]):
             tag.decompose()
         text = soup.get_text("\n")
+    return _normalise(text)
+
+
+def _normalise(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t\f\v]+", " ", text)
     text = re.sub(r"\n\s*\n\s*", "\n\n", text)

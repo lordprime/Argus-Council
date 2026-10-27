@@ -100,7 +100,7 @@ async def test_kb_crud_and_conflicts(client, auth):
 async def test_size_and_type_limits(client, auth, monkeypatch):
     kb = await _kb(client, auth)
     r = await _upload(client, auth, kb["id"], "paper.pdf", b"%PDF-1.4 ...", "application/pdf")
-    assert r.status_code == 415 and "PDF" in r.json()["error"]["message"]
+    assert r.status_code == 415 and "PDF" in r.json()["error"]["message"]  # unreadable, not refused
     r = await _upload(client, auth, kb["id"], "x.exe", b"MZ\x00\x00", "application/octet-stream")
     assert r.status_code == 415
     r = await _upload(client, auth, kb["id"], "bin.txt", b"abc\x00def", "text/plain")
@@ -281,3 +281,69 @@ async def test_multipart_uploads_get_the_larger_body_limit(client, auth):
     assert r.status_code == 201 or r.json()["error"]["code"] != "payload_too_large", r.text
     r = await client.post("/api/v1/runs", headers=auth, json={"topic": "t", "description": "x" * (3 << 20)})
     assert r.status_code == 413 and r.json()["error"]["code"] == "payload_too_large"
+
+
+# ------------------------------------------------------------------ PDF
+def _pdf(*pages: str, encrypt: str | None = None) -> bytes:
+    """A small PDF with one line of text per page, generated with reportlab."""
+    import io
+
+    from reportlab.lib import pdfencrypt
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    enc = pdfencrypt.StandardEncryption(encrypt, canPrint=0) if encrypt else None
+    c = canvas.Canvas(buf, encrypt=enc)
+    for text in pages:
+        if text:
+            c.drawString(72, 720, text)
+        c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_pdf_text_extraction():
+    out = extract_text(_pdf("Solid state batteries", "Lithium dendrites"), "application/pdf")
+    assert "Solid state batteries" in out and "Lithium dendrites" in out
+
+
+async def test_pdf_upload_is_searchable(client, auth):
+    kb = await _kb(client, auth)
+    body = _pdf("Solid state batteries avoid flammable electrolytes.", "Dendrites grow on lithium anodes.")
+    r = await _upload(client, auth, kb["id"], "paper.pdf", body, "application/pdf")
+    assert r.status_code == 201, r.text
+    assert r.json()["content_type"] == "application/pdf" and r.json()["chunk_count"] >= 1
+    # Browsers sometimes send PDFs as octet-stream.
+    r = await _upload(
+        client, auth, kb["id"], "notes.pdf", _pdf("Electrolytes again"), "application/octet-stream"
+    )
+    assert r.status_code == 201, r.text
+    r = await client.get(f"{KB}/{kb['id']}/search", headers=auth, params={"q": "dendrites"})
+    assert [x["filename"] for x in r.json()["results"]] == ["paper.pdf"]
+
+
+async def test_pdf_upload_limits_and_refusals(client, auth, monkeypatch):
+    kb = await _kb(client, auth)
+    # Not a PDF despite the name, or a PDF with the wrong name.
+    r = await _upload(client, auth, kb["id"], "fake.pdf", "just text", "application/pdf")
+    assert r.status_code == 415
+    r = await _upload(client, auth, kb["id"], "doc.md", _pdf("hi there"), "application/pdf")
+    assert r.status_code == 415
+    # Password-protected.
+    r = await _upload(client, auth, kb["id"], "locked.pdf", _pdf("secret", encrypt="pw"), "application/pdf")
+    assert r.status_code == 415
+    # No text layer (for example a scan).
+    r = await _upload(client, auth, kb["id"], "scan.pdf", _pdf(""), "application/pdf")
+    assert r.status_code == 400
+    # Page cap.
+    from argus.knowledge import text
+
+    monkeypatch.setattr(text, "MAX_PDF_PAGES", 1)
+    r = await _upload(client, auth, kb["id"], "long.pdf", _pdf("one", "two"), "application/pdf")
+    assert r.status_code == 413 and "pages" in r.json()["error"]["message"]
+    # The byte limit applies to PDFs too.
+    from argus.knowledge import service
+
+    monkeypatch.setattr(service, "MAX_FILE_BYTES", 100)
+    r = await _upload(client, auth, kb["id"], "big.pdf", _pdf("x" * 50), "application/pdf")
+    assert r.status_code == 413
