@@ -6,6 +6,7 @@ import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
 import { Chips, Meta, Switch } from "@/components/connections/parts";
 import { SkillBadges } from "@/components/skills/SkillBadges";
 import { FileViewer } from "@/components/skills/FileViewer";
+import { VersionHistory } from "@/components/skills/VersionHistory";
 import { Button, Callout, Card, EmptyState, ErrorState, PageHeader, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { exportSkill, useDeleteSkill, useToggleSkill } from "@/features/skills/queries";
@@ -124,6 +125,8 @@ export default function SkillDetail() {
             )}
           </Card>
 
+          {!s.builtin && <VersionHistory name={s.name} current={{ skill_md: s.skill_md, files: s.file_contents }} />}
+
           <details className="rounded-lg border border-border bg-surface">
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium">SKILL.md source</summary>
             <pre tabIndex={0} role="region" aria-label="SKILL.md source"
@@ -137,7 +140,7 @@ export default function SkillDetail() {
           <SkillBadges skill={s} align="start" />
           <dl className="grid grid-cols-2 gap-3">
             <Meta label="Version" mono>{s.version}</Meta>
-            <Meta label="Source">{s.source === "builtin" ? "Ships with Argus" : s.source === "upload" ? "Uploaded .zip" : "Written here"}</Meta>
+            <Meta label="Source">{s.source === "builtin" ? "Ships with Argus" : s.source === "upload" ? "Uploaded .zip" : s.source === "marketplace" ? "Marketplace" : "Written here"}</Meta>
           </dl>
           <div>
             <p className="text-xs text-fg-subtle mb-1">Allowed tools</p>

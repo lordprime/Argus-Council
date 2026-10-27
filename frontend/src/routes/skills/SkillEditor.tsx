@@ -1,8 +1,9 @@
-import { ArrowLeft, CheckCircle2, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Plus, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
-import { Button, Callout, Card, ErrorState, IconButton, PageHeader, Skeleton, TextArea, TextField } from "@/components/ui";
+import { VersionHistory } from "@/components/skills/VersionHistory";
+import { Button, Callout, Card, ErrorState, IconButton, PageHeader, Segmented, Skeleton, TextArea, TextField } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { useOptionalSkill, useSaveSkill, useValidateSkill, type ValidateResult } from "@/features/skills/queries";
 import {
@@ -10,6 +11,8 @@ import {
   demoteHeadings,
   fieldErrors,
   filePathError,
+  frontmatterChecks,
+  type FrontmatterCheck,
   KNOWN_TOOLS,
   MAX_DESCRIPTION,
   parseToolList,
@@ -47,6 +50,37 @@ function initialFrom(s: SkillDetail | undefined): Initial {
   };
 }
 
+const CHECK_ICON = { ok: CheckCircle2, warn: AlertTriangle, error: XCircle } as const;
+const CHECK_TONE = { ok: "text-success", warn: "text-warning", error: "text-danger" } as const;
+const CHECK_SR = { ok: "OK", warn: "Suggestion", error: "Error" } as const;
+
+/** Live frontmatter feedback: updates as the author types, before any save or server round-trip. */
+function FrontmatterStatus({ checks }: { checks: FrontmatterCheck[] }) {
+  const errors = checks.filter((c) => c.status === "error").length;
+  return (
+    <section aria-labelledby="fm-check-h" className="rounded-md border border-border bg-surface-2 p-3">
+      <h3 id="fm-check-h" className="text-sm font-medium mb-2">
+        Frontmatter check{" "}
+        <span className={errors ? "text-danger" : "text-success"}>{errors ? `· ${errors} ${errors === 1 ? "error" : "errors"}` : "· looks valid"}</span>
+      </h3>
+      <ul className="flex flex-col gap-1.5 text-sm">
+        {checks.map((c) => {
+          const Icon = CHECK_ICON[c.status];
+          return (
+            <li key={c.field} className="flex items-start gap-2 min-w-0">
+              <Icon className={cn("size-4 mt-0.5 shrink-0", CHECK_TONE[c.status])} aria-hidden />
+              <span className="min-w-0 break-words">
+                <span className="sr-only">{CHECK_SR[c.status]}: </span>
+                <code className="font-mono text-xs">{c.field}</code> <span className="text-fg-muted">{c.message}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 // ------------------------------------------------------------------ form
 function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "customize"; initial: Initial; sourceName?: string }) {
   const navigate = useNavigate();
@@ -64,6 +98,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
   const [submitted, setSubmitted] = useState(false);
   const [serverResult, setServerResult] = useState<ValidateResult | null>(null);
   const [nameTaken, setNameTaken] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<"rendered" | "source">("rendered");
 
   const fields: SkillFields = { name, description, version, allowedTools: [...known, ...parseToolList(other)], body };
   const skillMd = composeSkillMd(fields);
@@ -71,6 +106,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
   const payload = { skill_md: skillMd, files: fileDict, enabled: initial.enabled };
 
   const errs = fieldErrors(fields);
+  const checks = frontmatterChecks(fields);
   if (nameTaken && nameTaken === name.trim()) errs.name = `You already have a skill named ${nameTaken}. Edit it instead, or pick another name.`;
   const fileErrs = Object.fromEntries(files.map((f) => {
     const dup = files.filter((g) => g.path.trim() === f.path.trim()).length > 1;
@@ -154,6 +190,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
           <TextField label="Other tools" value={other} onChange={(e) => setOther(e.target.value)} spellCheck={false}
             placeholder="github.create_issue, search.*" hint="Comma-separated, e.g. tools from your MCP servers." />
         </fieldset>
+        <FrontmatterStatus checks={checks} />
       </Card>
 
       <Card className="p-5 flex flex-col gap-3" aria-labelledby="body-h">
@@ -166,11 +203,22 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
             className="[&_textarea]:font-mono [&_textarea]:text-sm [&_textarea]:min-h-80" error={show("body")} spellCheck={false}
             placeholder={"## When to use\n\n## Steps\n1. …\n\n## Output\n…"} />
           <section aria-labelledby="preview-h" className="flex flex-col gap-1 min-w-0">
-            <h3 id="preview-h" className="text-sm font-medium">Preview</h3>
-            <div tabIndex={0} role="region" aria-label="Instructions preview"
-              className="flex-1 min-h-80 max-h-[36rem] overflow-auto rounded-md border border-border bg-surface-2 px-4 py-2">
-              {body.trim() ? <Markdown className={SKILL_PROSE}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <h3 id="preview-h" className="text-sm font-medium">Live SKILL.md preview</h3>
+              <Segmented label="Preview as" value={previewMode} onChange={setPreviewMode} options={[
+                { value: "rendered", label: "Rendered" },
+                { value: "source", label: "SKILL.md" },
+              ]} />
             </div>
+            {previewMode === "rendered" ? (
+              <div tabIndex={0} role="region" aria-label="Instructions preview"
+                className="flex-1 min-h-80 max-h-[36rem] overflow-auto rounded-md border border-border bg-surface-2 px-4 py-2">
+                {body.trim() ? <Markdown className={SKILL_PROSE}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
+              </div>
+            ) : (
+              <pre tabIndex={0} role="region" aria-label="SKILL.md source preview"
+                className="flex-1 min-h-80 max-h-[36rem] overflow-auto rounded-md border border-border bg-surface-2 px-4 py-2 font-mono text-xs leading-5 whitespace-pre-wrap break-words">{skillMd}</pre>
+            )}
           </section>
         </div>
       </Card>
@@ -224,7 +272,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
         <Button type="submit" variant="primary" icon={Save} loading={save.isPending}>
           {mode === "edit" ? "Save changes" : mode === "customize" ? "Create my copy" : "Create skill"}
         </Button>
-        <Button type="button" icon={ShieldCheck} loading={validate.isPending} onClick={runValidate}>Validate</Button>
+        <Button type="button" icon={ShieldCheck} loading={validate.isPending} onClick={runValidate}>Test with validate</Button>
         {serverResult?.valid && <CheckCircle2 className="size-4 text-success" aria-label="Last validation passed" />}
         <div className="flex-1" />
         <Link to={mode === "new" ? "/skills" : `/skills/${encodeURIComponent(sourceName ?? "")}`}
@@ -241,6 +289,7 @@ export default function SkillEditor() {
   const fromName = params.get("from");
   const source = editName ?? fromName;
   const q = useOptionalSkill(source);
+  const [rev, setRev] = useState(0); // bumps after a restore so the form re-initialises from the restored content
   const mode: "new" | "edit" | "customize" = editName ? "edit" : fromName ? "customize" : "new";
   const title = mode === "edit" ? `Edit ${editName}` : mode === "customize" ? `Customize ${fromName}` : "New skill";
 
@@ -267,7 +316,15 @@ export default function SkillEditor() {
       </Callout>
     );
   } else {
-    content = <EditorForm key={source ?? "new"} mode={mode} initial={initialFrom(q.data)} sourceName={source ?? undefined} />;
+    content = (
+      <div className="flex flex-col gap-6">
+        <EditorForm key={`${source ?? "new"}-${rev}`} mode={mode} initial={initialFrom(q.data)} sourceName={source ?? undefined} />
+        {mode === "edit" && q.data && (
+          <VersionHistory name={q.data.name} current={{ skill_md: q.data.skill_md, files: q.data.file_contents }}
+            onRestored={() => setRev((r) => r + 1)} />
+        )}
+      </div>
+    );
   }
 
   return (

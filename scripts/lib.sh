@@ -88,4 +88,29 @@ backup() {
     warn "artifact backup failed; the database dump is still in place"
     rm -f "$BACKUP_DIR/argus-data-$ts.tgz"
   fi
+  prune_backups
+}
+
+# backup_stamps: timestamps of the database dumps in $BACKUP_DIR, newest first.
+backup_stamps() {
+  local f
+  [ -d "$BACKUP_DIR" ] || return 0
+  for f in "$BACKUP_DIR"/argus-db-*.dump; do
+    [ -e "$f" ] || continue
+    f="${f##*/argus-db-}"
+    printf '%s\n' "${f%.dump}"
+  done | sort -r
+}
+
+# prune_backups: keep the newest ARGUS_BACKUP_KEEP (default 14) dump/artifact pairs; 0 keeps all.
+prune_backups() {
+  local keep="${ARGUS_BACKUP_KEEP:-$(envval ARGUS_BACKUP_KEEP 14)}" n=0 ts
+  case "$keep" in '' | *[!0-9]*) warn "ARGUS_BACKUP_KEEP must be a number (got '$keep'): not pruning"; return 0 ;; esac
+  [ "$keep" -gt 0 ] || return 0
+  while IFS= read -r ts; do
+    n=$((n + 1))
+    [ "$n" -gt "$keep" ] || continue
+    log "pruning old backup $ts (keeping the newest $keep)"
+    rm -f "$BACKUP_DIR/argus-db-$ts.dump" "$BACKUP_DIR/argus-data-$ts.tgz"
+  done < <(backup_stamps)
 }

@@ -24,10 +24,12 @@ from argus.runtime.orchestrator import CouncilOrchestrator
 from argus.sandbox.client import build_sandbox
 from argus.services.connections import attach_connections
 from argus.services.llm import LLMRouter
+from argus.services.notifications import Notifier
 from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
 from argus.tools.builtin import builtin_tools
 from argus.tools.code import code_tools
+from argus.tools.knowledge import knowledge_tools
 from argus.tools.skills import skill_tools
 from argus.tools.subcouncil import SubCouncilTool
 from argus.tools.web import web_tools
@@ -64,6 +66,7 @@ class RunManager:
                 [
                     *builtin_tools(),
                     *skill_tools(),
+                    *knowledge_tools(),
                     *web_tools(settings),
                     *code_tools(self.sandbox),
                     SubCouncilTool(self),
@@ -113,9 +116,17 @@ class RunManager:
             blob_root=self.blob_root,
             depth=depth,
         )
-        if self.webhooks is not None:
-            owner = run.owner_id
-            ctx.notify = lambda event, data: self.webhooks.emit(owner, event, data)
+        owner = run.owner_id
+        # In-app notifications share the webhook dispatcher's task set so one drain covers both.
+        notifier = Notifier(self.sessionmaker, getattr(self.webhooks, "tasks", None))
+
+        def _notify(event: str, data: dict[str, Any]) -> None:
+            if self.webhooks is not None:
+                self.webhooks.emit(owner, event, data)
+            if depth == 0 or event == "approval.requested":  # sub-council results surface via the parent
+                notifier.emit(owner, event, data)
+
+        ctx.notify = _notify
         skills = await skills_for_owner(self.sessionmaker, run.owner_id)
         ctx.skills = {
             n: p for n, p in skills.items() if skill_permitted(n, rails.skills.allow, rails.skills.deny)

@@ -108,3 +108,90 @@ export async function exportSkill(name: string): Promise<void> {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ------------------------------------------------------------------ version history
+export interface SkillVersionMeta {
+  number: number;
+  version: string | null;
+  created_at: string;
+  author: string;
+  note: string;
+  files: string[];
+}
+
+export interface SkillVersionDetail extends SkillVersionMeta {
+  name: string;
+  skill_md: string;
+  file_contents: Record<string, string>;
+}
+
+export interface RestoreResult extends SkillSummary {
+  restored_from: number;
+  current_version: number | null;
+  version_count: number;
+}
+
+export const skillKeys = {
+  versions: (name: string) => ["skill", name, "versions"] as const,
+  version: (name: string, n: number) => ["skill", name, "versions", n] as const,
+  marketplace: ["skills", "marketplace"] as const,
+};
+
+export const useSkillVersions = (name: string, enabled = true) =>
+  useQuery({
+    queryKey: skillKeys.versions(name),
+    queryFn: () => api.get<{ name: string; current: number | null; versions: SkillVersionMeta[] }>(`${V1}/skills/${enc(name)}/versions`),
+    enabled: Boolean(name) && enabled,
+  });
+
+export const useSkillVersion = (name: string, n: number | null) =>
+  useQuery({
+    queryKey: skillKeys.version(name, n ?? 0),
+    queryFn: () => api.get<SkillVersionDetail>(`${V1}/skills/${enc(name)}/versions/${n}`),
+    enabled: Boolean(name) && n !== null,
+    staleTime: Infinity, // versions are immutable
+  });
+
+export function useRestoreVersion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, n }: { name: string; n: number }) => api.post<RestoreResult>(`${V1}/skills/${enc(name)}/versions/${n}/restore`),
+    onSuccess: async (_r, { name }) => {
+      void qc.invalidateQueries({ queryKey: keys.skills });
+      await qc.invalidateQueries({ queryKey: keys.skill(name) });
+    },
+  });
+}
+
+// ------------------------------------------------------------------ marketplace
+export interface MarketplaceSkill {
+  name: string;
+  description: string;
+  version: string;
+  tags: string[];
+  allowed_tools: string[];
+  files: string[];
+  installed: boolean;
+  installed_version: string | null;
+  installed_from_marketplace: boolean;
+}
+
+export const useMarketplace = (enabled = true) =>
+  useQuery({
+    queryKey: skillKeys.marketplace,
+    queryFn: () => api.get<{ skills: MarketplaceSkill[] }>(`${V1}/skills/marketplace`).then((r) => r.skills),
+    enabled,
+  });
+
+export function useInstallSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.post<SkillSummary>(`${V1}/skills/marketplace/${enc(name)}/install`),
+    onSuccess: (s) => {
+      qc.setQueryData<MarketplaceSkill[]>(skillKeys.marketplace, (list) =>
+        list?.map((m) => (m.name === s.name ? { ...m, installed: true, installed_version: s.version, installed_from_marketplace: true } : m)));
+      void qc.invalidateQueries({ queryKey: skillKeys.marketplace });
+      void qc.invalidateQueries({ queryKey: keys.skills });
+    },
+  });
+}

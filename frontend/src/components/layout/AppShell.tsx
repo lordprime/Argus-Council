@@ -5,7 +5,9 @@ import {
   BarChart3,
   Home,
   KeyRound,
+  LayoutTemplate,
   LayoutGrid,
+  Library,
   LogOut,
   Monitor,
   Moon,
@@ -22,6 +24,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { IconButton, Kbd, Toaster } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { useRunsList } from "@/lib/queries";
@@ -33,6 +36,8 @@ const NAV = [
   { to: "/runs", label: "Runs", icon: Activity },
   { to: "/councils", label: "Councils", icon: Users },
   { to: "/skills", label: "Skills", icon: Sparkles },
+  { to: "/knowledge", label: "Knowledge", icon: Library },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/connections/providers", label: "Connections", icon: Plug, match: "/connections" },
   { to: "/insights", label: "Insights", icon: BarChart3, match: "/insights" },
   { to: "/settings/profile", label: "Settings", icon: Settings, match: "/settings" },
@@ -235,6 +240,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             <span className="hidden md:inline ml-auto"><Kbd>⌘K</Kbd></span>
           </button>
           <div className="md:ml-auto flex items-center gap-1">
+            <NotificationBell />
             <ThemeMenu />
             <UserMenu />
           </div>

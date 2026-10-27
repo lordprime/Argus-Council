@@ -92,3 +92,38 @@ export function demoteHeadings(md: string, by = 2): string {
 export const SKILL_PROSE =
   "text-base [&_h3:first-child]:mt-0 [&_h4:first-child]:mt-1 [&_h4]:text-base [&_h4]:font-semibold [&_h4]:mt-5 [&_h4]:mb-1.5 " +
   "[&_h5]:text-sm [&_h5]:font-semibold [&_h5]:mt-4 [&_h5]:mb-1 [&_h6]:text-sm [&_h6]:font-medium [&_h6]:text-fg-muted [&_h6]:mt-3";
+
+export interface FrontmatterCheck {
+  field: "name" | "description" | "version" | "allowed-tools" | "body";
+  status: "ok" | "warn" | "error";
+  message: string;
+}
+
+const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+
+/** Live, per-field feedback for the editor. Errors mirror the server's rules; warnings are advice only. */
+export function frontmatterChecks(f: SkillFields): FrontmatterCheck[] {
+  const errs = fieldErrors(f);
+  const desc = f.description.trim();
+  const unknown = f.allowedTools.filter((t) => !KNOWN_TOOLS.includes(t));
+  const checks: FrontmatterCheck[] = [
+    { field: "name", status: errs.name ? "error" : "ok", message: errs.name ?? `“${f.name.trim()}” is a valid skill name` },
+    errs.description
+      ? { field: "description", status: "error", message: errs.description }
+      : !/\buse (it )?(when|for|before|after)\b/i.test(desc)
+        ? { field: "description", status: "warn", message: "Consider saying when agents should use it (e.g. “Use when …”)" }
+        : { field: "description", status: "ok", message: `${desc.length}/${MAX_DESCRIPTION} characters, says when to use it` },
+    !f.version.trim()
+      ? { field: "version", status: "warn", message: "No version: the server will default to 1.0.0" }
+      : SEMVER.test(f.version.trim())
+        ? { field: "version", status: "ok", message: `Version ${f.version.trim()}` }
+        : { field: "version", status: "warn", message: "Use semantic versioning, e.g. 1.2.0" },
+    !f.allowedTools.length
+      ? { field: "allowed-tools", status: "warn", message: "No tools declared: agents get no hint about what the skill needs" }
+      : unknown.length
+        ? { field: "allowed-tools", status: "warn", message: `Not built-in: ${unknown.join(", ")} (fine for MCP tools)` }
+        : { field: "allowed-tools", status: "ok", message: `${f.allowedTools.length} built-in ${f.allowedTools.length === 1 ? "tool" : "tools"}` },
+    { field: "body", status: errs.body ? "error" : "ok", message: errs.body ?? "Instructions present" },
+  ];
+  return checks;
+}

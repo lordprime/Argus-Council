@@ -5,12 +5,13 @@ import zipfile
 
 from fastapi import APIRouter, File, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from argus.api.deps import CurrentPrincipal, DbDep, write_scope
 from argus.api.schemas import SkillIn, SkillPatch
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound
-from argus.db.models import Council, Skill
+from argus.db.models import Council, Skill, SkillVersion
+from argus.skills.catalog import marketplace_skills, tags_of
 from argus.skills.library import builtin_skills, from_row, skill_permitted
 from argus.skills.package import SkillError, SkillPackage, load_zip, parse_skill_md, validate_files
 
@@ -75,13 +76,49 @@ async def _used_by(db, owner_id, name: str) -> list[dict]:
     return out
 
 
-async def _create(db, owner_id, pkg: SkillPackage, *, source: str, enabled: bool = True) -> Skill:
+async def _latest(db, skill_id) -> SkillVersion | None:
+    return (
+        await db.execute(
+            select(SkillVersion)
+            .where(SkillVersion.skill_id == skill_id)
+            .order_by(SkillVersion.number.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _snapshot(db, row: Skill, principal, note: str, *, force: bool = False) -> SkillVersion | None:
+    """Store an immutable version of ``row``; skipped when nothing changed since the latest one."""
+    pkg = from_row(row)
+    skill_md, files = pkg.render(), dict(pkg.files)
+    latest = await _latest(db, row.id)
+    if latest is not None and not force and latest.skill_md == skill_md and dict(latest.files) == files:
+        return None
+    ver = SkillVersion(
+        skill_id=row.id,
+        number=(latest.number if latest else 0) + 1,
+        skill_md=skill_md,
+        files=files,
+        author_id=principal.id,
+        author=principal.user.email,
+        note=note[:200],
+    )
+    db.add(ver)
+    await db.flush()
+    return ver
+
+
+async def _create(
+    db, principal, pkg: SkillPackage, *, source: str, enabled: bool = True, note: str = "created"
+) -> Skill:
+    owner_id = principal.id
     if await _row(db, owner_id, pkg.name):
         raise Conflict(f"You already have a skill named '{pkg.name}'")
     row = Skill(owner_id=owner_id, name=pkg.name, source=source, enabled=enabled)
     _apply(row, pkg)
     db.add(row)
     await db.flush()
+    await _snapshot(db, row, principal, note, force=True)
     return row
 
 
@@ -112,7 +149,7 @@ async def validate(data: SkillIn, _: CurrentPrincipal) -> dict:
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_skill(data: SkillIn, principal: CurrentPrincipal, db: DbDep) -> dict:
     principal.require_scope("skills:write")
-    row = await _create(db, principal.id, _parse(data), source="created", enabled=data.enabled)
+    row = await _create(db, principal, _parse(data), source="created", enabled=data.enabled)
     return _summary(
         from_row(row), source=row.source, enabled=row.enabled, shadows_builtin=row.name in builtin_skills()
     )
@@ -128,7 +165,64 @@ async def import_skill(principal: CurrentPrincipal, db: DbDep, file: UploadFile 
         pkg = load_zip(data)
     except SkillError as exc:
         raise InvalidSkill(str(exc)) from exc
-    row = await _create(db, principal.id, pkg, source="upload")
+    row = await _create(db, principal, pkg, source="upload", note="imported from archive")
+    return _summary(from_row(row), source=row.source, shadows_builtin=row.name in builtin_skills())
+
+
+# ------------------------------------------------------------------ marketplace
+# Declared before "/{name}" so "marketplace" is never captured as a skill name.
+@router.get("/marketplace")
+async def list_marketplace(principal: CurrentPrincipal, db: DbDep) -> dict:
+    mine = {
+        r.name: r for r in (await db.execute(select(Skill).where(Skill.owner_id == principal.id))).scalars()
+    }
+    out = []
+    for name, pkg in marketplace_skills().items():
+        row = mine.get(name)
+        out.append(
+            {
+                "name": name,
+                "description": pkg.description,
+                "version": pkg.version,
+                "tags": tags_of(pkg),
+                "allowed_tools": pkg.allowed_tools,
+                "files": sorted(pkg.files),
+                "installed": row is not None,
+                "installed_version": row.version if row is not None else None,
+                "installed_from_marketplace": row is not None and row.source == "marketplace",
+            }
+        )
+    return {"skills": out}
+
+
+@router.get("/marketplace/{name}")
+async def get_marketplace_skill(name: str, _: CurrentPrincipal) -> dict:
+    pkg = marketplace_skills().get(name)
+    if pkg is None:
+        raise NotFound("Marketplace skill not found")
+    return {
+        **_summary(pkg, source="marketplace"),
+        "tags": tags_of(pkg),
+        "skill_md": pkg.render(),
+        "file_contents": pkg.files,
+    }
+
+
+@router.post("/marketplace/{name}/install", status_code=status.HTTP_201_CREATED)
+async def install_marketplace_skill(name: str, principal: CurrentPrincipal, db: DbDep) -> dict:
+    principal.require_scope("skills:write")
+    src = marketplace_skills().get(name)
+    if src is None:
+        raise NotFound("Marketplace skill not found")
+    # Round-trip through the same validation as user uploads, so the copy is held to identical rules.
+    try:
+        pkg = parse_skill_md(src.render())
+        pkg.files = validate_files(dict(src.files))
+    except SkillError as exc:
+        raise InvalidSkill(str(exc)) from exc
+    row = await _create(
+        db, principal, pkg, source="marketplace", note=f"installed from marketplace (v{pkg.version})"
+    )
     return _summary(from_row(row), source=row.source, shadows_builtin=row.name in builtin_skills())
 
 
@@ -172,6 +266,7 @@ async def update_skill(name: str, data: SkillIn, principal: CurrentPrincipal, db
     _apply(row, pkg)
     row.enabled = data.enabled
     await db.flush()
+    await _snapshot(db, row, principal, "updated")
     return _summary(from_row(row), source=row.source, enabled=row.enabled)
 
 
@@ -194,6 +289,7 @@ async def delete_skill(name: str, principal: CurrentPrincipal, db: DbDep):
             if name in builtin_skills()
             else NotFound("Skill not found")
         )
+    await db.execute(delete(SkillVersion).where(SkillVersion.skill_id == row.id))
     await db.delete(row)
 
 
@@ -213,3 +309,87 @@ async def export_skill(name: str, principal: CurrentPrincipal, db: DbDep) -> Res
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{pkg.name}.zip"'},
     )
+
+
+# ------------------------------------------------------------------ versions
+async def _owned(db, principal, name: str) -> Skill:
+    row = await _row(db, principal.id, name)
+    if row is None:
+        raise (
+            NotFound("Built-in skills have no version history")
+            if name in builtin_skills()
+            else NotFound("Skill not found")
+        )
+    return row
+
+
+def _version_meta(v: SkillVersion) -> dict:
+    try:
+        semver = parse_skill_md(v.skill_md).version
+    except SkillError:
+        semver = None
+    return {
+        "number": v.number,
+        "version": semver,
+        "created_at": v.created_at.isoformat(),
+        "author": v.author,
+        "note": v.note,
+        "files": sorted(v.files or {}),
+    }
+
+
+@router.get("/{name}/versions")
+async def list_versions(name: str, principal: CurrentPrincipal, db: DbDep) -> dict:
+    row = await _owned(db, principal, name)
+    rows = (
+        await db.execute(
+            select(SkillVersion).where(SkillVersion.skill_id == row.id).order_by(SkillVersion.number.desc())
+        )
+    ).scalars()
+    versions = [_version_meta(v) for v in rows]
+    return {"name": name, "current": versions[0]["number"] if versions else None, "versions": versions}
+
+
+async def _version(db, row: Skill, n: int) -> SkillVersion:
+    v = (
+        await db.execute(
+            select(SkillVersion).where(SkillVersion.skill_id == row.id, SkillVersion.number == n)
+        )
+    ).scalar_one_or_none()
+    if v is None:
+        raise NotFound(f"Version {n} not found")
+    return v
+
+
+@router.get("/{name}/versions/{n}")
+async def get_version(name: str, n: int, principal: CurrentPrincipal, db: DbDep) -> dict:
+    v = await _version(db, await _owned(db, principal, name), n)
+    return {**_version_meta(v), "name": name, "skill_md": v.skill_md, "file_contents": dict(v.files or {})}
+
+
+@router.post("/{name}/versions/{n}/restore")
+async def restore_version(name: str, n: int, principal: CurrentPrincipal, db: DbDep) -> dict:
+    principal.require_scope("skills:write")
+    row = await _owned(db, principal, name)
+    v = await _version(db, row, n)
+    try:
+        pkg = parse_skill_md(v.skill_md)
+        pkg.files = validate_files(dict(v.files or {}))
+    except SkillError as exc:
+        raise InvalidSkill(f"Version {n} no longer passes validation: {exc}") from exc
+    if pkg.name != name:
+        raise InvalidSkill("The stored version belongs to a different skill name")
+    _apply(row, pkg)
+    await db.flush()
+    new = await _snapshot(db, row, principal, f"restored from v{n}", force=True)
+    count = (
+        await db.execute(
+            select(func.count()).select_from(SkillVersion).where(SkillVersion.skill_id == row.id)
+        )
+    ).scalar_one()
+    return {
+        **_summary(from_row(row), source=row.source, enabled=row.enabled),
+        "restored_from": n,
+        "current_version": new.number if new else None,
+        "version_count": count,
+    }

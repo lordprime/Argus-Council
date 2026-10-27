@@ -1,4 +1,4 @@
-import { KeyRound, UserRound, Users, Webhook } from "lucide-react";
+import { Database, KeyRound, UserRound, Users, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 
@@ -10,6 +10,7 @@ const LINKS = [
   { to: "/settings/profile", label: "Profile", icon: UserRound },
   { to: "/settings/api-keys", label: "API keys", icon: KeyRound },
   { to: "/settings/webhooks", label: "Webhooks", icon: Webhook },
+  { to: "/settings/data", label: "Data & privacy", icon: Database },
   { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
 ];
 

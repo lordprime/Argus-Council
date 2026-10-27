@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router";
 import { RunRow } from "@/components/run/RunRow";
 import { Button, Callout, Card, EmptyState, ErrorState, Segmented, SelectField, Skeleton, TextArea, TextField, Toggle } from "@/components/ui";
 import { RoleAvatar } from "@/components/ui/role";
+import { SaveTemplateButton, TemplatePicker } from "@/features/templates/components";
 import { errorMessage } from "@/lib/api";
 import { useCouncils, useCreateRun, useProviderKinds, useProviders, useRoles, useRunsList } from "@/lib/queries";
 import type { Mode, OutputFormat } from "@/lib/types";
@@ -99,9 +100,8 @@ function Composer() {
 
   const onlyMock = routes.length > 0 && routes.every((r) => r.value.startsWith("mock::"));
 
-  const submit = async (e?: FormEvent) => {
-    e?.preventDefault();
-    if (!topic.trim()) return;
+  /** The composer's run configuration (also what "Save as template" stores). */
+  const buildConfig = () => {
     const [provider, model] = route.split("::");
     const guardrails: Record<string, unknown> = { ...PRESETS[preset] };
     if (advanced) {
@@ -110,12 +110,18 @@ function Composer() {
       guardrails.oversight = { intercept_mode: interceptMode };
       guardrails.approval_required = approvals;
     }
+    return {
+      topic: topic.trim(), description, mode, outputs,
+      ...(councilId ? { council_id: councilId } : { size, provider, model }),
+      guardrails,
+    };
+  };
+
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (!topic.trim()) return;
     try {
-      const run = await create.mutateAsync({
-        topic: topic.trim(), description, mode, outputs,
-        ...(councilId ? { council_id: councilId } : { size, provider, model }),
-        guardrails,
-      });
+      const run = await create.mutateAsync(buildConfig());
       navigate(`/runs/${run.id}`);
     } catch {
       /* rendered below */
@@ -231,6 +237,7 @@ function Composer() {
             Start run
           </Button>
           <span className="text-xs text-fg-subtle">⌘↵</span>
+          <span className="ml-auto"><SaveTemplateButton getConfig={buildConfig} disabled={!topic.trim()} /></span>
         </div>
       </form>
     </Card>
@@ -242,9 +249,12 @@ export default function Home() {
   const recent = useRunsList({ limit: 10 });
   return (
     <div className="max-w-[880px] mx-auto p-4 md:p-6 flex flex-col gap-8">
-      <div>
-        <h1 className="text-2xl">New run</h1>
-        <p className="text-sm text-fg-muted mt-1">Give the council a topic. It plans, works and checks itself, and you can step in at any point.</p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl">New run</h1>
+          <p className="text-sm text-fg-muted mt-1">Give the council a topic. It plans, works and checks itself, and you can step in at any point.</p>
+        </div>
+        <TemplatePicker />
       </div>
       <Composer />
       {active.data && active.data.length > 0 && (

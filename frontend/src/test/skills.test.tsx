@@ -95,7 +95,7 @@ describe("SkillEditor", () => {
     expect(screen.getAllByText(/lowercase letters, digits and hyphens/i).length).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalledWith("/api/v1/skills", expect.anything());
 
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await userEvent.click(screen.getByRole("button", { name: "Test with validate" }));
     expect(await screen.findByText("The server rejected this package")).toBeInTheDocument();
     expect(screen.getByText("description is required (it tells agents when to use the skill)")).toBeInTheDocument();
   });

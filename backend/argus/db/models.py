@@ -11,7 +11,7 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.elements import ColumnElement
 
-from argus.db.base import Base, IdMixin, TimestampMixin
+from argus.db.base import Base, IdMixin, TimestampMixin, utcnow
 
 USER_ROLES = ("admin", "member", "viewer")
 
@@ -207,6 +207,24 @@ class Skill(IdMixin, TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(20), default="created")
 
 
+class SkillVersion(IdMixin, Base):
+    """Immutable snapshot of a user skill, written on every create/update/restore/install."""
+
+    __tablename__ = "skill_versions"
+    __table_args__ = (UniqueConstraint("skill_id", "number"),)
+
+    skill_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("skills.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    skill_md: Mapped[str] = mapped_column(Text)
+    files: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    author: Mapped[str] = mapped_column(String(320), default="")
+    note: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class McpServer(IdMixin, TimestampMixin, Base):
     """An external MCP server whose tools council agents may use."""
 
@@ -316,3 +334,103 @@ class WebhookDelivery(Base):
     ok: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str] = mapped_column(String(300), default="")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class RunTemplate(IdMixin, TimestampMixin, Base):
+    """A saved run configuration whose topic/description may contain ``{{variables}}``."""
+
+    __tablename__ = "run_templates"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    topic: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(Text, default="")
+    mode: Mapped[str] = mapped_column(String(32), default="general")
+    council_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True
+    )
+    size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider: Mapped[str] = mapped_column(String(64), default="mock")
+    model: Mapped[str] = mapped_column(String(120), default="mock-1")
+    outputs: Mapped[list[Any]] = mapped_column(default=list)
+    guardrails: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Notification(IdMixin, TimestampMixin, Base):
+    """An in-app notification for a user (run finished, approval needed)."""
+
+    __tablename__ = "notifications"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="")
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class KnowledgeBase(IdMixin, TimestampMixin, Base):
+    """A named, owner-scoped collection of documents that agents can search."""
+
+    __tablename__ = "knowledge_bases"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
+class KnowledgeDocument(IdMixin, TimestampMixin, Base):
+    __tablename__ = "knowledge_documents"
+
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KnowledgeChunk(Base):
+    """A searchable slice of a document; ``terms`` holds pre-computed term frequencies for BM25."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    idx: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    length: Mapped[int] = mapped_column(Integer, default=0)
+    terms: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class MemoryItem(IdMixin, TimestampMixin, Base):
+    """A long-term note an agent (or user) keeps across runs, scoped to a council when set."""
+
+    __tablename__ = "memory_items"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    council_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("councils.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    key: Mapped[str] = mapped_column(String(120), default="")
+    text: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[Any]] = mapped_column(default=list)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(120), default="")

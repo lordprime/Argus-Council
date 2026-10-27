@@ -42,4 +42,12 @@ describe("ApprovalCard", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/runs/r1/approvals/apr_1", expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ decision: "approve" });
   });
+
+  it("is read-only during replay", () => {
+    render(<ApprovalCard runId="replay:r1" a={{ kind: "approval", id: "apr_1", seq: 1, ts: "2026-01-01T00:00:00Z",
+      actor: { kind: "agent", name: "Coder" }, summary: "Coder wants to run shell(ls)", risk: ["shell"], status: "pending" }} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+    expect(screen.getByText(/awaiting approval at this point in the replay/i)).toBeInTheDocument();
+  });
 });

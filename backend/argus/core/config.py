@@ -26,6 +26,8 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173", "http://localhost:8080"]
     )
     max_request_bytes: int = 2 * 1024 * 1024
+    # Multipart uploads (skill .zip import, knowledge documents); each handler also caps its own files.
+    max_upload_bytes: int = 9 * 1024 * 1024
 
     # Persistence
     database_url: str = "sqlite+aiosqlite:///./argus.db"
@@ -63,6 +65,17 @@ class Settings(BaseSettings):
 
     # Storage
     data_dir: str = "./data"
+
+    # Data retention (days; 0 = keep forever). See argus/services/retention.py.
+    retention_run_days: int = Field(default=0, ge=0)  # finished runs + events + artifacts + blobs
+    retention_event_days: int = Field(default=0, ge=0)  # event log of finished runs only
+    retention_audit_days: int = Field(default=365, ge=0)
+    # The hash-chained ledger is never pruned by default: verification replays it from genesis.
+    retention_ledger_days: int = Field(default=0, ge=0)
+    retention_batch_size: int = Field(default=500, ge=1, le=10_000)
+    retention_interval_s: int = Field(default=3600, ge=60)
+    retention_enabled: bool = True  # run the periodic retention task in this process
+    export_max_bytes: int = Field(default=512 * 1024 * 1024, ge=1024)  # cap for /me/export archives
 
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled

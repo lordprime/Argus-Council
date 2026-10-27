@@ -1,10 +1,11 @@
 import { FileText, Plus, Search, Sparkles, Upload } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 
 import { CardSkeletons } from "@/components/connections/parts";
+import { Marketplace } from "@/components/skills/Marketplace";
 import { SkillCard } from "@/components/skills/SkillCard";
-import { Button, Callout, Card, EmptyState, ErrorState, PageHeader, Segmented } from "@/components/ui";
+import { Button, Callout, Card, EmptyState, ErrorState, PageHeader, Segmented, Tabs } from "@/components/ui";
 import { useImportSkill } from "@/features/skills/queries";
 import { errorMessage } from "@/lib/api";
 import { useSkills } from "@/lib/queries";
@@ -19,6 +20,9 @@ export default function SkillsList() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "marketplace" ? "marketplace" : "library";
+  const setTab = (t: string) => setParams(t === "marketplace" ? { tab: t } : {}, { replace: true });
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -65,6 +69,16 @@ export default function SkillsList() {
         </div>
       )}
 
+      <Tabs value={tab} onValueChange={setTab} tabs={[
+        { value: "library", label: `Your library (${counts.all})`, content: <div className="pt-4">{library()}</div> },
+        { value: "marketplace", label: "Marketplace", content: <Marketplace /> },
+      ]} />
+    </div>
+  );
+
+  function library() {
+    return (
+      <>
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div className="flex flex-col gap-1 flex-1 min-w-56 max-w-md">
           <label htmlFor="skill-search" className="text-sm font-medium">Search skills</label>
@@ -109,6 +123,7 @@ export default function SkillsList() {
           {visible.map((s) => <li key={s.name} className="flex"><SkillCard skill={s} /></li>)}
         </ul>
       )}
-    </div>
-  );
+      </>
+    );
+  }
 }

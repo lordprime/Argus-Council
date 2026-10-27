@@ -11,6 +11,7 @@ import { toast } from "@/stores/toast";
 import { SkillBadges } from "./SkillBadges";
 
 const MAX_TOOLS = 5;
+const SOURCE_LABEL: Record<string, string> = { builtin: "Ships with Argus", upload: "Uploaded", marketplace: "From marketplace" };
 
 export function SkillCard({ skill: s }: { skill: SkillSummary }) {
   const toggle = useToggleSkill();
@@ -38,7 +39,7 @@ export function SkillCard({ skill: s }: { skill: SkillSummary }) {
       )}
       <div className="flex items-center gap-3 pt-3 border-t border-border text-xs text-fg-subtle">
         <span className="inline-flex items-center gap-1"><FileText className="size-3.5" aria-hidden />{s.files.length} {s.files.length === 1 ? "file" : "files"}</span>
-        <span className="inline-flex items-center gap-1"><Layers className="size-3.5" aria-hidden />{s.source === "builtin" ? "Ships with Argus" : s.source === "upload" ? "Uploaded" : "Written here"}</span>
+        <span className="inline-flex items-center gap-1"><Layers className="size-3.5" aria-hidden />{SOURCE_LABEL[s.source] ?? "Written here"}</span>
         <div className="flex-1" />
         {s.builtin ? (
           <span className="text-fg-muted">Always available</span>

@@ -335,17 +335,22 @@ export function ApprovalCard({ runId, a }: { runId: string; a: ApprovalItem }) {
       setBusy(null);
     }
   };
+  // In replay (runId "replay:<id>") the card shows history: a pending approval cannot be decided from here.
+  const replaying = runId.startsWith("replay:");
   const pending = a.status === "pending";
+  const actionable = pending && !replaying;
   return (
-    <div role={pending ? "alert" : undefined}
+    <div role={actionable ? "alert" : undefined}
       className={cn("rounded-lg border-2 p-3", pending ? "border-warning bg-warning-subtle" : "border-border bg-surface")}>
       <div className="flex items-center gap-2">
         <AlertTriangle className="size-4 text-warning" aria-hidden />
-        <p className="text-sm font-semibold">{pending ? "Approval needed" : `Approval ${a.status}`}</p>
+        <p className="text-sm font-semibold">
+          {actionable ? "Approval needed" : pending ? "Awaiting approval at this point in the replay" : `Approval ${a.status}`}
+        </p>
         {a.risk.map((r) => <Badge key={r} tone="warning">{r}</Badge>)}
       </div>
       <p className="mt-1.5 text-sm font-mono break-all">{a.summary}</p>
-      {pending && (
+      {actionable && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor={`reason-${a.id}`}>Reason (optional)</label>
           <input id={`reason-${a.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)"

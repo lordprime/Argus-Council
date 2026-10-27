@@ -26,6 +26,7 @@ WRITE_SCOPES = (
     "skills:write",
     "connections:write",
     "webhooks:write",
+    "knowledge:write",
 )
 API_KEY_PREFIX = "argus_"
 

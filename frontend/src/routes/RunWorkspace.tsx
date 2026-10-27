@@ -14,6 +14,7 @@ import {
   ToolChip,
   VoteCard,
 } from "@/components/run/parts";
+import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
 import { Badge, Button, Callout, EmptyState, ErrorState, Skeleton, StatusPill, Tabs } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
@@ -477,8 +478,11 @@ export default function RunWorkspace() {
   const loc = useLocation();
   const detail = useRunDetail(runId);
   useRunStream(runId, detail.data);
-  const members = useRun(runId, (s) => s.members);
-  const state = useRun(runId, (s) => s);
+  // While replaying, the run views read the separate replay state; controls keep using the real run.
+  const viewId = useReplayView(runId);
+  const members = useRun(viewId, (s) => s.members);
+  const state = useRun(viewId, (s) => s);
+  const realStatus = useRun(runId, (s) => (s.lastSeq ? s.status : ""));
   const [density, setDensity] = useState<Density>("working");
   const [focus, setFocus] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -489,7 +493,7 @@ export default function RunWorkspace() {
     saveView(v);
   }, []);
   const onVizSelect = useCallback<VizSelect>(({ itemId, nodeId }) => {
-    const st = useRuns.getState().runs[runId];
+    const st = useRuns.getState().runs[viewId];
     setView("timeline");
     if (itemId && st?.items[itemId]) {
       const it = st.items[itemId];
@@ -500,7 +504,7 @@ export default function RunWorkspace() {
     } else if (nodeId && st?.members.some((m) => m.id === nodeId)) {
       setFocus(nodeId);
     }
-  }, [runId, density, focus, setView]);
+  }, [viewId, density, focus, setView]);
   const pendingCount = Object.values(state.items).filter((i) => i.kind === "approval" && i.status === "pending").length;
   useEffect(() => {
     if (!detail.data) return;
@@ -515,7 +519,7 @@ export default function RunWorkspace() {
     return <div className="p-6"><ErrorState error={detail.error} onRetry={() => void detail.refetch()} /><p className="text-center"><Link to="/runs" className="text-accent underline">All runs</Link></p></div>;
   }
   const run = detail.data;
-  const live = !isTerminal(state.lastSeq ? state.status : run.status);
+  const live = !isTerminal(realStatus || run.status);
   const onOutput = loc.pathname.endsWith("/output");
   return (
     <div className="flex flex-col h-[calc(100vh-3rem)] md:h-[calc(100vh-3rem)]">
@@ -523,6 +527,7 @@ export default function RunWorkspace() {
       <Banner run={run} runId={runId} />
       {onOutput ? <OutputView runId={runId} run={run} /> : (
         <>
+          {!live && <ReplayBar runId={runId} members={run.council_snapshot.members ?? []} />}
           <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[260px_1fr_380px]">
             <div className="hidden md:block border-r border-border min-h-0 overflow-auto">
               <CouncilRail runId={runId} members={members.length ? members : run.council_snapshot.members} state={state} live={live}
@@ -545,7 +550,7 @@ export default function RunWorkspace() {
               </div>
               <div id="run-view-panel" role="tabpanel" aria-labelledby={`run-view-tab-${view}`} className="flex-1 min-h-0 flex flex-col">
                 {view === "timeline" ? (
-                  <Timeline runId={runId} density={density} focus={focus} onSelect={setSelected} selected={selected}
+                  <Timeline runId={viewId} density={density} focus={focus} onSelect={setSelected} selected={selected}
                     reveal={reveal} onRevealed={() => setReveal(null)} />
                 ) : (() => {
                   const View = VIEWS.find((v) => v.value === view)?.component;

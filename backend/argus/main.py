@@ -22,11 +22,15 @@ from argus.api.v1 import (
     auth,
     connections,
     councils,
+    data,
     health,
+    knowledge,
+    notifications,
     observability,
     providers,
     runs,
     skills,
+    templates,
     webhooks,
 )
 from argus.cache.store import RedisBackend, build_cache
@@ -42,6 +46,7 @@ from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.audit import audit
 from argus.services.llm import LLMRouter
+from argus.services.retention import RetentionService
 from argus.services.webhooks import WebhookDispatcher
 
 log = get_logger(__name__)
@@ -111,10 +116,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
         )
         await app.state.runs.recover()
+        app.state.retention = RetentionService(app.state.db.sessionmaker, settings)
+        # Long-lived loop: kept out of app.state.background (which shutdown awaits) and cancelled first.
+        app.state.periodic = set()
+        if settings.retention_enabled:
+            app.state.periodic.add(asyncio.create_task(app.state.retention.loop(), name="retention"))
         log.info("argus.started", env=settings.env, version=__version__)
         try:
             yield
         finally:
+            for task in app.state.periodic:
+                task.cancel()
+            await asyncio.gather(*app.state.periodic, return_exceptions=True)
             await app.state.runs.shutdown()
             await app.state.webhooks.drain()
             if app.state.background:
@@ -151,7 +164,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         structlog.contextvars.bind_contextvars(request_id=rid)
         try:
             length = request.headers.get("content-length")
-            if length is not None and (not length.isdigit() or int(length) > settings.max_request_bytes):
+            is_upload = request.headers.get("content-type", "").startswith("multipart/form-data")
+            limit = settings.max_upload_bytes if is_upload else settings.max_request_bytes
+            if length is not None and (not length.isdigit() or int(length) > limit):
                 return JSONResponse(
                     status_code=413,
                     content={"error": {"code": "payload_too_large", "message": "Request body too large"}},
@@ -217,6 +232,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connections.router, prefix=api)
     app.include_router(observability.router, prefix=api)
     app.include_router(webhooks.router, prefix=api)
+    app.include_router(data.router, prefix=api)
+    app.include_router(knowledge.router, prefix=api)
+    app.include_router(templates.router, prefix=api)
+    app.include_router(notifications.router, prefix=api)
     # Agent protocols
     app.include_router(mcp_server.router)
     app.include_router(a2a.router)

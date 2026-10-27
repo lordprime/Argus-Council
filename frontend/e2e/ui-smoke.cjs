@@ -5,8 +5,8 @@ const BASE = process.env.E2E_BASE ?? 'http://127.0.0.1:8080';
 const SHOTS = process.env.E2E_SHOTS;
 const stamp = Date.now();
 const PAGES = [
-  '/runs', '/councils', '/councils/new', '/skills', '/skills/new', '/connections/providers', '/connections/mcp',
-  '/connections/agents', '/connections/ledger', '/settings/profile', '/settings/api-keys', '/insights', '/insights/audit', '/settings/webhooks',
+  '/runs', '/councils', '/councils/new', '/skills', '/skills/new', '/knowledge', '/connections/providers', '/connections/mcp',
+  '/connections/agents', '/connections/ledger', '/settings/profile', '/settings/api-keys', '/insights', '/insights/audit', '/settings/webhooks', '/settings/data', '/templates',
 ];
 (async () => {
   // E2E_CHROMIUM points at a preinstalled browser when the local Playwright's own download is absent.
