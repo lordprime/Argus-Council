@@ -14,10 +14,37 @@ from argus.protocols.a2a_client import A2AClient, task_text
 from argus.protocols.acp_client import AcpClient, run_text
 from argus.protocols.mcp_client import McpClient, render_result, tool_name
 from argus.providers.types import ToolSpec
+from argus.runtime.events import Actor
 from argus.services import ledger
 from argus.tools.base import Tool, ToolCallContext, ToolResult
 
 log = get_logger(__name__)
+
+
+async def record_call(ctx: ToolCallContext, **entry: Any) -> None:
+    """Append an outbound protocol call to the ledger and announce it on the run's live stream.
+
+    The stream event carries the ledger entry's id and hash so the UI can draw the exchange as it
+    happens and link it to the tamper-evident record.
+    """
+    row = await ledger.record(ctx.run.sessionmaker, owner_id=ctx.run.owner_id, run_id=ctx.run.run_id, **entry)
+    await ctx.run.sink.emit(
+        "protocol.call",
+        {
+            "ledger_id": row.id,
+            "hash": row.hash,
+            "protocol": entry["protocol"],
+            "direction": entry["direction"],
+            "peer": entry["peer"],
+            "method": entry["method"],
+            "status": entry["status"],
+            "latency_ms": entry.get("latency_ms", 0),
+            "tool_call_id": ctx.tool_call_id,
+            "detail": entry.get("detail") or {},
+        },
+        actor=Actor(kind="agent", member_id=ctx.member_id, name=ctx.member_name, role=ctx.role),
+        step_id=ctx.step_id,
+    )
 
 
 class McpTool(Tool):
@@ -56,9 +83,8 @@ class McpTool(Tool):
             status, response = "error", {"error": str(exc)[:300]}
             return ToolResult.error(f"MCP tool {self.remote_name} on {self.server} failed: {str(exc)[:300]}")
         finally:
-            await ledger.record(
-                ctx.run.sessionmaker,
-                owner_id=ctx.run.owner_id,
+            await record_call(
+                ctx,
                 protocol="mcp",
                 direction="outbound",
                 peer=self.peer,
@@ -67,7 +93,6 @@ class McpTool(Tool):
                 request={"name": self.remote_name, "arguments": args},
                 response=response,
                 latency_ms=int((time.monotonic() - t0) * 1000),
-                run_id=ctx.run.run_id,
                 detail={"server": self.server, "member": ctx.member_name},
             )
 
@@ -124,9 +149,8 @@ class RemoteAgentTool(Tool):
             status, response = "error", {"error": str(exc)[:300]}
             return ToolResult.error(f"Remote agent '{args.agent}' failed: {str(exc)[:300]}")
         finally:
-            await ledger.record(
-                ctx.run.sessionmaker,
-                owner_id=ctx.run.owner_id,
+            await record_call(
+                ctx,
                 protocol=agent["protocol"],
                 direction="outbound",
                 peer=agent["url"],
@@ -135,6 +159,5 @@ class RemoteAgentTool(Tool):
                 request={"agent": args.agent, "message": args.message},
                 response=json.loads(json.dumps(response, default=str)) if response else None,
                 latency_ms=int((time.monotonic() - t0) * 1000),
-                run_id=ctx.run.run_id,
                 detail={"agent": args.agent, "member": ctx.member_name, "call_id": str(uuid.uuid4())},
             )

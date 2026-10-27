@@ -35,7 +35,15 @@ ROLES: dict[str, Role] = {
             "Decomposes the goal, assigns work, merges results and decides when the task is done.",
             f"{_BASE}\nAs CHAIR you turn the user's topic into a concrete plan of steps, assign each step to "
             "the most suitable member, merge their outputs and decide when the deliverable is complete.",
-            default_tools=("notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*", "remote_agent"),
+            default_tools=(
+                "notes_*",
+                "artifact_*",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+                "remote_agent",
+                "subcouncil",
+            ),
         ),
         Role(
             "researcher",

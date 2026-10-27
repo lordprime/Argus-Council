@@ -29,6 +29,7 @@ from argus.tools.base import ToolRegistry
 from argus.tools.builtin import builtin_tools
 from argus.tools.code import code_tools
 from argus.tools.skills import skill_tools
+from argus.tools.subcouncil import SubCouncilTool
 from argus.tools.web import web_tools
 
 log = get_logger(__name__)
@@ -60,7 +61,13 @@ class RunManager:
         self.sandbox = build_sandbox(settings)
         self.tool_factory = tool_factory or (
             lambda run: ToolRegistry(
-                [*builtin_tools(), *skill_tools(), *web_tools(settings), *code_tools(self.sandbox)]
+                [
+                    *builtin_tools(),
+                    *skill_tools(),
+                    *web_tools(settings),
+                    *code_tools(self.sandbox),
+                    SubCouncilTool(self),
+                ]
             )
         )
         self.live: dict[uuid.UUID, LiveRun] = {}
@@ -80,7 +87,8 @@ class RunManager:
             )
             await s.commit()
 
-    async def start(self, run_id: uuid.UUID) -> None:
+    async def start(self, run_id: uuid.UUID, *, depth: int = 0, listeners: list[Any] | None = None) -> None:
+        """Start a queued run. ``depth`` > 0 marks a sub-council; ``listeners`` observe its events."""
         async with self.sessionmaker() as s:
             run = await s.get(Run, run_id)
             if run is None:
@@ -88,6 +96,7 @@ class RunManager:
             if run.status != "queued":
                 raise Conflict(f"Run is {run.status}")
         sink = EventSink(run.id, run.council_id, self.sessionmaker, self.broker, start_seq=run.last_seq)
+        sink.listeners.extend(listeners or [])
         rails = Guardrails.model_validate(run.guardrails)
         engine = GuardrailEngine(rails)
         ctx = RunContext(
@@ -102,6 +111,7 @@ class RunManager:
             llm=self.llm,
             sessionmaker=self.sessionmaker,
             blob_root=self.blob_root,
+            depth=depth,
         )
         if self.webhooks is not None:
             owner = run.owner_id
@@ -260,6 +270,10 @@ class RunManager:
         live.ctx.controls.resume.set()
         await self._set(run_id, status="running")
         await live.ctx.sink.emit("run.status", {"status": "running"}, actor=Actor.user())
+
+    def member(self, run_id: uuid.UUID, member_id: str) -> Any:
+        live = self.live.get(run_id)
+        return next((m for m in live.members if m.id == member_id), None) if live else None
 
     async def cancel(self, run_id: uuid.UUID) -> None:
         live = self.live.get(run_id)
