@@ -289,6 +289,7 @@ class RunContext:
         self.approvals: dict[str, Approval] = {}
         self.approval_timeout_s = approval_timeout_s
         self.depth = depth
+        self.children: set[uuid.UUID] = set()  # running sub-council runs (cancelled with this run)
         self.by_member: dict[str, dict[str, float]] = defaultdict(lambda: {"usd": 0.0, "tokens": 0})
         self.extra: dict[str, Any] = {}
         self.skills: dict[str, Any] = {}  # name -> SkillPackage available to this run
@@ -343,10 +344,14 @@ class RunContext:
             },
             actor=member,
         )
+        # The run's runtime limit keeps running while it waits: never wait past it.
+        remaining = self.engine.rails.max_runtime_minutes * 60 - self.engine.runtime_s
+        wait_s = max(min(self.approval_timeout_s, remaining), 0.0)
         try:
-            decision = await asyncio.wait_for(fut, timeout=self.approval_timeout_s)
+            decision = await asyncio.wait_for(fut, timeout=wait_s)
         except TimeoutError:
-            decision = {"decision": "expired"}
+            reason = "approval timed out" if self.approval_timeout_s <= remaining else "runtime limit reached"
+            decision = {"decision": "expired", "reason": reason}
         finally:
             self.approvals.pop(aid, None)
         APPROVALS.labels(str(decision.get("decision", "unknown"))).inc()
@@ -359,6 +364,12 @@ class RunContext:
             return False
         approval.future.set_result(decision)
         return True
+
+    def expire_approvals(self, reason: str) -> None:
+        """Resolve every open approval as expired (cancel, run end) so no agent stays parked."""
+        for approval in list(self.approvals.values()):
+            if not approval.future.done():
+                approval.future.set_result({"decision": "expired", "reason": reason})
 
     # -------------------------------------------------- corrections
     def corrections_for(self, member_id: str) -> tuple[list[Correction], list[Correction]]:

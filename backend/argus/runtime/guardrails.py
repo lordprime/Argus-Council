@@ -122,6 +122,16 @@ def _matches(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, p) for p in patterns)
 
 
+def _minus(a: Usage, b: Usage) -> Usage:
+    return Usage(
+        input_tokens=max(a.input_tokens - b.input_tokens, 0),
+        output_tokens=max(a.output_tokens - b.output_tokens, 0),
+        cache_read_tokens=max(a.cache_read_tokens - b.cache_read_tokens, 0),
+        cache_write_tokens=max(a.cache_write_tokens - b.cache_write_tokens, 0),
+        cost_usd=max(round(a.cost_usd - b.cost_usd, 8), 0.0),
+    )
+
+
 @dataclass
 class Violation:
     rule: str
@@ -192,18 +202,47 @@ def dangerous_shell(command: str) -> bool:
 
 
 class GuardrailEngine:
-    """Stateful enforcement for one run."""
+    """Stateful enforcement for one run.
 
-    def __init__(self, rails: Guardrails, *, clock: Any = time.monotonic) -> None:
+    Budgets are shared down a sub-council tree: a child engine is linked to its parent's, every
+    spend is added at once to each ancestor's ``inflight`` (spend of descendants not yet charged
+    back), and every engine checks the budget of each ancestor too. Parallel children therefore
+    draw on one pool instead of each seeing the parent's whole remaining budget.
+    """
+
+    def __init__(
+        self, rails: Guardrails, *, clock: Any = time.monotonic, parent: GuardrailEngine | None = None
+    ) -> None:
         self.rails = rails
         self.clock = clock
         self.started = clock()
         self.steps = 0
         self.usage = Usage()
+        self.inflight = Usage()
+        self.parent = parent
 
     # -------------------------------------------------- accounting
     def record_usage(self, usage: Usage) -> None:
         self.usage = self.usage + usage
+        node = self.parent
+        while node is not None:
+            node.inflight = node.inflight + usage
+            node = node.parent
+
+    @property
+    def total_usage(self) -> Usage:
+        """This run's spend plus that of its running sub-councils."""
+        return self.usage + self.inflight
+
+    def settle_child(self, child: GuardrailEngine) -> Usage:
+        """Charge a finished child's whole spend to this engine; returns the amount charged."""
+        if child.parent is not self:
+            return Usage()
+        amount = child.total_usage
+        self.inflight = _minus(self.inflight, amount)
+        self.usage = self.usage + amount
+        child.parent = None  # anything the child records later no longer reaches this tree
+        return amount
 
     def record_step(self) -> None:
         self.steps += 1
@@ -212,16 +251,28 @@ class GuardrailEngine:
     def runtime_s(self) -> float:
         return self.clock() - self.started
 
+    def _budget_violation(self, scope: str = "") -> Violation | None:
+        b, used = self.rails.budget, self.total_usage
+        if b.usd is not None and used.cost_usd > b.usd:
+            return Violation(
+                "budget.usd", b.usd, round(used.cost_usd, 4), "halted", f"{scope}Spend budget exhausted"
+            )
+        if b.tokens is not None and used.total_tokens > b.tokens:
+            return Violation(
+                "budget.tokens", b.tokens, used.total_tokens, "halted", f"{scope}Token budget exhausted"
+            )
+        return None
+
     def check_limits(self) -> Violation | None:
-        b = self.rails.budget
-        if b.usd is not None and self.usage.cost_usd > b.usd:
-            return Violation(
-                "budget.usd", b.usd, round(self.usage.cost_usd, 4), "halted", "Spend budget exhausted"
-            )
-        if b.tokens is not None and self.usage.total_tokens > b.tokens:
-            return Violation(
-                "budget.tokens", b.tokens, self.usage.total_tokens, "halted", "Token budget exhausted"
-            )
+        v = self._budget_violation()
+        if v is not None:
+            return v
+        node = self.parent
+        while node is not None:
+            v = node._budget_violation("Parent council: ")
+            if v is not None:
+                return v
+            node = node.parent
         if self.steps > self.rails.max_steps:
             return Violation("max_steps", self.rails.max_steps, self.steps, "halted", "Step limit reached")
         if self.runtime_s > self.rails.max_runtime_minutes * 60:
@@ -240,11 +291,12 @@ class GuardrailEngine:
             raise GuardrailBreach(v)
 
     def budget_snapshot(self) -> dict[str, Any]:
+        used = self.total_usage
         return {
             "used": {
-                "usd": round(self.usage.cost_usd, 6),
-                "tokens_in": self.usage.input_tokens,
-                "tokens_out": self.usage.output_tokens,
+                "usd": round(used.cost_usd, 6),
+                "tokens_in": used.input_tokens,
+                "tokens_out": used.output_tokens,
                 "steps": self.steps,
                 "runtime_s": round(self.runtime_s, 1),
             },
