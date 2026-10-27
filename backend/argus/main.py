@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hmac
 import time
 import uuid
@@ -38,12 +39,15 @@ from argus.core.config import Settings, get_settings
 from argus.core.errors import error_response, install_error_handlers
 from argus.core.logging import configure_logging, get_logger
 from argus.core.metrics import (
+    APPROVALS_PENDING,
     HTTP_LATENCY,
     HTTP_REQUESTS,
     REGISTRY,
+    SSE_STREAMS,
     UNMATCHED_ROUTE,
     method_label,
     route_template,
+    tracked_stream,
 )
 from argus.core.security import hash_password
 from argus.db.models import User
@@ -94,6 +98,18 @@ async def _bootstrap_admin(app: FastAPI, settings: Settings) -> None:
         log.info("bootstrap.admin_created", email=email)
 
 
+def _pending_approvals(manager: RunManager) -> float:
+    """Approval requests still waiting for a decision across this process's live runs (scrape time)."""
+    return float(
+        sum(
+            1
+            for live in list(manager.live.values())
+            for approval in list(live.ctx.approvals.values())
+            if not approval.future.done()
+        )
+    )
+
+
 def _spawn(app: FastAPI, coro) -> None:  # type: ignore[no-untyped-def]
     tasks: set[asyncio.Task[None]] = app.state.background
     task = asyncio.create_task(coro)
@@ -123,6 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
         )
         await app.state.runs.recover()
+        APPROVALS_PENDING.set_function(functools.partial(_pending_approvals, app.state.runs))
         app.state.retention = RetentionService(app.state.db.sessionmaker, settings)
         # Long-lived loop: kept out of app.state.background (which shutdown awaits) and cancelled first.
         app.state.periodic = set()
@@ -214,6 +231,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             if not template.endswith("/events/stream"):
                 HTTP_LATENCY.labels(method, template).observe(time.perf_counter() - started)
+            elif response.status_code == 200 and hasattr(response, "body_iterator"):
+                response.body_iterator = tracked_stream(response.body_iterator, SSE_STREAMS)
         finally:
             structlog.contextvars.unbind_contextvars("request_id")
         response.headers["X-Request-ID"] = rid

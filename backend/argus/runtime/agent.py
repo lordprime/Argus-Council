@@ -17,15 +17,7 @@ from typing import Any
 
 from argus.agents.roles import ROLES
 from argus.core.logging import get_logger
-from argus.core.metrics import (
-    LLM_CALLS,
-    LLM_COST,
-    LLM_LATENCY,
-    LLM_TOKENS,
-    TOOL_CALLS,
-    TOOL_LATENCY,
-    safe_label,
-)
+from argus.core.metrics import TOOL_CALLS, TOOL_LATENCY, tool_label
 from argus.providers.base import ProviderError
 from argus.providers.types import CompletionRequest, CompletionResponse, Message, ToolCall
 from argus.runtime.context import Correction, RunContext
@@ -210,13 +202,7 @@ class AgentRunner:
                 owner_id=self.ctx.owner_id,
                 fallbacks=self.member.fallbacks,
             )
-        self.ctx.ledger.record(response)
-        prov, mdl = safe_label(response.provider), safe_label(response.model)
-        LLM_CALLS.labels(prov, mdl, response.finish_reason).inc()
-        LLM_TOKENS.labels(prov, mdl, "in").inc(response.usage.input_tokens)
-        LLM_TOKENS.labels(prov, mdl, "out").inc(response.usage.output_tokens)
-        LLM_COST.labels(prov, mdl).inc(response.usage.cost_usd)
-        LLM_LATENCY.labels(prov).observe(time.monotonic() - t0)
+        self.ctx.ledger.record(response)  # argus_llm_* metrics are recorded by the router
         self.ctx.engine.record_usage(response.usage)
         self.ctx.engine.record_step()
         spent = self.ctx.by_member[self.member.id]
@@ -267,7 +253,7 @@ class AgentRunner:
         )
 
         async def finish(status: str, result: ToolResult, t0: float) -> ToolResult:
-            TOOL_CALLS.labels(safe_label(call.name, 64), source, status).inc()
+            TOOL_CALLS.labels(tool_label(tool), source, status).inc()
             TOOL_LATENCY.labels(source).observe(time.monotonic() - t0)
             preview, _ = engine.screen_tool_output(result.content[:PREVIEW_CHARS])
             await self.ctx.sink.emit(

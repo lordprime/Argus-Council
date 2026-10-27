@@ -28,6 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from argus.core.logging import get_logger
+from argus.core.metrics import EVENT_PERSIST_FAILURES, counts_failures
 from argus.db.models import Run, RunEvent
 
 log = get_logger(__name__)
@@ -190,6 +191,7 @@ class EventSink:
             log.warning("events.publish_failed", error=str(exc)[:200])
         return env
 
+    @counts_failures(EVENT_PERSIST_FAILURES)
     async def _persist(self, env: Envelope) -> None:
         async with self.sessionmaker() as session:
             session.add(

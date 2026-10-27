@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.config import Settings
 from argus.core.errors import Conflict, NotFound
 from argus.core.logging import fresh_log_context, get_logger
-from argus.core.metrics import RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
+from argus.core.metrics import RUN_DURATION, RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run
 from argus.runtime.agent import MemberSpec
 from argus.runtime.context import Correction, RunCancelled, RunContext
@@ -220,6 +220,7 @@ class RunManager:
             self.live.pop(ctx.run_id, None)
             RUNS_ACTIVE.dec()
             RUNS_FINISHED.labels(ctx.mode, status).inc()
+            RUN_DURATION.labels(ctx.mode, status).observe(ctx.engine.runtime_s)
 
     async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
         from argus.services.exports import export_markdown
