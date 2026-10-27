@@ -211,7 +211,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
             {previewMode === "rendered" ? (
               <div tabIndex={0} role="region" aria-label="Instructions preview"
                 className="flex-1 min-h-80 max-h-[36rem] overflow-auto rounded-md border border-border bg-surface-2 px-4 py-2">
-                {body.trim() ? <Markdown className={SKILL_PROSE}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
+                {body.trim() ? <Markdown className={SKILL_PROSE} headingOffset={0}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
               </div>
             ) : (
               <pre tabIndex={0} role="region" aria-label="SKILL.md source preview"

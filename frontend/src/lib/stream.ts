@@ -12,6 +12,13 @@ export interface StreamHandlers {
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "halted"]);
 const MAX_ATTEMPTS = 8;
+/**
+ * Events are batched and handed to the store at most every FLUSH_MS (about 10 Hz, implementation review
+ * L5), not on every animation frame: each flush re-renders every subscriber, and streaming text does
+ * not need 60 updates a second. A timer (not rAF) also keeps a hidden tab draining, at the browser's
+ * background timer rate, instead of piling events up until it is shown again.
+ */
+export const FLUSH_MS = 100;
 
 /** Parse an SSE byte stream into event payloads (only `data:` lines carry our JSON). */
 export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
@@ -41,10 +48,13 @@ export function openRunStream(runId: string, h: StreamHandlers): () => void {
   let controller: AbortController | null = null;
   let attempt = 0;
   let pending: RunEvent[] = [];
-  let frame = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastFlush = 0;
 
   const flush = () => {
-    frame = 0;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    lastFlush = Date.now();
     if (pending.length) {
       const batch = pending;
       pending = [];
@@ -52,8 +62,8 @@ export function openRunStream(runId: string, h: StreamHandlers): () => void {
     }
   };
   const schedule = () => {
-    if (frame) return;
-    frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(flush) : (setTimeout(flush, 16) as unknown as number);
+    if (timer) return;
+    timer = setTimeout(flush, Math.max(0, lastFlush + FLUSH_MS - Date.now()));
   };
 
   const connect = async (): Promise<void> => {
@@ -98,6 +108,7 @@ export function openRunStream(runId: string, h: StreamHandlers): () => void {
   return () => {
     stopped = true;
     controller?.abort();
-    if (frame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
+    if (timer) clearTimeout(timer);
+    timer = null;
   };
 }
