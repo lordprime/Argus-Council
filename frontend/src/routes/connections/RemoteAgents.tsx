@@ -15,7 +15,6 @@ import {
   EmptyState,
   ErrorState,
   IconButton,
-  PageHeader,
   Segmented,
   TextArea,
   TextField,
@@ -262,9 +261,8 @@ export default function RemoteAgents() {
   const origin = window.location.origin;
 
   return (
-    <ConnectionsPage>
-      <PageHeader title="Remote agents" description="Seat agents from other systems in your councils over A2A or ACP, and expose Argus to them."
-        actions={<Button variant="primary" icon={Plus} onClick={() => setDialog({})} disabled={q.isLoading}>Add agent</Button>} />
+    <ConnectionsPage title="Remote agents" description="Seat agents from other systems in your councils over A2A or ACP, and expose Argus to them."
+      actions={<Button variant="primary" icon={Plus} onClick={() => setDialog({})} disabled={q.isLoading}>Add agent</Button>}>
 
       <div className="flex flex-col gap-8">
         <section aria-labelledby="agents-h">
@@ -279,9 +277,8 @@ export default function RemoteAgents() {
             </div>
           ) : (
             <Card as="div">
-              <EmptyState icon={Bot} title="No remote agents yet"
-                body="Paste an A2A endpoint to read its agent card, or add an ACP server and agent name."
-                action={<Button variant="primary" icon={Plus} onClick={() => setDialog({})}>Add agent</Button>} />
+              <EmptyState titleAs="h3" icon={Bot} title="No remote agents yet"
+                body="Paste an A2A endpoint to read its agent card, or add an ACP server and agent name." />
             </Card>
           )}
         </section>

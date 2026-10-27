@@ -1,19 +1,17 @@
 // Pure helpers for the Councils area. Kept free of React so they are easy to unit test.
 
-import { Code2, FileText, MessageCircle, Wand2, type LucideIcon } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { ApiError } from "@/lib/api";
+import { MODE_META } from "@/lib/modes";
 import type { Member, Mode, RoleInfo } from "@/lib/types";
 import { rosterFor } from "@/routes/Home";
 
 export { rosterFor };
 
-export const MODES: { value: Mode; label: string; hint: string; icon: LucideIcon }[] = [
-  { value: "research", label: "Research", hint: "Gather, analyze, cite, write.", icon: FileText },
-  { value: "coding", label: "Coding", hint: "Design, implement, test in a sandbox.", icon: Code2 },
-  { value: "chat", label: "Chat", hint: "Conversational with oversight.", icon: MessageCircle },
-  { value: "general", label: "General", hint: "Anything else.", icon: Wand2 },
-];
+/** Mode picker options, derived from the shared MODE_META so labels, hints and icons match everywhere. */
+export const MODES: { value: Mode; label: string; hint: string; icon: LucideIcon }[] = (Object.keys(MODE_META) as Mode[])
+  .map((value) => ({ value, ...MODE_META[value] }));
 export const MODE_LABEL: Record<string, string> = Object.fromEntries(MODES.map((m) => [m.value, m.label]));
 export const DEFAULT_SIZE: Record<Mode, number> = { research: 5, coding: 6, chat: 2, general: 4 };
 

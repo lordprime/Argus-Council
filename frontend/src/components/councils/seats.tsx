@@ -3,10 +3,10 @@
 import { ArrowDown, ArrowUp, Eye, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { MiniSwitch, NumberField, Stepper, TagInput } from "@/components/councils/fields";
+import { MiniSwitch, NumberField, TagInput } from "@/components/councils/fields";
 import { ModelPicker } from "@/components/councils/ModelPicker";
 import { isOverseer, RoleChip } from "@/components/councils/parts";
-import { Badge, Button, Dialog, IconButton, SelectField, TextArea, TextField } from "@/components/ui";
+import { Badge, Button, CardTitle, Dialog, IconButton, SelectField, Stepper, TextArea, TextField } from "@/components/ui";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { deepEqual, roleTitle, validateName, type ResizePreview } from "@/features/councils/logic";
 import type { MemberInput, MemberPatch } from "@/features/councils/queries";
@@ -40,7 +40,7 @@ export function SeatCard({ member, index, count, roles, canRemove, removeReason,
         label={`${roleTitle(roles, member.role)}${overseer ? " (overseer)" : ""}`} />
       <div className="min-w-0 flex-1 basis-48">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={cn("font-semibold truncate", !member.enabled && "text-fg-muted")}>{member.name}</span>
+          <CardTitle as="span" className={cn("truncate", !member.enabled && "text-fg-muted")}>{member.name}</CardTitle>
           {member.name !== roleTitle(roles, member.role) && <span className={cn("text-sm", s.fg)}>{roleTitle(roles, member.role)}</span>}
           {overseer && <Badge tone="warning"><Eye className="size-3" aria-hidden />Overseer</Badge>}
           {!member.enabled && <Badge>Disabled</Badge>}

@@ -2,7 +2,7 @@ import { FileText, Layers } from "lucide-react";
 import { Link } from "react-router";
 
 import { Switch } from "@/components/connections/parts";
-import { Card } from "@/components/ui";
+import { Card, CardTitle, TagList } from "@/components/ui";
 import { useToggleSkill } from "@/features/skills/queries";
 import { errorMessage } from "@/lib/api";
 import type { SkillSummary } from "@/lib/types";
@@ -16,28 +16,22 @@ const SOURCE_LABEL: Record<string, string> = { builtin: "Ships with Argus", uplo
 export function SkillCard({ skill: s }: { skill: SkillSummary }) {
   const toggle = useToggleSkill();
   const id = `skill-${s.name}`;
-  const extra = s.allowed_tools.length - MAX_TOOLS;
   return (
+    // A flex column whose footer sits on mt-auto, and a description clamped to exactly three lines with a
+    // three-line minimum, so every card in a grid row lines its footer up (C-22).
     <Card as="article" aria-labelledby={id} className="p-4 flex flex-col gap-3 w-full">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <h2 id={id} className="text-base font-semibold">
+          <CardTitle as="h2" id={id}>
             <Link to={`/skills/${encodeURIComponent(s.name)}`} className="hover:underline underline-offset-2 break-all">{s.name}</Link>
-          </h2>
+          </CardTitle>
           <p className="text-xs text-fg-subtle font-mono">v{s.version}</p>
         </div>
         <SkillBadges skill={s} />
       </div>
-      <p className="text-sm text-fg-muted line-clamp-3 flex-1">{s.description}</p>
-      {s.allowed_tools.length > 0 && (
-        <ul aria-label={`Tools ${s.name} may use`} className="flex flex-wrap gap-1">
-          {s.allowed_tools.slice(0, MAX_TOOLS).map((t) => (
-            <li key={t} className="inline-flex items-center h-6 rounded-sm border border-border bg-surface-2 px-1.5 font-mono text-xs text-fg-muted">{t}</li>
-          ))}
-          {extra > 0 && <li className="inline-flex items-center h-6 px-1 text-xs text-fg-subtle">+{extra} more</li>}
-        </ul>
-      )}
-      <div className="flex items-center gap-3 pt-3 border-t border-border text-xs text-fg-subtle">
+      <p className="text-sm text-fg-muted line-clamp-3 min-h-[3lh]">{s.description}</p>
+      {s.allowed_tools.length > 0 && <TagList items={s.allowed_tools} max={MAX_TOOLS} label={`Tools ${s.name} may use`} />}
+      <div className="mt-auto flex items-center gap-3 pt-3 border-t border-border text-xs text-fg-subtle">
         <span className="inline-flex items-center gap-1"><FileText className="size-3.5" aria-hidden />{s.files.length} {s.files.length === 1 ? "file" : "files"}</span>
         <span className="inline-flex items-center gap-1"><Layers className="size-3.5" aria-hidden />{SOURCE_LABEL[s.source] ?? "Written here"}</span>
         <div className="flex-1" />

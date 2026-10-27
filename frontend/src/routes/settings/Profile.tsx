@@ -181,7 +181,7 @@ function ProfileSkeleton() {
 export default function Profile() {
   const me = useMe();
   return (
-    <SettingsLayout title="Profile" description="Your account, password and how Argus looks on this device.">
+    <SettingsLayout form title="Profile" description="Your account, password and how Argus looks on this device.">
       {me.data ? (
         <AccountSection key={me.data.id} user={me.data} />
       ) : me.error ? (

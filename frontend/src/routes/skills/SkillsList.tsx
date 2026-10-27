@@ -1,11 +1,13 @@
-import { FileText, Plus, Search, Sparkles, Upload } from "lucide-react";
+import { FileText, Plus, Sparkles, Upload } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { CardSkeletons } from "@/components/connections/parts";
 import { Marketplace } from "@/components/skills/Marketplace";
 import { SkillCard } from "@/components/skills/SkillCard";
-import { Button, Callout, Card, EmptyState, ErrorState, PageHeader, Segmented, Tabs } from "@/components/ui";
+import {
+  Button, ButtonLink, Callout, Card, EmptyState, ErrorState, FilterBar, Page, PageHeader, SearchField, Segmented, Tabs,
+} from "@/components/ui";
 import { useImportSkill } from "@/features/skills/queries";
 import { errorMessage } from "@/lib/api";
 import { useSkills } from "@/lib/queries";
@@ -36,6 +38,8 @@ export default function SkillsList() {
     return { all: all.length, builtin: all.filter((s) => s.builtin).length, mine: all.filter((s) => !s.builtin).length };
   }, [skills.data]);
 
+  const clearFilters = () => { setQuery(""); setFilter("all"); };
+
   const onFile = (file: File | undefined) => {
     if (!file) return;
     importer.mutate(file, {
@@ -48,7 +52,7 @@ export default function SkillsList() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <Page>
       <PageHeader title="Skills"
         description="Repeatable procedures for agents. Agents see every skill's name and description, and load the instructions when needed."
         actions={
@@ -73,28 +77,23 @@ export default function SkillsList() {
         { value: "library", label: `Your library (${counts.all})`, content: <div className="pt-4">{library()}</div> },
         { value: "marketplace", label: "Marketplace", content: <Marketplace /> },
       ]} />
-    </div>
+    </Page>
   );
 
   function library() {
     return (
       <>
-      <div className="flex flex-wrap items-end gap-3 mb-4">
-        <div className="flex flex-col gap-1 flex-1 min-w-56 max-w-md">
-          <label htmlFor="skill-search" className="text-sm font-medium">Search skills</label>
-          <div className="relative">
-            <Search className="size-4 text-fg-subtle absolute left-3 top-1/2 -translate-y-1/2" aria-hidden />
-            <input id="skill-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder="Name, description or tool"
-              className="w-full h-9 rounded-md border border-border-strong bg-surface pl-9 pr-3 text-base placeholder:text-fg-subtle" />
-          </div>
-        </div>
-        <Segmented label="Show" value={filter} onChange={setFilter} options={[
-          { value: "all", label: `All (${counts.all})` },
-          { value: "builtin", label: `Built-in (${counts.builtin})` },
-          { value: "mine", label: `Yours (${counts.mine})` },
-        ]} />
-      </div>
+      {counts.all > 0 && (
+        <FilterBar label="Filter skills" className="mb-4" onClear={clearFilters} canClear={Boolean(query) || filter !== "all"}>
+          <SearchField label="Search skills" value={query} onChange={setQuery} placeholder="Name, description or tool"
+            className="w-full sm:w-auto sm:flex-1 sm:min-w-56 sm:max-w-md" />
+          <Segmented label="Show" value={filter} onChange={setFilter} options={[
+            { value: "all", label: `All (${counts.all})` },
+            { value: "builtin", label: `Built-in (${counts.builtin})` },
+            { value: "mine", label: `Yours (${counts.mine})` },
+          ]} />
+        </FilterBar>
+      )}
 
       <p className="sr-only" role="status" aria-live="polite">
         {skills.data ? `${visible.length} of ${counts.all} skills shown` : ""}
@@ -106,17 +105,17 @@ export default function SkillsList() {
         <Card><ErrorState error={skills.error} onRetry={() => void skills.refetch()} /></Card>
       ) : !counts.all ? (
         <Card as="div">
+          {/* The header already offers New skill and Import .zip (C-23), so the empty state only explains. */}
           <EmptyState icon={Sparkles} title="No skills yet"
-            body="Skills teach agents repeatable procedures. Write a SKILL.md or upload a .zip package."
-            action={<div className="flex gap-2 justify-center"><Button icon={Upload} onClick={() => fileRef.current?.click()}>Import .zip</Button><Button variant="primary" icon={Plus} onClick={() => navigate("/skills/new")}>New skill</Button></div>} />
+            body="Skills teach agents repeatable procedures. Write a SKILL.md with New skill, or upload a .zip package." />
         </Card>
       ) : !visible.length ? (
         <Card as="div">
           <EmptyState icon={FileText} title="No skills match"
             body={query ? <>Nothing matches “{query}”{filter !== "all" ? " in this view" : ""}.</> : "No skills in this view yet."}
             action={filter === "mine" && !query
-              ? <Link to="/skills/new" className="text-accent underline">Write your first skill</Link>
-              : <Button size="sm" onClick={() => { setQuery(""); setFilter("all"); }}>Clear filters</Button>} />
+              ? <ButtonLink to="/skills/new" icon={Plus}>Write your first skill</ButtonLink>
+              : <Button onClick={clearFilters}>Clear filters</Button>} />
         </Card>
       ) : (
         <ul className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

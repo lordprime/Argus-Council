@@ -68,7 +68,7 @@ KINDS: dict[str, ProviderKind] = {
         ),
         ProviderKind(
             "mock",
-            "Mock (offline, deterministic)",
+            "Offline demo (mock)",
             "mock",
             None,
             False,

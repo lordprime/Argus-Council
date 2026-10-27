@@ -6,7 +6,7 @@ import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
 import { MemoryPanel } from "@/components/knowledge/MemoryPanel";
 import { DocumentsTable, SearchPanel } from "@/components/knowledge/parts";
 import { UploadZone } from "@/components/knowledge/UploadZone";
-import { Button, Callout, Card, Dialog, EmptyState, ErrorState, PageHeader, Skeleton, Tabs, TextArea, TextField } from "@/components/ui";
+import { Button, Callout, Card, Dialog, EmptyState, ErrorState, Page, PageHeader, Skeleton, Tabs, TextArea, TextField } from "@/components/ui";
 import { useCreateKnowledgeBase, useDeleteKnowledgeBase, useKnowledgeBases } from "@/features/knowledge/queries";
 import type { KnowledgeBase } from "@/features/knowledge/types";
 import { errorMessage } from "@/lib/api";
@@ -134,7 +134,7 @@ export default function KnowledgePage() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "memory" ? "memory" : "bases";
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <Page>
       <PageHeader title="Knowledge"
         description="Documents your agents can search (knowledge_search) and the long-term memory they keep across runs." />
       <Tabs value={tab}
@@ -148,6 +148,6 @@ export default function KnowledgePage() {
           { value: "bases", label: <span className="inline-flex items-center gap-1.5"><BookOpen className="size-4" aria-hidden />Knowledge bases</span>, content: <BasesTab /> },
           { value: "memory", label: "Memory", content: <MemoryPanel /> },
         ]} />
-    </div>
+    </Page>
   );
 }

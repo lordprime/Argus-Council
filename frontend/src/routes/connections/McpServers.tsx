@@ -17,7 +17,6 @@ import {
   EmptyState,
   ErrorState,
   IconButton,
-  PageHeader,
   Segmented,
   TextArea,
   TextField,
@@ -338,9 +337,8 @@ export default function McpServers() {
   const snippet = `claude mcp add --transport http argus ${origin()}/mcp \\\n  --header "Authorization: Bearer <your API key>"`;
 
   return (
-    <ConnectionsPage>
-      <PageHeader title="MCP servers" description="Give councils tools from Model Context Protocol servers, and let other MCP clients use Argus."
-        actions={<Button variant="primary" icon={Plus} onClick={() => setDialog({})} disabled={q.isLoading}>Add server</Button>} />
+    <ConnectionsPage title="MCP servers" description="Give councils tools from Model Context Protocol servers, and let other MCP clients use Argus."
+      actions={<Button variant="primary" icon={Plus} onClick={() => setDialog({})} disabled={q.isLoading}>Add server</Button>}>
 
       <div className="flex flex-col gap-8">
         <section aria-labelledby="servers-h">
@@ -355,9 +353,8 @@ export default function McpServers() {
             </div>
           ) : (
             <Card as="div">
-              <EmptyState icon={Wrench} title="No MCP servers yet"
-                body="Add a Streamable HTTP server (URL plus an optional auth header) to give council members its tools. New servers ask before every tool call until you trust them."
-                action={<Button variant="primary" icon={Plus} onClick={() => setDialog({})}>Add server</Button>} />
+              <EmptyState titleAs="h3" icon={Wrench} title="No MCP servers yet"
+                body="Add a Streamable HTTP server (URL plus an optional auth header) to give council members its tools. New servers ask before every tool call until you trust them." />
             </Card>
           )}
         </section>

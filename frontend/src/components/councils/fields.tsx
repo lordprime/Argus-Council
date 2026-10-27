@@ -1,7 +1,7 @@
-// Form primitives specific to the Councils area: unit-suffixed number field, tag input,
-// bounded stepper and a compact switch. They follow the same tokens as components/ui.
+// Form primitives specific to the Councils area: unit-suffixed number field, tag input
+// and a compact switch, on the same tokens as components/ui. The bounded Stepper lives in components/ui.
 
-import { Minus, Plus, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { SwitchTrack } from "@/components/ui";
@@ -180,47 +180,6 @@ export function TagInput({ label, value, onChange, placeholder, hint, className 
         />
       </div>
       <Help id={id} hint={hint} />
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ Stepper
-export function Stepper({ label, value, min, max, onChange, unit = "seats", hint, error, disabled }: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (v: number) => void;
-  unit?: string;
-  hint?: ReactNode;
-  error?: string;
-  disabled?: boolean;
-}) {
-  const id = useId();
-  const atMin = value <= min;
-  const atMax = value >= max;
-  return (
-    <div className="flex flex-col gap-1">
-      <span id={`${id}-label`} className="text-sm font-medium">{label}</span>
-      <div role="group" aria-labelledby={`${id}-label`} aria-describedby={describedBy(id, hint, error)}
-        className={cn("inline-flex items-center self-start rounded-md border bg-surface", error ? "border-danger" : "border-border-strong")}>
-        <button type="button" aria-label={`Fewer ${unit}`} disabled={disabled || atMin}
-          title={atMin ? `Minimum is ${min}` : `Fewer ${unit}`}
-          className="inline-flex items-center justify-center h-9 w-9 rounded-l-md text-fg-muted hover:bg-surface-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed"
-          onClick={() => onChange(Math.max(min, value - 1))}>
-          <Minus className="size-4" aria-hidden />
-        </button>
-        <output aria-live="polite" className="min-w-12 px-1 text-center tabular text-base font-medium border-x border-border">
-          {value}
-        </output>
-        <button type="button" aria-label={`More ${unit}`} disabled={disabled || atMax}
-          title={atMax ? `Maximum is ${max}` : `More ${unit}`}
-          className="inline-flex items-center justify-center h-9 w-9 rounded-r-md text-fg-muted hover:bg-surface-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed"
-          onClick={() => onChange(Math.min(max, value + 1))}>
-          <Plus className="size-4" aria-hidden />
-        </button>
-      </div>
-      <Help id={id} hint={hint} error={error} />
     </div>
   );
 }
