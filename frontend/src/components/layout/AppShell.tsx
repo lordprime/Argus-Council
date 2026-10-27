@@ -190,7 +190,7 @@ export function CommandPalette() {
       <Command.List className="max-h-80 overflow-auto p-1">
         <Command.Empty className="p-4 text-sm text-fg-muted">No results.</Command.Empty>
         <Command.Group heading="Navigate" className="text-2xs text-fg-subtle px-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1">
-          {[...NAV, { to: "/connections/mcp", label: "MCP servers", icon: Plug }, { to: "/connections/agents", label: "Remote agents", icon: LayoutGrid },
+          {[...NAV, { to: "/connections/cli-agents", label: "CLI agents", icon: Plug }, { to: "/connections/mcp", label: "MCP servers", icon: Plug }, { to: "/connections/agents", label: "Remote agents", icon: LayoutGrid },
             { to: "/connections/ledger", label: "Protocol ledger", icon: ScrollText }, { to: "/settings/api-keys", label: "API keys", icon: KeyRound }].map((n) => (
             <Command.Item key={n.to} value={`go ${n.label}`} onSelect={() => go(n.to)} className={item}>
               <n.icon className="size-4" aria-hidden /> {n.label}

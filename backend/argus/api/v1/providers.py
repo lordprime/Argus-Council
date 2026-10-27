@@ -15,6 +15,7 @@ from argus.core.errors import ArgusError, Conflict, NotFound
 from argus.db.models import ProviderConfig
 from argus.providers.base import ProviderError
 from argus.providers.catalog import KINDS
+from argus.providers.cli.provider import CLI_PROVIDERS
 from argus.providers.health import HealthResult, HealthStatus, failure, key_hint
 from argus.providers.types import CompletionRequest, Message
 from argus.services.llm import LLMRouter, Route, persist_health, validate_base_url
@@ -96,6 +97,8 @@ async def kinds(_: CurrentPrincipal, request: Request) -> dict:
             for k in KINDS.values()
         ],
         "system_providers": _router(request).available_system_providers(),
+        # CLI agents enabled on this instance ("claude-cli", ...): account-authenticated seats.
+        "cli_providers": cli.available_names() if (cli := getattr(_router(request), "cli", None)) else [],
     }
 
 
@@ -134,7 +137,7 @@ async def create_provider(
             ProviderConfig.owner_id == principal.id, ProviderConfig.name == data.name
         )
     )
-    if exists.first():
+    if exists.first() or data.name in CLI_PROVIDERS:
         raise Conflict(f"Provider '{data.name}' already exists")
     cfg = ProviderConfig(
         owner_id=principal.id,

@@ -22,6 +22,7 @@ from argus.api.sse import SseHub, chain_shutdown_signals
 from argus.api.v1 import (
     admin,
     auth,
+    cli_agents,
     connections,
     councils,
     data,
@@ -57,6 +58,7 @@ from argus.protocols import a2a, acp, mcp_server
 from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.audit import audit
+from argus.services.cli_agents import CLIAgents
 from argus.services.llm import LLMRouter
 from argus.services.retention import RetentionService
 from argus.services.runs import BlockingWaits
@@ -135,6 +137,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not hasattr(app.state, "llm"):
             app.state.llm = LLMRouter(settings, app.state.cache, sessionmaker=app.state.db.sessionmaker)
+        if getattr(app.state.llm, "cli", None) is None:
+            app.state.llm.cli = CLIAgents(settings, app.state.db.sessionmaker)
+        app.state.cli_agents = app.state.llm.cli
         if not settings.is_production:
             # Production schemas are managed by Alembic migrations.
             await app.state.db.create_all()
@@ -286,6 +291,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin.router, prefix=api)
     app.include_router(councils.router, prefix=api)
     app.include_router(providers.router, prefix=api)
+    app.include_router(cli_agents.router, prefix=api)
     app.include_router(runs.router, prefix=api)
     app.include_router(skills.router, prefix=api)
     app.include_router(connections.router, prefix=api)

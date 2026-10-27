@@ -72,6 +72,20 @@ class Settings(BaseSettings):
     sandbox_token: SecretStr | None = None
     sandbox_local: bool = False
 
+    # CLI agents: the vendors' official CLIs (claude, codex, gemini) run as council agents in the
+    # separate agent runner service. Off unless the operator opts in. Each vendor's terms govern its
+    # CLI; subscription logins are for the account owner's own use (multi-user: use API keys).
+    cli_agents_enabled: bool = False
+    cli_agents_allowed: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["claude", "codex", "gemini"]
+    )
+    # false: a CLI agent runs only with the user's own API key, never a subscription login.
+    cli_agents_allow_subscription: bool = True
+    cli_agents_timeout_s: int = Field(default=600, ge=30, le=3600)
+    runner_url: str | None = None
+    runner_token: SecretStr | None = None
+    runner_local: bool = False  # development only: run the CLIs on this host; refused in production
+
     # Observability: when set, /metrics requires "Authorization: Bearer <token>"
     metrics_token: SecretStr | None = None
 
@@ -121,6 +135,8 @@ class Settings(BaseSettings):
         "searxng_url",
         "sandbox_url",
         "sandbox_token",
+        "runner_url",
+        "runner_token",
         "metrics_token",
         mode="before",
     )
@@ -128,6 +144,17 @@ class Settings(BaseSettings):
     def _empty_is_unset(cls, v: object) -> object:
         # docker compose passes unset variables as empty strings
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("cli_agents_allowed", mode="before")
+    @classmethod
+    def _split_clis(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = [c.strip().lower() for c in v.split(",") if c.strip()]
+        if isinstance(v, list):
+            unknown = sorted({str(c) for c in v} - {"claude", "codex", "gemini"})
+            if unknown:
+                raise ValueError(f"unknown CLI agents: {', '.join(unknown)}")
+        return v
 
     @field_validator("cors_origins", mode="before")
     @classmethod

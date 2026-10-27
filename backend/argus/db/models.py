@@ -471,3 +471,36 @@ class MemoryItem(IdMixin, TimestampMixin, Base):
         Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )
     created_by: Mapped[str] = mapped_column(String(120), default="")
+
+
+class CliCredential(IdMixin, TimestampMixin, Base):
+    """A user's API key for one vendor CLI (claude, codex, gemini), encrypted at rest.
+
+    Injected only into that user's own CLI processes in the agent runner; never returned by the
+    API and never included in account exports.
+    """
+
+    __tablename__ = "cli_credentials"
+    __table_args__ = (UniqueConstraint("owner_id", "cli"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cli: Mapped[str] = mapped_column(String(16))
+    api_key_enc: Mapped[str] = mapped_column(Text)
+    key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class CliSession(IdMixin, TimestampMixin, Base):
+    """A vendor CLI session a user's council seat ran in (resumable by that user only)."""
+
+    __tablename__ = "cli_sessions"
+    __table_args__ = (UniqueConstraint("owner_id", "cli", "session_id"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cli: Mapped[str] = mapped_column(String(16))
+    session_id: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    member_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

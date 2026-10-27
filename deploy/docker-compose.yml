@@ -89,6 +89,15 @@ services:
       ARGUS_SEARCH_PROVIDER: ${ARGUS_SEARCH_PROVIDER:-}
       ARGUS_SEARCH_API_KEY: ${ARGUS_SEARCH_API_KEY:-}
       ARGUS_SEARXNG_URL: ${ARGUS_SEARXNG_URL:-}
+      # CLI agents (vendor CLIs in the runner service). Off by default; to opt in set
+      # ARGUS_CLI_AGENTS_ENABLED=true, ARGUS_RUNNER_TOKEN and COMPOSE_PROFILES=cli-agents.
+      ARGUS_CLI_AGENTS_ENABLED: ${ARGUS_CLI_AGENTS_ENABLED:-false}
+      ARGUS_CLI_AGENTS_ALLOWED: ${ARGUS_CLI_AGENTS_ALLOWED:-claude,codex,gemini}
+      ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION: ${ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION:-true}
+      ARGUS_CLI_AGENTS_TIMEOUT_S: ${ARGUS_CLI_AGENTS_TIMEOUT_S:-600}
+      # Unix socket on a shared volume, like the sandbox: the API needs no network route to the runner.
+      ARGUS_RUNNER_URL: unix:/run/argus-runner/runner.sock
+      ARGUS_RUNNER_TOKEN: ${ARGUS_RUNNER_TOKEN:-}
       # Only the web proxy (and localhost) reach the API, so trust its X-Forwarded-For for client IPs.
       FORWARDED_ALLOW_IPS: "*"
       # System-wide LLM providers (users can also add their own in the UI)
@@ -101,7 +110,7 @@ services:
       ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
       ARGUS_VLLM_BASE_URL: ${ARGUS_VLLM_BASE_URL:-}
       ARGUS_LMSTUDIO_BASE_URL: ${ARGUS_LMSTUDIO_BASE_URL:-}
-    volumes: ["argusdata:/data", "sandboxsock:/run/argus-sandbox"]
+    volumes: ["argusdata:/data", "sandboxsock:/run/argus-sandbox", "runnersock:/run/argus-runner"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -153,13 +162,52 @@ services:
       resources:
         limits: { cpus: "2", memory: 2g, pids: 256 }
 
+  # Agent runner: the vendors' official CLIs (claude, codex, gemini) as council agents. Opt-in:
+  # COMPOSE_PROFILES=cli-agents plus ARGUS_CLI_AGENTS_ENABLED=true and ARGUS_RUNNER_TOKEN.
+  # Sign a user's CLI in with ./scripts/agent-login.sh <email> <claude|codex|gemini>.
+  runner:
+    <<: *hardening
+    profiles: ["cli-agents"]
+    build:
+      context: ../backend
+      dockerfile: docker/runner.Dockerfile
+    image: argus-council/runner:${ARGUS_VERSION:-latest}
+    # Control API on a Unix socket in the shared runnersock volume (token-authenticated).
+    command: ["uvicorn", "argus.runner.server:app", "--uds", "/run/argus-runner/runner.sock", "--no-server-header"]
+    read_only: true
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    environment:
+      ARGUS_RUNNER_TOKEN: ${ARGUS_RUNNER_TOKEN:-}
+      ARGUS_RUNNER_HOME_ROOT: /home/runner/users
+      ARGUS_RUNNER_MAX_CONCURRENCY: ${ARGUS_RUNNER_MAX_CONCURRENCY:-8}
+      ARGUS_RUNNER_MAX_PER_USER: ${ARGUS_RUNNER_MAX_PER_USER:-4}
+      # Optional egress proxy that allow-lists the vendor API hosts (recommended).
+      HTTPS_PROXY: ${ARGUS_RUNNER_HTTPS_PROXY:-}
+      NO_PROXY: ${ARGUS_RUNNER_NO_PROXY:-}
+    # Per-user HOMEs (each CLI's own login state and sessions). Never mounted into any other service.
+    volumes: ["runnerhomes:/home/runner/users", "runnersock:/run/argus-runner"]
+    # Egress only, for the vendor APIs. No listening port, no Docker socket, and no route to the
+    # database, cache, sandbox or API (the API reaches the runner over the socket).
+    networks: [runner_egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect("/run/argus-runner/runner.sock"); s.sendall(b"GET /health HTTP/1.0\r\nHost: runner\r\n\r\n"); sys.exit(0 if b" 200 " in s.recv(64) else 1)']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 4g, pids: 512 }
+
 volumes:
   pgdata:
   redisdata:
   argusdata:
   sandboxsock:
+  runnerhomes:
+  runnersock:
 
 networks:
   backend:
     internal: true # no egress: database and cache only
   frontend:
+  runner_egress: # the runner's route to the vendor APIs (and nothing else)

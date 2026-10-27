@@ -34,7 +34,7 @@ if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT/deploy/.env.example" "$ENV_FILE"
 fi
 chmod 600 "$ENV_FILE"
-for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN; do
+for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN ARGUS_RUNNER_TOKEN; do
   if [ -z "$(envval "$key" "")" ]; then
     log "generating $key"
     if grep -qE "^$key=" "$ENV_FILE"; then

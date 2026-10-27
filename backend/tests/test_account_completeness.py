@@ -15,6 +15,8 @@ from argus.db.base import Base
 from argus.db.models import (
     Artifact,
     AuditEvent,
+    CliCredential,
+    CliSession,
     Council,
     CouncilMember,
     KnowledgeBase,
@@ -60,9 +62,11 @@ async def _seed_everything(app, uid: uuid.UUID, email: str) -> dict[str, uuid.UU
         await s.flush()
         s.add(CouncilMember(council_id=council.id, name="Ada", role="chair"))
         s.add(ProviderConfig(owner_id=uid, name="p", kind="openai", api_key_enc="ENC-SECRET"))
+        s.add(CliCredential(owner_id=uid, cli="claude", api_key_enc="ENC-SECRET", key_hint="sk-…abcd"))
         run = Run(owner_id=uid, topic="t", status="completed", result="done")
         s.add(run)
         await s.flush()
+        s.add(CliSession(owner_id=uid, cli="claude", session_id=str(uuid.uuid4()), run_id=run.id, label=""))
         sub = Run(owner_id=uid, topic="sub", status="completed", parent_run_id=run.id)
         s.add(sub)
         await s.flush()

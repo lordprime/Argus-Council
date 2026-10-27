@@ -55,6 +55,9 @@ _SPECIAL = {
     "audit_events",
     "council_members",
 }
+# cli_credentials is exported like provider_configs: which CLI has a key and its masked hint, never
+# the encrypted key (``_secret`` drops ``*_enc``). Vendor CLI logins live only in the runner volume
+# and are never part of the database or an export.
 _OWNER_COLUMNS = ("owner_id", "user_id")
 
 

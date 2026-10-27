@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the Argus Council images (api, which also runs the sandbox, and web).
+# Build the Argus Council images (api, which also runs the sandbox, web, and the CLI agents
+# runner when COMPOSE_PROFILES includes cli-agents).
 #
 #   ./scripts/build.sh                     # tag with the current commit and :latest
 #   ./scripts/build.sh --version 1.2.0     # explicit tag
@@ -8,7 +9,7 @@
 #   ./scripts/build.sh --from-images ci    # no build: tag existing images (built elsewhere, pulled)
 #
 # Options: --version TAG, --ca FILE (or ARGUS_EXTRA_CA), --no-cache, --pull, --from-images TAG,
-# and the services to build (api, web; default both).
+# and the services to build (api, web, runner; default api and web, plus runner with CLI agents).
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -20,12 +21,14 @@ while [ $# -gt 0 ]; do
     --ca) ca="${2:?--ca needs a file}"; shift 2 ;;
     --from-images) from="${2:?--from-images needs a tag}"; shift 2 ;;
     --no-cache | --pull) opts+=("$1"); shift ;;
-    api | web) services+=("$1"); shift ;;
+    api | web | runner) services+=("$1"); shift ;;
     -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
-[ ${#services[@]} -gt 0 ] || services=(api web)
+if [ ${#services[@]} -eq 0 ]; then
+  while IFS= read -r svc; do services+=("$svc"); done < <(image_services)
+fi
 version="${version:-$(git_version)}"
 require_docker
 # Rebuilding an existing tag moves it to the new images. update.sh tags the running images
@@ -53,14 +56,16 @@ if [ -n "$ca" ]; then
 fi
 
 for svc in "${services[@]}"; do
+  dockerfile=()
   case "$svc" in
     api) context="$ROOT/backend" ;;
     web) context="$ROOT/frontend" ;;
+    runner) context="$ROOT/backend" dockerfile=(-f "$ROOT/backend/docker/runner.Dockerfile") ;;
   esac
   log "building argus-council/$svc:$version"
   # Retry: base-image pulls fail transiently (registry rate limits, network blips).
   for attempt in 1 2 3; do
-    if docker build ${opts[@]+"${opts[@]}"} -t "argus-council/$svc:$version" -t "argus-council/$svc:latest" "$context"; then
+    if docker build ${opts[@]+"${opts[@]}"} ${dockerfile[@]+"${dockerfile[@]}"} -t "argus-council/$svc:$version" -t "argus-council/$svc:latest" "$context"; then
       break
     fi
     [ "$attempt" = 3 ] && die "building $svc failed 3 times"

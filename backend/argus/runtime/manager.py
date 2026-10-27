@@ -330,6 +330,8 @@ class RunManager:
             if live.cancel_timer is not None:
                 live.cancel_timer.cancel()
             self.live.pop(ctx.run_id, None)
+            if getattr(self.llm, "cli", None) is not None:
+                self.llm.cli.forget_run(ctx.run_id)  # drop in-memory CLI seat sessions (kept in the DB)
             RUNS_ACTIVE.dec()
             RUNS_FINISHED.labels(ctx.mode, status).inc()
             RUN_DURATION.labels(ctx.mode, status).observe(ctx.engine.runtime_s)

@@ -141,13 +141,28 @@ wait_healthy() {
 
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
-# snapshot_images VERSION: give the api and web images that run now (or, when none run, the ones
-# tagged VERSION) a new tag rollback-<UTC time>, and print that tag. Rolling back to it starts
-# exactly these images even after a rebuild has moved VERSION to new ones. Prints VERSION when
-# there is nothing to snapshot.
+# cli_agents_on: the opt-in agent runner (CLI agents) is part of this deployment, i.e.
+# COMPOSE_PROFILES (deploy/.env or the environment) lists the cli-agents profile.
+cli_agents_on() {
+  case ",${COMPOSE_PROFILES:-$(envval COMPOSE_PROFILES '')}," in
+    *,cli-agents,*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# image_services: the services built from this repository: api (also runs the sandbox), web, and
+# runner when CLI agents are enabled.
+image_services() {
+  if cli_agents_on; then printf '%s\n' api web runner; else printf '%s\n' api web; fi
+}
+
+# snapshot_images VERSION: give the images that run now (or, when none run, the ones tagged
+# VERSION) a new tag rollback-<UTC time>, and print that tag. Rolling back to it starts exactly
+# these images even after a rebuild has moved VERSION to new ones. Prints VERSION when there is
+# nothing to snapshot. api and web are required; the optional runner is kept when it exists.
 snapshot_images() {
-  local version="$1" base tag n=1 svc cid img imgs=()
-  for svc in api web; do
+  local version="$1" base tag n=1 svc cid img i svcs=() imgs=()
+  while IFS= read -r svc; do
     img=""
     cid="$(dc ps -a -q "$svc" 2>/dev/null | head -n1 || true)"
     [ -n "$cid" ] && img="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
@@ -155,19 +170,24 @@ snapshot_images() {
       img="argus-council/$svc:$version"
     fi
     if [ -z "$img" ]; then
+      if [ "$svc" = runner ]; then
+        warn "no runner image to keep for a rollback (CLI agents were just enabled?)"
+        continue
+      fi
       warn "no $svc image to keep for a rollback; the rollback target stays $version"
       printf '%s' "$version"
       return 0
     fi
-    imgs+=("$img")
-  done
+    svcs+=("$svc") imgs+=("$img")
+  done < <(image_services)
   base="rollback-$(date -u +%Y%m%dT%H%M%SZ)"
   tag="$base"
   while image_exists "argus-council/api:$tag" || image_exists "argus-council/web:$tag"; do
     n=$((n + 1)); tag="$base-$n"
   done
-  docker tag "${imgs[0]}" "argus-council/api:$tag" >&2
-  docker tag "${imgs[1]}" "argus-council/web:$tag" >&2
+  for i in "${!svcs[@]}"; do
+    docker tag "${imgs[$i]}" "argus-council/${svcs[$i]}:$tag" >&2
+  done
   log "kept the images of $version as $tag (the rollback target)" >&2
   printf '%s' "$tag"
 }
@@ -177,7 +197,7 @@ snapshot_images() {
 prune_snapshots() {
   local keep="${ARGUS_SNAPSHOT_KEEP:-3}" svc tag n in_use
   in_use=" $(current_version) $(cat "$PREV_FILE" 2>/dev/null || true) $(stateval version) "
-  for svc in api web; do
+  for svc in api web runner; do
     n=0
     while IFS= read -r tag; do
       n=$((n + 1))

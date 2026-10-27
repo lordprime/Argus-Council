@@ -101,6 +101,7 @@ export const appRoutes: RouteObject[] = [
   { path: "templates", element: page(() => import("@/routes/templates/Templates")), handle: trail({ label: "Templates" }) },
   { path: "connections", element: <Navigate to="/connections/providers" replace /> },
   { path: "connections/providers", element: page(() => import("@/routes/connections/Providers")), handle: trail(CONNECTIONS, { label: "Providers" }) },
+  { path: "connections/cli-agents", element: page(() => import("@/routes/connections/CliAgents")), handle: trail(CONNECTIONS, { label: "CLI agents" }) },
   { path: "connections/mcp", element: page(() => import("@/routes/connections/McpServers")), handle: trail(CONNECTIONS, { label: "MCP servers" }) },
   { path: "connections/agents", element: page(() => import("@/routes/connections/RemoteAgents")), handle: trail(CONNECTIONS, { label: "Remote agents" }) },
   { path: "connections/ledger", element: page(() => import("@/routes/connections/Ledger")), handle: trail(CONNECTIONS, { label: "Ledger" }) },

@@ -47,6 +47,8 @@ class MemberSpec:
     fallbacks: list[Route] = field(default_factory=list)
     effort: str | None = None
     temperature: float | None = None
+    # CLI agents: resume this existing vendor session (validated against the run owner's sessions).
+    cli_session: str | None = None
 
     @property
     def actor(self) -> Actor:
@@ -78,6 +80,7 @@ class MemberSpec:
             ],
             effort=cfg.get("effort"),
             temperature=m.get("temperature"),
+            cli_session=str(cfg["cli_session"]) if cfg.get("cli_session") else None,
         )
 
 
@@ -175,16 +178,22 @@ class AgentRunner:
                 "topic": self.ctx.topic,
                 "mode": self.ctx.mode,
                 "cache": False,
+                # CLI agents key their vendor session on (run, seat).
+                "run_id": str(self.ctx.run_id),
+                "member_id": self.member.id,
+                **({"cli_session": self.member.cli_session} if self.member.cli_session else {}),
             },
         )
         t0 = time.monotonic()
         response: CompletionResponse | None = None
+        original = Route(self.member.provider, self.member.model)
+        primary = original
+        fallbacks = list(self.member.fallbacks)
         streamed = False
+        failure: Exception | None = None
         try:
             # The router retries retryable errors that happen before any output was produced.
-            async for ev in self.ctx.llm.stream(
-                req, Route(self.member.provider, self.member.model), owner_id=self.ctx.owner_id
-            ):
+            async for ev in self.ctx.llm.stream(req, primary, owner_id=self.ctx.owner_id):
                 if ev.type == "text" and ev.text:
                     streamed = True
                     await self.ctx.sink.emit(
@@ -201,22 +210,45 @@ class AgentRunner:
             # completion is safe either way: thought.completed carries the full text and replaces
             # any partial deltas, and complete() retries with backoff and walks the fallbacks.
             # A non-retryable error with no fallback would only fail again.
+            # CLI agents (CLIError) also say whether the failure (quota, rate limit, sign-in,
+            # unavailable) should move the seat along its fallback chain; their other failures
+            # (bad session, invalid request) fail the turn. They are never retried in place.
             retryable = isinstance(exc, ProviderError) and exc.retryable
-            if not self.member.fallbacks and not retryable:
+            cli_fallback = getattr(exc, "fallback", None)
+            if cli_fallback is False or (not fallbacks and not retryable):
                 raise
+            failure = exc
             log.warning(
                 "agent.stream_failed_completing",
                 member=self.member.name,
                 error=str(exc)[:200],
                 partial=streamed,
             )
+            if cli_fallback and fallbacks:
+                # Do not re-run a CLI that just hit its limit: go straight to the next route.
+                primary, fallbacks = fallbacks[0], fallbacks[1:]
         if response is None:
             response = await self.ctx.llm.complete(
                 req,
-                Route(self.member.provider, self.member.model),
+                primary,
                 owner_id=self.ctx.owner_id,
-                fallbacks=self.member.fallbacks,
+                fallbacks=fallbacks,
             )
+            if failure is not None and response.provider != original.provider:
+                # The seat moved to another route of its fallback chain: record it on the run.
+                await self.ctx.sink.emit(
+                    "provider.fallback",
+                    {
+                        "member_id": self.member.id,
+                        "from": {"provider": original.provider, "model": original.model},
+                        "to": {"provider": response.provider, "model": response.model},
+                        "reason": getattr(failure, "category", None)
+                        or (f"http_{failure.status}" if getattr(failure, "status", None) else "error"),
+                        "detail": str(failure)[:300],
+                    },
+                    actor=actor,
+                    step_id=step_id,
+                )
         self.ctx.ledger.record(response)  # argus_llm_* metrics are recorded by the router
         self.ctx.engine.record_usage(response.usage)
         self.ctx.engine.record_step()
@@ -238,6 +270,16 @@ class AgentRunner:
                 "model": response.model,
                 "provider": response.provider,
                 "tool_calls": [{"id": c.id, "name": c.name} for c in response.tool_calls],
+                # CLI agents: subscription turns cost no API dollars; the estimate is kept apart.
+                **(
+                    {
+                        "billing": response.billing,
+                        "estimated_cost_usd": response.estimated_cost_usd,
+                        "cli_session_id": response.session_id,
+                    }
+                    if response.billing != "api"
+                    else {}
+                ),
             },
             actor=actor,
             step_id=step_id,

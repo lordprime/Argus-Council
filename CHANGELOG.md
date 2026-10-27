@@ -29,6 +29,11 @@ The first version of the platform.
   numbered sources, chat; exports to txt, md, html, LaTeX, PDF, DOCX and JSON.
 - **Skills**: `SKILL.md` packages loaded on demand, six built-in skills, an eight-skill marketplace,
   import and export, and version history with restore.
+- **CLI agents**: council seats on the vendors' official CLIs (Claude Code, Codex CLI, Gemini CLI),
+  signed in with the owner's own account or a per-user CLI API key, run by an opt-in `runner`
+  container with every built-in CLI tool off; vendor sessions kept per seat, hybrid councils with
+  per-seat fallback chains, subscription usage reported apart from API spend, and
+  `scripts/agent-login.sh`. Off unless `ARGUS_CLI_AGENTS_ENABLED=true`.
 - **Sub-councils**: the `subcouncil` tool with clamped guardrails, budget charge-back, a depth
   limit and a live relay into the parent's stream.
 - **Knowledge**: knowledge bases with BM25 search and citations, and council-scoped memory.

@@ -435,6 +435,86 @@ EOF
   end
 fi
 
+# ---------------------------------------------------------------- CLI agents (agent runner)
+
+# login_stub: a docker wrapper that answers the user lookup with $STUB_UID and records the
+# commands run in the runner container; everything else goes to the shared stub.
+login_stub() {
+  mkdir -p "$T/bin"
+  cat >"$T/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *" exec -T postgres psql "*)
+    cat >"$STUB_STATE/login.sql"; printf '%s\n' "docker $*" >>"$STUB_STATE/login.calls"
+    [ -n "${STUB_UID:-}" ] && printf '%s\n' "$STUB_UID"
+    exit 0 ;;
+  *" exec "*" runner "*) printf '%s\n' "docker $*" >>"$STUB_STATE/runner.log"; exit 0 ;;
+esac
+exec "$REAL_STUB" "$@"
+EOF
+  chmod +x "$T/bin/docker"
+}
+run_login() {
+  REAL_STUB="$HERE/stubs/docker" PATH="$T/bin:$HERE/stubs:$PATH" \
+    bash "$R/scripts/agent-login.sh" "$@" >"$T/out" 2>&1 </dev/null
+}
+enable_cli_agents() { printf '%s\n' COMPOSE_PROFILES=cli-agents ARGUS_CLI_AGENTS_ENABLED=true >>"$R/deploy/.env"; }
+
+if begin agent_login_runs_the_cli_in_the_users_own_home; then
+  login_stub; enable_cli_agents
+  export STUB_UID=0b5c2e4a-1d3f-4a6b-8c9d-0e1f2a3b4c5d
+  check "agent-login.sh succeeds" ok run_login "Ada.Lovelace@example.com" claude
+  check "the email is a psql variable" contains "$STUB_STATE/login.calls" "email=Ada.Lovelace@example.com"
+  check "the SQL never contains the email" lacks "$STUB_STATE/login.sql" "Ada.Lovelace"
+  check "the SQL uses psql quoting" contains "$STUB_STATE/login.sql" ":'email'"
+  check "the user's home is created" contains "$STUB_STATE/runner.log" "runner mkdir -p -m 0700 /home/runner/users/$STUB_UID"
+  check "the CLI runs with the user's HOME" contains "$STUB_STATE/runner.log" "-e HOME=/home/runner/users/$STUB_UID runner claude auth login"
+  check "no shell is involved" lacks "$STUB_STATE/runner.log" "sh -c"
+  run_login "$STUB_UID" codex --status
+  check "status uses the CLI's own command" contains "$STUB_STATE/runner.log" "runner codex login status"
+  run_login "$STUB_UID" gemini
+  check "gemini prints its sign-in link" contains "$STUB_STATE/runner.log" "-e NO_BROWSER=true runner gemini"
+  unset STUB_UID
+  end
+fi
+
+if begin agent_login_refuses_bad_input_and_disabled_runner; then
+  login_stub
+  export STUB_UID=0b5c2e4a-1d3f-4a6b-8c9d-0e1f2a3b4c5d
+  check "refused while CLI agents are off" fails run_login someone@example.com claude
+  check "the reason is given" contains "$T/out" "CLI agents are not enabled"
+  enable_cli_agents
+  check "an unknown CLI is refused" fails run_login someone@example.com bash
+  check "a malformed email is refused" fails run_login "x y@example.com" claude
+  check "nothing ran in the runner" fails test -s "$STUB_STATE/runner.log"
+  unset STUB_UID
+  check "an unknown user is refused" fails run_login nobody@example.com claude
+  check "the reason is given" contains "$T/out" "no Argus user"
+  end
+fi
+
+if begin build_includes_the_runner_only_with_cli_agents; then
+  check "build.sh succeeds" ok run build.sh --version v2
+  check "no runner image without the profile" fails test -f "$STUB_STATE/tags/argus-council_runner_v2"
+  enable_cli_agents
+  check "build.sh succeeds" ok run build.sh --version v3
+  check "the runner image is built" test -f "$STUB_STATE/tags/argus-council_runner_v3"
+  check "from the runner Dockerfile" contains "$STUB_STATE/calls.log" "backend/docker/runner.Dockerfile"
+  end
+fi
+
+if begin snapshot_keeps_the_runner_image_for_rollback; then
+  enable_cli_agents
+  printf 'head=1\nhealthy=1\n' >"$STUB_STATE/ids/sha256:v1-runner"
+  echo sha256:v1-runner >"$STUB_STATE/tags/argus-council_runner_v1"
+  echo sha256:v1-runner >"$STUB_STATE/ct/runner"
+  tag="$(cd "$R" && PATH="$HERE/stubs:$PATH" bash -c 'source scripts/lib.sh; snapshot_images v1' 2>"$T/out")"
+  check "a rollback tag is printed" ok grep -q '^rollback-' <<<"$tag"
+  check "the runner is in the snapshot" eq "$(tag_id "argus-council/runner:$tag")" sha256:v1-runner
+  check "the api is in the snapshot" eq "$(tag_id "argus-council/api:$tag")" sha256:v1-api
+  end
+fi
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then

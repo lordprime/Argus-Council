@@ -41,6 +41,7 @@ nav:
       - Sub-councils: concepts/sub-councils.md
       - Skills: concepts/skills.md
       - Knowledge and Memory: concepts/knowledge.md
+      - CLI Agents: cli-agents.md
   - Protocols and Ledger: protocols.md
   - Run Views: run-views.md
   - Integration: integration.md

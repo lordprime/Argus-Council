@@ -102,6 +102,11 @@ class CompletionResponse(BaseModel):
     thinking: str = ""
     raw: dict[str, Any] | None = None
     cached: bool = False
+    # "subscription": a CLI agent signed in with the user's vendor account. Such turns carry no API
+    # dollar cost (usage.cost_usd == 0); estimated_cost_usd says what they would cost on the API.
+    billing: Literal["api", "api_key", "subscription"] = "api"
+    estimated_cost_usd: float | None = None
+    session_id: str | None = None  # CLI agents: the vendor session this turn ran in
 
     def as_message(self) -> Message:
         return Message(role="assistant", content=self.content, tool_calls=self.tool_calls, raw=self.raw)
