@@ -95,7 +95,7 @@ async def _principal_from_api_key(db: AsyncSession, token: str) -> Principal:
 
 
 async def resolve_principal(
-    db: AsyncSession, settings: Settings, token: str, cache: Cache | None = None
+    db: AsyncSession, settings: Settings, token: str, cache: Cache | None
 ) -> Principal:
     if token.startswith(API_KEY_PREFIX):
         return await _principal_from_api_key(db, token)

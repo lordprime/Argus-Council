@@ -218,7 +218,7 @@ async def a2a_endpoint(request: Request) -> JSONResponse:
     t0 = time.monotonic()
     async with state.db.sessionmaker() as db:
         try:
-            principal = await resolve_principal(db, state.settings, auth[7:].strip())
+            principal = await resolve_principal(db, state.settings, auth[7:].strip(), state.cache)
         except ArgusError:
             return JSONResponse(err(None, -32003, "Invalid credentials"), status_code=401)
         await db.commit()

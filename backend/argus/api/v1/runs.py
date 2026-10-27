@@ -249,7 +249,7 @@ async def stream(
         auth = request.headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
             raise Unauthorized("Authentication required")
-        owner = (await resolve_principal(db, settings, auth[7:].strip())).id
+        owner = (await resolve_principal(db, settings, auth[7:].strip(), cache)).id
     await _own_run(db, owner, run_id)
     last_event_id = request.headers.get("last-event-id")
     if last_event_id and last_event_id.isdigit():
