@@ -54,6 +54,8 @@ class MemberSpec:
     fallbacks: list[Route] = field(default_factory=list)
     effort: str | None = None
     temperature: float | None = None
+    # CLI agents: resume this existing vendor session (validated against the run owner's sessions).
+    cli_session: str | None = None
 
     @property
     def actor(self) -> Actor:
@@ -85,6 +87,7 @@ class MemberSpec:
             ],
             effort=cfg.get("effort"),
             temperature=m.get("temperature"),
+            cli_session=str(cfg["cli_session"]) if cfg.get("cli_session") else None,
         )
 
 
@@ -182,14 +185,18 @@ class AgentRunner:
                 "topic": self.ctx.topic,
                 "mode": self.ctx.mode,
                 "cache": False,
+                # CLI agents key their vendor session on (run, seat).
+                "run_id": str(self.ctx.run_id),
+                "member_id": self.member.id,
+                **({"cli_session": self.member.cli_session} if self.member.cli_session else {}),
             },
         )
         t0 = time.monotonic()
         response: CompletionResponse | None = None
+        primary = Route(self.member.provider, self.member.model)
+        fallbacks = list(self.member.fallbacks)
         try:
-            async for ev in self.ctx.llm.stream(
-                req, Route(self.member.provider, self.member.model), owner_id=self.ctx.owner_id
-            ):
+            async for ev in self.ctx.llm.stream(req, primary, owner_id=self.ctx.owner_id):
                 if ev.type == "text" and ev.text:
                     await self.ctx.sink.emit(
                         "thought.delta",
@@ -200,15 +207,34 @@ class AgentRunner:
                 elif ev.type == "done":
                     response = ev.response
         except ProviderError as exc:
-            if not self.member.fallbacks:
+            # CLI agents say whether their failure (quota, rate limit, auth, unavailable) should move
+            # the seat to its fallback chain; anything else from them fails the turn as before.
+            cli_fallback = getattr(exc, "fallback", None)
+            if not fallbacks or cli_fallback is False:
                 raise
             log.warning("agent.stream_failed_falling_back", member=self.member.name, error=str(exc)[:200])
+            await self.ctx.sink.emit(
+                "provider.fallback",
+                {
+                    "member_id": self.member.id,
+                    "from": {"provider": primary.provider, "model": primary.model},
+                    "to": {"provider": fallbacks[0].provider, "model": fallbacks[0].model},
+                    "reason": getattr(exc, "category", None)
+                    or ("http_" + str(exc.status) if exc.status else "error"),
+                    "detail": str(exc)[:300],
+                },
+                actor=actor,
+                step_id=step_id,
+            )
+            if cli_fallback:
+                # Do not re-run a CLI that just hit its limit: go straight to the next route.
+                primary, fallbacks = fallbacks[0], fallbacks[1:]
         if response is None:
             response = await self.ctx.llm.complete(
                 req,
-                Route(self.member.provider, self.member.model),
+                primary,
                 owner_id=self.ctx.owner_id,
-                fallbacks=self.member.fallbacks,
+                fallbacks=fallbacks,
             )
         self.ctx.ledger.record(response)
         prov, mdl = safe_label(response.provider), safe_label(response.model)
@@ -237,6 +263,16 @@ class AgentRunner:
                 "model": response.model,
                 "provider": response.provider,
                 "tool_calls": [{"id": c.id, "name": c.name} for c in response.tool_calls],
+                # CLI agents: subscription turns cost no API dollars; the estimate is kept apart.
+                **(
+                    {
+                        "billing": response.billing,
+                        "estimated_cost_usd": response.estimated_cost_usd,
+                        "cli_session_id": response.session_id,
+                    }
+                    if response.billing != "api"
+                    else {}
+                ),
             },
             actor=actor,
             step_id=step_id,

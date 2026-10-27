@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select, update
@@ -30,6 +31,7 @@ from argus.core.logging import get_logger
 from argus.db.models import ProviderConfig
 from argus.providers.base import Provider, ProviderError, with_retries
 from argus.providers.catalog import KINDS, build_provider
+from argus.providers.cli.provider import CLI_PROVIDERS
 from argus.providers.health import HealthResult, failure
 from argus.providers.mock import MockProvider
 from argus.providers.pricing import register_pricing
@@ -137,6 +139,8 @@ class LLMRouter:
         self.cache = cache
         self.system = system if system is not None else system_providers_from_env()
         self.box = SecretBox(settings)
+        # CLI agents (argus.services.cli_agents.CLIAgents); set by the app. Resolves "<cli>-cli" names.
+        self.cli: Any = None
         self._user_providers: dict[tuple[uuid.UUID, str, str], Provider] = {}
         self._health_tasks: set[asyncio.Task[None]] = set()
         self._health_last: dict[uuid.UUID, tuple[str, float]] = {}
@@ -153,6 +157,11 @@ class LLMRouter:
 
     # ------------------------------------------------------------ resolution
     async def resolve(self, db: AsyncSession | None, owner_id: uuid.UUID | None, name: str) -> Provider:
+        if name in CLI_PROVIDERS:
+            # Reserved names: always the caller's own CLI account, never a config or system provider.
+            if self.cli is None:
+                raise NotFound(f"Provider '{name}' is not configured")
+            return self.cli.provider_for(owner_id, name)
         if db is None and owner_id is not None and self.sessionmaker is not None:
             # Background work (council runs) has no request session; open a short-lived one.
             async with self.sessionmaker() as session:

@@ -105,6 +105,10 @@ async def delete_me(
             except Exception:  # noqa: S112 - best effort; deletion proceeds regardless
                 continue
     stats = await delete_account(db, user, blob_root(settings))
+    cli = getattr(request.app.state, "cli_agents", None)
+    if cli is not None and cli.transport is not None:
+        # Remove the user's runner HOME too: their CLI logins and vendor session stores.
+        stats["cli_home_purged"] = int(await cli.purge_user(user.id))
     # The audit row must not reference the deleted user (FK); record the id in the detail instead.
     request.state.actor_id = None
     request.state.audit_detail = {"deleted_user_id": str(user.id), **stats}

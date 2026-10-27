@@ -42,6 +42,9 @@ _SPECIAL = {
     "audit_events",
     "council_members",
     "webhook_deliveries",
+    # CLI agent API keys: credentials, never exported (not even the masked hint). Vendor CLI logins
+    # live only in the runner volume and are never part of the database or an export.
+    "cli_credentials",
 }
 _OWNER_COLUMNS = ("owner_id", "user_id")
 

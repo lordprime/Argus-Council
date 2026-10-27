@@ -178,6 +178,8 @@ class RunManager:
                     await close()
                 except Exception:  # noqa: S110
                     pass
+            if getattr(self.llm, "cli", None) is not None:
+                self.llm.cli.forget_run(ctx.run_id)  # drop in-memory CLI seat sessions (kept in the DB)
             for approval in list(ctx.approvals.values()):
                 if not approval.future.done():
                     approval.future.set_result({"decision": "expired", "reason": "run ended"})
