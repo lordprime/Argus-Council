@@ -1,12 +1,11 @@
 import { Database, KeyRound, UserRound, Users, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
-import { NavLink } from "react-router";
 
-import { PageHeader } from "@/components/ui";
+import { Page, PageHeader, SectionNav, type SectionLink } from "@/components/ui";
 import { useIsAdmin } from "@/features/admin/queries";
 import { cn } from "@/lib/cn";
 
-const LINKS = [
+const LINKS: (SectionLink & { adminOnly?: boolean })[] = [
   { to: "/settings/profile", label: "Profile", icon: UserRound },
   { to: "/settings/api-keys", label: "API keys", icon: KeyRound },
   { to: "/settings/webhooks", label: "Webhooks", icon: Webhook },
@@ -17,41 +16,28 @@ const LINKS = [
 /** Sub-navigation shared by the settings pages. NavLink sets aria-current="page" on the active link. */
 export function SettingsNav() {
   const admin = useIsAdmin();
-  const links = LINKS.filter((l) => !("adminOnly" in l) || admin);
-  return (
-    <nav aria-label="Settings" className="border-b border-border mb-6">
-      <ul className="flex gap-1 -mb-px overflow-x-auto">
-        {links.map((l) => (
-          <li key={l.to}>
-            <NavLink to={l.to} end
-              className={({ isActive }) => cn(
-                "inline-flex items-center gap-2 h-10 px-3 text-sm border-b-2 whitespace-nowrap transition-colors duration-fast",
-                isActive ? "border-accent text-fg font-medium" : "border-transparent text-fg-muted hover:text-fg hover:border-border-strong",
-              )}>
-              <l.icon className="size-4" aria-hidden />
-              {l.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
+  return <SectionNav label="Settings" links={LINKS.filter((l) => !l.adminOnly || admin)} />;
 }
 
-/** Page frame for /settings/*: eyebrow, the page's single h1, the sub-nav, then sections. */
-export function SettingsLayout({ title, description, actions, children }: {
+/**
+ * Page frame for /settings/*, in the shared section order (C-10): eyebrow, the page's single h1, the
+ * section tabs, then sections. Every settings page uses the `default` width so switching tabs never
+ * moves the header or the tabs. Single-column form pages (Profile, Data) pass `form` to cap the content
+ * column at the form measure (880px) under the same, unmoved header; tables use the full width.
+ */
+export function SettingsLayout({ title, description, actions, form, children }: {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  form?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="max-w-3xl mx-auto p-4 md:p-6">
-      <p className="text-xs font-medium uppercase tracking-wide text-fg-subtle mb-1">Settings</p>
-      <PageHeader title={title} description={description} actions={actions} />
+    <Page>
+      <PageHeader eyebrow="Settings" title={title} description={description} actions={actions} className="mb-4" />
       <SettingsNav />
-      <div className="flex flex-col gap-6">{children}</div>
-    </div>
+      <div className={cn("flex flex-col gap-6", form && "max-w-[880px]")}>{children}</div>
+    </Page>
   );
 }
 

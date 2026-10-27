@@ -23,18 +23,19 @@ import { useMemo, useState, type FormEvent } from "react";
 
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
 import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
-import { CardSkeletons, Chips, Meta, SectionTitle, Switch } from "@/components/connections/parts";
+import { CardSkeletons, Chips, Meta, Switch } from "@/components/connections/parts";
 import { SecretField, secretPatch, type SecretAction } from "@/components/connections/SecretField";
 import {
   Badge,
   Button,
   Callout,
   Card,
+  CardTitle,
   Dialog,
   EmptyState,
   ErrorState,
   IconButton,
-  PageHeader,
+  SectionTitle,
   SelectField,
   Skeleton,
   TextField,
@@ -51,6 +52,7 @@ import {
   type TestResult,
 } from "@/features/connections/queries";
 import { errorMessage } from "@/lib/api";
+import { MOCK_PROVIDER, providerKindLabel } from "@/lib/providers";
 import { relTime } from "@/lib/format";
 import { useProviderKinds, useProviders } from "@/lib/queries";
 import type { ProviderConfig, ProviderKind } from "@/lib/types";
@@ -245,7 +247,7 @@ function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderWithHealth; ki
       <div className="flex items-start gap-3">
         <span className="grid place-items-center size-9 rounded-md bg-accent-subtle text-accent shrink-0"><Icon className="size-5" aria-hidden /></span>
         <div className="min-w-0 flex-1">
-          <h3 id={headingId} className="font-semibold truncate">{p.name}</h3>
+          <CardTitle id={headingId} className="truncate">{p.name}</CardTitle>
           <p className="text-xs text-fg-subtle">{kind?.label ?? p.kind}{kind?.self_hosted && !/self-hosted/i.test(kind.label) ? " · self-hosted" : ""}</p>
         </div>
         <Badge tone={status.tone} className="rounded-full px-2 shrink-0"><status.icon className="size-3" aria-hidden />{status.label}</Badge>
@@ -314,12 +316,13 @@ export default function Providers() {
   const loading = providers.isLoading || kindsQ.isLoading;
   const error = providers.error ?? kindsQ.error;
   const system = kindsQ.data?.system_providers ?? [];
+  // The always-on offline demo provider is listed once, under "Configured via environment" (C-32).
+  const available = kinds.filter((k) => !(k.key === MOCK_PROVIDER && (system.includes(k.key) || providers.data?.some((p) => p.kind === k.key))));
 
   return (
-    <ConnectionsPage>
-      <PageHeader title="LLM providers"
-        description="Connect hosted APIs or self-hosted models. Keys are encrypted at rest and never shown again."
-        actions={<Button variant="primary" icon={Plus} disabled={!kinds.length} onClick={() => setDialog({})}>Connect provider</Button>} />
+    <ConnectionsPage title="LLM providers"
+      description="Connect hosted APIs or self-hosted models. Keys are encrypted at rest and never shown again."
+      actions={<Button variant="primary" icon={Plus} disabled={!kinds.length} onClick={() => setDialog({})}>Connect provider</Button>}>
 
       {loading ? (
         <CardSkeletons count={2} />
@@ -337,9 +340,8 @@ export default function Providers() {
               </div>
             ) : (
               <Card as="div">
-                <EmptyState icon={Cpu} title="No providers connected"
-                  body="Councils use the offline demo model until you connect Anthropic, OpenAI, Gemini, Ollama or another provider."
-                  action={<Button variant="primary" icon={Plus} onClick={() => setDialog({})}>Connect provider</Button>} />
+                <EmptyState titleAs="h3" icon={Cpu} title="No providers connected"
+                  body="Councils use the offline demo model until you connect Anthropic, OpenAI, Gemini, Ollama or another provider." />
               </Card>
             )}
           </section>
@@ -352,7 +354,7 @@ export default function Providers() {
                   <li key={s} className="flex items-center gap-3 rounded-lg border border-dashed border-border-strong bg-surface p-3">
                     <Server className="size-4 text-fg-subtle" aria-hidden />
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate">{s === "mock" ? "Offline demo (mock)" : kindOf(s)?.label ?? s}</p>
+                      <CardTitle as="p" className="truncate">{providerKindLabel(s, kindOf(s))}</CardTitle>
                       <p className="text-xs text-fg-subtle font-mono">{s}</p>
                     </div>
                     <Badge tone="info">Environment</Badge>
@@ -365,12 +367,12 @@ export default function Providers() {
           <section aria-labelledby="catalog-h">
             <SectionTitle id="catalog-h" description="Pick one to prefill the connection form.">Available providers</SectionTitle>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {kinds.map((k) => {
+              {available.map((k) => {
                 const count = providers.data?.filter((p) => p.kind === k.key).length ?? 0;
                 return (
                   <li key={k.key} className="flex items-center gap-3 rounded-lg border border-border bg-surface p-3">
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate">{k.label}</p>
+                      <CardTitle as="p" className="truncate">{providerKindLabel(k.key, k)}</CardTitle>
                       <p className="text-xs text-fg-subtle">
                         {k.self_hosted ? "Self-hosted" : "Hosted"} · {k.requires_api_key ? "API key" : "No key needed"}
                         {count > 0 && ` · ${count} connected`}

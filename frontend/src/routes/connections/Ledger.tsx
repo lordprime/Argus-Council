@@ -3,7 +3,7 @@ import { Fragment, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
-import { Badge, Button, Callout, Card, EmptyState, ErrorState, IconButton, PageHeader, Segmented, SelectField, Skeleton } from "@/components/ui";
+import { Badge, Button, Callout, Card, EmptyState, ErrorState, FilterBar, IconButton, Segmented, SelectField, Skeleton } from "@/components/ui";
 import { entryPurpose, useLedgerPage, useVerifyLedger, type LedgerPurpose } from "@/features/connections/queries";
 import { errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -142,12 +142,12 @@ export default function Ledger() {
   const filtered = protocol !== "all" || purpose !== "all" || Boolean(runId);
 
   return (
-    <ConnectionsPage>
-      <PageHeader title="Protocol ledger"
-        description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus." />
+    <ConnectionsPage title="Protocol ledger"
+      description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus.">
       <div className="flex flex-col gap-4">
         <VerifyPanel />
-        <div className="flex flex-wrap items-end gap-3">
+        <FilterBar label="Filter ledger entries" canClear={filtered}
+          onClear={() => { setProtocol("all"); setPurpose("all"); setRun(""); }}>
           <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
             { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" }, { value: "acp", label: "ACP" },
           ]} />
@@ -155,16 +155,14 @@ export default function Ledger() {
             { value: "all", label: "All" },
             ...(Object.keys(PURPOSE) as LedgerPurpose[]).map((k) => ({ value: k, label: PURPOSE[k].label, hint: PURPOSE[k].hint })),
           ]} />
-          <div className="flex flex-wrap items-end gap-3 sm:ml-auto">
-            <SelectField label="Run" value={runId} onChange={(e) => setRun(e.target.value)} className="w-44 max-w-full">
-              <option value="">All runs</option>
-              {runs.map((r) => <option key={r} value={r}>{r.slice(0, 8)}</option>)}
-            </SelectField>
-            <SelectField label="Show" value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))} className="w-36">
-              {LIMITS.map((n) => <option key={n} value={n}>Latest {n}</option>)}
-            </SelectField>
-          </div>
-        </div>
+          <SelectField label="Run" value={runId} onChange={(e) => setRun(e.target.value)} className="w-full sm:w-44">
+            <option value="">All runs</option>
+            {runs.map((r) => <option key={r} value={r}>{r.slice(0, 8)}</option>)}
+          </SelectField>
+          <SelectField label="Show" value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))} className="w-full sm:w-36">
+            {LIMITS.map((n) => <option key={n} value={n}>Latest {n}</option>)}
+          </SelectField>
+        </FilterBar>
         {runId && (
           <p className="text-sm text-fg-muted flex flex-wrap items-center gap-2">
             Showing calls for run <Link to={`/runs/${runId}`} className="text-accent underline underline-offset-2 font-mono text-xs break-all">{runId}</Link>

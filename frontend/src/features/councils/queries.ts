@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { api, V1 } from "@/lib/api";
+import { MOCK_PROVIDER, MOCK_PROVIDER_LABEL } from "@/lib/providers";
 import { keys, useProviderKinds, useProviders } from "@/lib/queries";
 import type { Council, Member, Mode } from "@/lib/types";
 
@@ -165,9 +166,9 @@ export function useProviderOptions(): { options: ProviderOption[]; isLoading: bo
       if (out.some((o) => o.value === sys)) continue;
       const k = kindOf(sys);
       const models = k?.suggested_models.length ? k.suggested_models : sys === "mock" ? ["mock-1"] : [];
-      out.push({ value: sys, label: sys === "mock" ? "Offline demo (mock)" : `${k?.label ?? sys} (system)`, models });
+      out.push({ value: sys, label: sys === MOCK_PROVIDER ? MOCK_PROVIDER_LABEL : `${k?.label ?? sys} (system)`, models });
     }
-    if (!out.some((o) => o.value === "mock")) out.push({ value: "mock", label: "Offline demo (mock)", models: ["mock-1"] });
+    if (!out.some((o) => o.value === MOCK_PROVIDER)) out.push({ value: MOCK_PROVIDER, label: MOCK_PROVIDER_LABEL, models: ["mock-1"] });
     return out;
   }, [providers.data, kinds.data]);
   return { options, isLoading: providers.isLoading || kinds.isLoading };

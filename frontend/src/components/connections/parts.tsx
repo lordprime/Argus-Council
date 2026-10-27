@@ -1,22 +1,14 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
-import { Button, IconButton, SwitchTrack } from "@/components/ui";
+import { Button, IconButton, SwitchTrack, TagList, touchTarget } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
-/** Small monospace chips (tools, risk tags, models). */
-export function Chips({ items, label, empty = "None", className }: { items: string[]; label: string; empty?: string; className?: string }) {
-  if (!items.length) return <span className="text-sm text-fg-subtle">{empty}</span>;
-  return (
-    <ul aria-label={label} className={cn("flex flex-wrap gap-1", className)}>
-      {items.map((t) => (
-        <li key={t} className="inline-flex items-center h-6 rounded-sm border border-border bg-surface-2 px-1.5 font-mono text-xs text-fg-muted">
-          {t}
-        </li>
-      ))}
-    </ul>
-  );
-}
+/** Small monospace tags (tools, risk tags, models): the shared TagList. */
+export const Chips = TagList;
+
+/** Section headings moved to components/ui; re-exported for existing imports. */
+export { SectionTitle } from "@/components/ui";
 
 /** A definition-list row used inside connection cards. */
 export function Meta({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -90,18 +82,6 @@ export function CardSkeletons({ count = 3, className }: { count?: number; classN
   );
 }
 
-export function SectionTitle({ id, children, actions, description }: { id: string; children: ReactNode; actions?: ReactNode; description?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-2 mb-3">
-      <div>
-        <h2 id={id} className="text-lg">{children}</h2>
-        {description && <p className="text-sm text-fg-muted">{description}</p>}
-      </div>
-      {actions}
-    </div>
-  );
-}
-
 /**
  * Compact switch for list cards. The visible text stays short ("Enabled") while the accessible name carries the
  * object, e.g. "Enabled (code-review)", so a page of cards does not read as a row of identical switches.
@@ -116,7 +96,7 @@ export function Switch({ label = "Enabled", object, checked, onChange, disabled 
   return (
     <button type="button" role="switch" aria-checked={checked} aria-label={`${label} (${object})`} disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="inline-flex items-center gap-2 min-h-6 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+      className={cn("inline-flex items-center gap-2 min-h-6 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed", touchTarget)}>
       <SwitchTrack checked={checked} />
       {label}
     </button>
