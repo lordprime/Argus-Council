@@ -32,9 +32,17 @@ async def app(settings: Settings):
 
 
 async def _reset_state(app) -> None:
+    import asyncio
+
     from argus.cache.store import RedisBackend
     from argus.db.base import Base
 
+    # Quiesce every writer first: on Postgres, DROP TABLE racing a live run or audit write deadlocks.
+    await app.state.runs.shutdown()
+    await app.state.webhooks.drain()
+    while pending := [t for t in app.state.background if not t.done()]:
+        await asyncio.gather(*pending, return_exceptions=True)
+    await app.state.db.engine.dispose()
     async with app.state.db.engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     if isinstance(app.state.cache.backend, RedisBackend):

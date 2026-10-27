@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 
 import httpx
 import pytest
@@ -58,6 +59,8 @@ async def test_webhook_api_and_lifecycle_delivery(client, auth, app):
         await client.post("/api/v1/runs", headers=auth, json={"topic": "hooked", "mode": "chat", "size": 2})
     ).json()
     await wait_status(client, auth, run["id"])
+    # The API can report "completed" a moment before the run task queues its webhook; wait for the task.
+    await app.state.runs.wait(uuid.UUID(run["id"]))
     await app.state.webhooks.drain()
     events = [req.headers["x-argus-event"] for req in seen]
     assert events.count("run.started") == 1 and events.count("run.completed") == 1

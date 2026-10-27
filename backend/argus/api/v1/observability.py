@@ -103,7 +103,8 @@ async def insights(
     approvals: Counter[str] = Counter()
     if run_ids:
         events = await db.execute(
-            select(RunEvent.type, RunEvent.payload).where(
+            select(RunEvent.run_id, RunEvent.type, RunEvent.payload)
+            .where(
                 RunEvent.run_id.in_(run_ids),
                 RunEvent.type.in_(
                     (
@@ -116,9 +117,12 @@ async def insights(
                     )
                 ),
             )
+            # Starts must be seen before completions; without ORDER BY Postgres returns any order.
+            .order_by(RunEvent.run_id, RunEvent.seq)
         )
-        tool_names: dict[str, str] = {}
-        for etype, payload in events:
+        # Tool call ids are only unique within a run.
+        tool_names: dict[tuple[Any, str], str] = {}
+        for run_id, etype, payload in events:
             d = payload.get("data") or {}
             if etype == "thought.completed":
                 key = f"{d.get('provider', '?')}/{d.get('model', '?')}"
@@ -130,9 +134,9 @@ async def insights(
                 )
                 m["latency_ms"] += int(d.get("latency_ms") or 0)
             elif etype == "tool.call.started":
-                tool_names[d.get("tool_call_id", "")] = d.get("tool", "?")
+                tool_names[(run_id, d.get("tool_call_id", ""))] = d.get("tool", "?")
             elif etype == "tool.call.completed":
-                t = tools[tool_names.get(d.get("tool_call_id", ""), "?")]
+                t = tools[tool_names.get((run_id, d.get("tool_call_id", "")), "?")]
                 t["calls"] += 1
                 t["total_ms"] += int(d.get("duration_ms") or 0)
                 if d.get("status") in ("error", "timeout"):

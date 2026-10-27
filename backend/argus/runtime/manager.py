@@ -177,10 +177,7 @@ class RunManager:
                 usage=usage,
                 finished_at=datetime.now(UTC),
             )
-            await ctx.sink.emit("run.status", {"status": status, **({"reason": error} if error else {})})
-            self.live.pop(ctx.run_id, None)
-            RUNS_ACTIVE.dec()
-            RUNS_FINISHED.labels(ctx.mode, status).inc()
+            # Queue the webhook as soon as the terminal status is committed.
             ctx.notify(
                 f"run.{status}",
                 {
@@ -192,6 +189,10 @@ class RunManager:
                     "usage": usage,
                 },
             )
+            await ctx.sink.emit("run.status", {"status": status, **({"reason": error} if error else {})})
+            self.live.pop(ctx.run_id, None)
+            RUNS_ACTIVE.dec()
+            RUNS_FINISHED.labels(ctx.mode, status).inc()
 
     async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
         from argus.services.exports import export_markdown
