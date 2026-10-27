@@ -61,8 +61,10 @@ The first version of the platform.
   that count sub-council spend once.
 - **Security**: SSRF and DNS-rebinding guards on every outbound connection, a sandbox with no
   network that is reached over a Unix socket, server-side logout and session revocation, login
-  throttling that cannot be bypassed with forwarded headers, and admin changes restricted to
-  sessions or full-scope keys.
+  throttling that cannot be bypassed with forwarded headers, admin changes restricted to sessions
+  or full-scope keys, optional TOTP two-factor sign-in with recovery codes, a separate uid for every
+  sandbox execution, capped peer response bodies, and a smoke test that no longer leaves a known
+  admin account behind.
 - **Operations**: `backup.sh` with verified, checksummed backups; `update.sh` rollback that
   restores or downgrades the schema; immutable rollback image tags; a stub-docker test harness and
   a real backup, update, rollback and restore run in CI.
