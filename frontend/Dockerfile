@@ -13,6 +13,11 @@ FROM nginxinc/nginx-unprivileged:stable-alpine AS runtime
 LABEL org.opencontainers.image.title="argus-council-web" \
       org.opencontainers.image.source="https://github.com/lordprime/Argus-Council" \
       org.opencontainers.image.licenses="MIT"
+# Take the base image's OS security fixes at build time (it can lag behind Alpine), and drop curl:
+# nothing here uses it (the healthcheck uses busybox wget), and libcurl goes with it.
+USER root
+RUN apk upgrade --no-cache && if apk info -e curl >/dev/null; then apk del --no-cache curl; fi
+USER 101
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /src/dist /usr/share/nginx/html
 EXPOSE 8080
