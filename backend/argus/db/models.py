@@ -336,6 +336,27 @@ class WebhookDelivery(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class WebhookOutbox(Base):
+    """A webhook delivery not yet final: waiting for its first attempt, a retry, or a lease to expire.
+
+    Rows survive restarts and are removed once the delivery succeeds or gives up (the attempts are
+    logged in ``webhook_deliveries``). ``attempts`` doubles as an optimistic lock when claiming.
+    """
+
+    __tablename__ = "webhook_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), index=True
+    )
+    event: Mapped[str] = mapped_column(String(60))
+    delivery_id: Mapped[str] = mapped_column(String(40))
+    body: Mapped[str] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RunTemplate(IdMixin, TimestampMixin, Base):
     """A saved run configuration whose topic/description may contain ``{{variables}}``."""
 

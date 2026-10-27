@@ -40,6 +40,7 @@ async def _reset_state(app) -> None:
     # Quiesce every writer first: on Postgres, DROP TABLE racing a live run or audit write deadlocks.
     await app.state.runs.shutdown()
     await app.state.webhooks.drain()
+    await app.state.webhooks.shutdown(5)
     while pending := [t for t in app.state.background if not t.done()]:
         await asyncio.gather(*pending, return_exceptions=True)
     await app.state.db.engine.dispose()

@@ -28,8 +28,8 @@ def _check(url: str, events: list[str], settings) -> str:  # type: ignore[no-unt
     return clean
 
 
-def _out(h: Webhook) -> dict[str, Any]:
-    return {
+def _out(h: Webhook, pending: int | None = None) -> dict[str, Any]:
+    out = {
         "id": str(h.id),
         "url": h.url,
         "events": h.events,
@@ -40,6 +40,9 @@ def _out(h: Webhook) -> dict[str, Any]:
         "last_delivery_at": h.last_delivery_at.isoformat() if h.last_delivery_at else None,
         "created_at": h.created_at.isoformat(),
     }
+    if pending is not None:
+        out["pending_deliveries"] = pending  # queued or awaiting a retry
+    return out
 
 
 async def _own(db, owner_id: uuid.UUID, hook_id: uuid.UUID) -> Webhook:
@@ -55,11 +58,16 @@ async def list_events(_: CurrentPrincipal) -> dict:
 
 
 @router.get("")
-async def list_hooks(principal: CurrentPrincipal, db: DbDep) -> dict:
-    rows = await db.execute(
-        select(Webhook).where(Webhook.owner_id == principal.id).order_by(Webhook.created_at)
+async def list_hooks(principal: CurrentPrincipal, db: DbDep, request: Request) -> dict:
+    hooks = list(
+        (
+            await db.execute(
+                select(Webhook).where(Webhook.owner_id == principal.id).order_by(Webhook.created_at)
+            )
+        ).scalars()
     )
-    return {"webhooks": [_out(h) for h in rows.scalars()]}
+    pending = await request.app.state.webhooks.pending_counts([h.id for h in hooks])
+    return {"webhooks": [_out(h, pending.get(h.id, 0)) for h in hooks]}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -111,7 +119,10 @@ async def delete_hook(hook_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep
 @router.post("/{hook_id}/test")
 async def test_hook(hook_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep, request: Request) -> dict:
     hook = await _own(db, principal.id, hook_id)
-    ok = await request.app.state.webhooks.deliver(hook, "ping", {"message": "Hello from Argus Council"})
+    target = (hook.id, hook.url, hook.secret_enc)
+    # Do not hold this request's DB connection across the outbound call.
+    await db.commit()
+    ok = await request.app.state.webhooks.send_test(*target)
     await db.refresh(hook)
     return {"ok": ok, **_out(hook)}
 
