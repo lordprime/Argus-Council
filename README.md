@@ -37,12 +37,15 @@ guardrail breaches, and you can step in and correct the council at any point.
 
 ```bash
 cp deploy/.env.example deploy/.env
-# fill ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, e.g.
+# fill ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN, e.g.
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
-./scripts/smoke.sh http://127.0.0.1:8000
+./scripts/smoke.sh http://127.0.0.1:8080
 ```
+
+Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent protocols
+(`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a strict Content-Security-Policy.
 
 The first account that registers becomes the administrator. Set `ARGUS_ALLOW_REGISTRATION=false` after that.
 
@@ -57,6 +60,13 @@ uv run ruff check . && uv run ruff format --check .
 ```
 
 API docs are served at `http://localhost:8000/docs` outside production.
+
+```bash
+cd frontend
+npm ci
+npm run dev          # http://localhost:5173, proxies /api to localhost:8000
+npm test && npm run lint && npm run typecheck
+```
 
 ## Providers
 
@@ -198,7 +208,9 @@ detects any edit, deletion or reordering.
 - [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
 - [x] M4 Protocols: MCP (server + client), A2A, ACP, hash-chained protocol ledger
 - [x] M5 Modes: coding sandbox, research tools with citations, chat; exporters (txt, md, html, LaTeX, PDF, DOCX, JSON)
-- [ ] M6 Web UI
+- [~] M6 Web UI: shell, auth, run composer, live run workspace (timeline, intercept/correct, approvals, votes,
+  budget meter, inspector, deliverable and exports), command palette; councils, skills, connections and
+  settings pages in progress
 - [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
 
 ## License

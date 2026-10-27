@@ -72,6 +72,8 @@ services:
       ARGUS_SEARCH_PROVIDER: ${ARGUS_SEARCH_PROVIDER:-}
       ARGUS_SEARCH_API_KEY: ${ARGUS_SEARCH_API_KEY:-}
       ARGUS_SEARXNG_URL: ${ARGUS_SEARXNG_URL:-}
+      # Only the web proxy (and localhost) reach the API, so trust its X-Forwarded-For for client IPs.
+      FORWARDED_ALLOW_IPS: "*"
       # System-wide LLM providers (users can also add their own in the UI)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -92,6 +94,21 @@ services:
     deploy:
       resources:
         limits: { cpus: "2", memory: 1g }
+
+  web:
+    <<: *hardening
+    build:
+      context: ../frontend
+    image: argus-council/web:${ARGUS_VERSION:-latest}
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [frontend]
+    ports: ["${ARGUS_WEB_BIND:-0.0.0.0}:${ARGUS_WEB_PORT:-8080}:8080"]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
 
   sandbox:
     <<: *hardening

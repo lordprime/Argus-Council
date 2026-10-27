@@ -1,0 +1,82 @@
+/* Design tokens (docs/design/ui-spec.md §7). RGB triplets so Tailwind can apply alpha. */
+:root {
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --canvas: 246 247 249;
+  --surface: 255 255 255;
+  --surface-2: 240 242 245;
+  --surface-3: 230 233 238;
+  --border: 220 224 230;
+  --border-strong: 138 147 163;
+  --text: 17 24 39;
+  --text-muted: 75 85 99;
+  --text-subtle: 95 104 120;
+  --accent: 67 56 202;
+  --accent-hover: 55 48 163;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 238 240 255;
+  --focus-ring: 67 56 202;
+  --success: 4 120 87;
+  --success-subtle: 231 246 239;
+  --warning: 180 83 9;
+  --warning-subtle: 254 243 226;
+  --danger: 185 28 28;
+  --danger-subtle: 253 236 236;
+  --info: 3 105 161;
+  --info-subtle: 230 243 250;
+  --neutral: 75 85 99;
+  --neutral-subtle: 240 242 245;
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow-2: 0 4px 12px rgb(16 24 40 / 0.1);
+  --shadow-3: 0 12px 32px rgb(16 24 40 / 0.18);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  color-scheme: light;
+}
+
+
+:root[data-theme="dark"] {
+  --canvas: 11 13 18;
+  --surface: 18 21 28;
+  --surface-2: 26 30 39;
+  --surface-3: 35 40 53;
+  --border: 42 48 60;
+  --border-strong: 90 100 118;
+  --text: 231 233 238;
+  --text-muted: 170 177 189;
+  --text-subtle: 140 149 165;
+  --accent: 139 147 248;
+  --accent-hover: 165 172 250;
+  --accent-fg: 11 13 18;
+  --accent-subtle: 30 33 64;
+  --focus-ring: 165 172 250;
+  --success: 52 211 153;
+  --success-subtle: 15 42 32;
+  --warning: 251 191 36;
+  --warning-subtle: 46 36 16;
+  --danger: 248 113 113;
+  --danger-subtle: 58 21 23;
+  --info: 56 189 248;
+  --info-subtle: 14 36 51;
+  --neutral: 170 177 189;
+  --neutral-subtle: 26 30 39;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-2: 0 4px 12px rgb(0 0 0 / 0.4);
+  --shadow-3: 0 12px 32px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+:root[data-motion="reduced"] {
+  --dur-fast: 0ms;
+  --dur-base: 0ms;
+  --dur-slow: 0ms;
+}

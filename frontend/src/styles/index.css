@@ -1,0 +1,58 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-canvas text-fg font-sans text-base antialiased;
+  }
+  body {
+    @apply min-h-screen bg-canvas;
+  }
+  :focus-visible {
+    outline: 2px solid rgb(var(--focus-ring));
+    outline-offset: 2px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline-color: Highlight;
+    }
+  }
+}
+
+@layer components {
+  .prose-argus {
+    @apply text-md leading-relaxed;
+  }
+  .prose-argus h1 { @apply text-2xl mt-6 mb-3; }
+  .prose-argus h2 { @apply text-xl mt-6 mb-2; }
+  .prose-argus h3 { @apply text-lg mt-4 mb-2; }
+  .prose-argus p { @apply my-3; }
+  .prose-argus ul { @apply list-disc pl-6 my-3; }
+  .prose-argus ol { @apply list-decimal pl-6 my-3; }
+  .prose-argus code { @apply font-mono text-sm bg-surface-2 rounded-sm px-1; }
+  .prose-argus pre { @apply bg-surface-2 rounded-lg p-3 overflow-auto my-3; }
+  .prose-argus pre code { @apply bg-transparent p-0; }
+  .prose-argus a { @apply text-accent underline underline-offset-2; }
+  .prose-argus blockquote { @apply border-l-4 border-border pl-4 text-fg-muted my-3; }
+  .prose-argus table { @apply border-collapse my-3 block overflow-x-auto; }
+  .prose-argus th, .prose-argus td { @apply border border-border px-2 py-1 text-left; }
+}
+
+@keyframes argus-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-enter { animation: argus-enter var(--dur-fast) var(--ease-out); }
+@keyframes argus-blink { 50% { opacity: 0; } }
+.caret::after { content: "▍"; animation: argus-blink 1s steps(1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter, .caret::after, .animate-spin, .animate-pulse { animation: none !important; }
+}
