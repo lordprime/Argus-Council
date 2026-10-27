@@ -28,6 +28,10 @@ class Database:
             def _fk_on(dbapi_conn, _record):  # type: ignore[no-untyped-def]
                 cur = dbapi_conn.cursor()
                 cur.execute("PRAGMA foreign_keys=ON")
+                # Dev/test only: WAL lets readers proceed during writes; wait instead of failing on locks.
+                cur.execute("PRAGMA busy_timeout=30000")
+                if ":memory:" not in url:
+                    cur.execute("PRAGMA journal_mode=WAL")
                 cur.close()
 
         self.sessionmaker = async_sessionmaker(self.engine, expire_on_commit=False)

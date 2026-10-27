@@ -201,6 +201,35 @@ ledger. Each entry holds SHA-256 digests of the request and response, the peer, 
 run, with `hash = sha256(prev_hash ‖ entry)`. `GET /api/v1/ledger` lists entries and `GET /api/v1/ledger/verify`
 detects any edit, deletion or reordering.
 
+## Integrating with the API
+
+**Webhooks.** Register an HTTPS endpoint with `POST /api/v1/webhooks` (`url`, `events`) to be notified of
+`run.started`, `run.completed`, `run.failed`, `run.halted`, `run.cancelled` and `approval.requested`
+(`GET /api/v1/webhooks/events` lists them). The signing secret is shown once at creation; rotate it with
+`POST /webhooks/{id}/rotate-secret` and send a test with `POST /webhooks/{id}/test`. Each delivery carries:
+
+```
+X-Argus-Event: run.completed
+X-Argus-Delivery: <id, stable across retries>
+X-Argus-Signature: t=<unix ts>,v1=<hex HMAC-SHA256(secret, "<ts>.<raw body>")>
+```
+
+Verify the signature over the raw body and reject old timestamps. Failed deliveries are retried after 1s, 5s
+and 30s; an endpoint that fails 20 times in a row is disabled. `GET /webhooks/{id}/deliveries` shows the
+recent attempts. Private and loopback addresses are refused.
+
+**Idempotent run creation.** Send `Idempotency-Key: <unique string>` with `POST /api/v1/runs` to make
+retries safe. A repeat with the same key and body within 24 hours returns the original response with
+`Idempotent-Replayed: true`. The same key with a different body, or while the first request is still in flight,
+returns `409`.
+
+**Pagination.** `GET /api/v1/runs` returns newest first; pass the last run's `created_at` as `?before=` for
+the next page. `GET /api/v1/audit` uses `?before_id=`.
+
+**API keys.** Every key can read. Writes need a scope: `runs:write`, `councils:write`, `providers:write`,
+`skills:write`, `connections:write`, `webhooks:write`, or `*` for all of them. A key with no scopes (or `read`)
+is read-only. Creating or revoking keys and changing the password need a signed-in session, never a key.
+
 ## Observability
 
 - **Metrics**: `GET /metrics` (Prometheus) covers HTTP traffic and latency, runs started/finished/active, LLM

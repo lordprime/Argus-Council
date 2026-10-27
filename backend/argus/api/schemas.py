@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from argus.core.security import WRITE_SCOPES
+
 CouncilMode = Literal["general", "research", "coding", "chat"]
 
 
@@ -60,8 +62,18 @@ class ProfilePatch(BaseModel):
 
 class ApiKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    scopes: list[str] = Field(default_factory=lambda: ["*"])
+    scopes: list[str] = Field(default_factory=lambda: ["*"], max_length=20)
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+    @field_validator("scopes")
+    @classmethod
+    def _known_scopes(cls, v: list[str]) -> list[str]:
+        # "read" is accepted as an explicit marker for read-only keys; it grants nothing extra.
+        allowed = {"*", "read", *WRITE_SCOPES}
+        unknown = sorted(set(v) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown scopes: {', '.join(unknown)}. Allowed: {', '.join(sorted(allowed))}")
+        return sorted(set(v))
 
 
 class ApiKeyOut(ORM):
@@ -345,4 +357,19 @@ class RemoteAgentPatch(BaseModel):
     url: str | None = Field(default=None, max_length=500)
     token: str | None = Field(default=None, max_length=4000)
     description: str | None = Field(default=None, max_length=2000)
+    enabled: bool | None = None
+
+
+# ---------------------------------------------------------------- webhooks
+class WebhookIn(BaseModel):
+    url: str = Field(max_length=500)
+    events: list[str] = Field(min_length=1, max_length=20)
+    description: str = Field(default="", max_length=200)
+    enabled: bool = True
+
+
+class WebhookPatch(BaseModel):
+    url: str | None = Field(default=None, max_length=500)
+    events: list[str] | None = Field(default=None, min_length=1, max_length=20)
+    description: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None

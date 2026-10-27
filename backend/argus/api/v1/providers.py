@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
-from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep
+from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep, write_scope
 from argus.api.schemas import CompleteIn, ProviderConfigIn, ProviderConfigOut, ProviderConfigPatch
 from argus.core.crypto import SecretBox
 from argus.core.errors import ArgusError, Conflict, NotFound
@@ -15,7 +15,7 @@ from argus.providers.catalog import KINDS
 from argus.providers.types import CompletionRequest, Message
 from argus.services.llm import LLMRouter, Route, validate_base_url
 
-router = APIRouter(tags=["providers"])
+router = APIRouter(tags=["providers"], dependencies=[write_scope("providers:write")])
 
 
 class UpstreamError(ArgusError):

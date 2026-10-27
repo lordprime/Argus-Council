@@ -18,6 +18,15 @@ from argus.core.errors import Unauthorized
 
 _hasher = PasswordHasher()
 _ALGORITHM = "HS256"
+# Scopes an API key can hold. Reads need no scope; each router's state-changing routes need its scope.
+WRITE_SCOPES = (
+    "runs:write",
+    "councils:write",
+    "providers:write",
+    "skills:write",
+    "connections:write",
+    "webhooks:write",
+)
 API_KEY_PREFIX = "argus_"
 
 TokenType = Literal["access", "refresh"]

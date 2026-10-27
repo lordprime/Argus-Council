@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 
-from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep
+from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep, write_scope
 from argus.api.schemas import McpServerIn, McpServerPatch, RemoteAgentIn, RemoteAgentPatch
 from argus.core.crypto import SecretBox
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound
@@ -20,7 +20,7 @@ from argus.services import ledger
 from argus.services.connections import connect_mcp
 from argus.services.llm import validate_base_url
 
-router = APIRouter(tags=["connections"])
+router = APIRouter(tags=["connections"], dependencies=[write_scope("connections:write")])
 
 
 class UpstreamError(ArgusError):

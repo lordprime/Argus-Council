@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Request, status
 from sqlalchemy import func, select
 
-from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep
+from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SessionPrincipal, SettingsDep
 from argus.api.schemas import (
     ApiKeyCreated,
     ApiKeyIn,
@@ -18,7 +18,7 @@ from argus.api.schemas import (
     TokenOut,
     UserOut,
 )
-from argus.core.errors import Conflict, Forbidden, NotFound, RateLimited, Unauthorized
+from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound, RateLimited, Unauthorized
 from argus.core.security import (
     create_token,
     decode_token,
@@ -30,6 +30,11 @@ from argus.core.security import (
 from argus.db.models import ApiKey, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class InvalidPassword(ArgusError):
+    code = "invalid_password"
+
 
 # Equalise timing between unknown-user and wrong-password paths.
 _DUMMY_HASH = hash_password("argus-timing-equaliser-password")
@@ -109,6 +114,8 @@ async def me(principal: CurrentPrincipal):
 @router.patch("/me", response_model=UserOut)
 async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrincipal, cache: CacheDep):
     user = principal.user
+    if data.new_password is not None and principal.via != "jwt":
+        raise Forbidden("API keys cannot change the account password")
     if data.display_name is not None:
         user.display_name = data.display_name.strip()
     if data.new_password is not None:
@@ -116,7 +123,8 @@ async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrin
             raise Forbidden("Passwords cannot be changed with an API key")
         await _throttle(cache, request, "password")
         if not verify_password(data.current_password or "", user.password_hash):
-            raise Unauthorized("Current password is incorrect")
+            # 400, not 401: the session is valid; only the confirmation is wrong.
+            raise InvalidPassword("Current password is incorrect")
         user.password_hash = hash_password(data.new_password)
     return user
 
@@ -128,9 +136,7 @@ async def list_keys(principal: CurrentPrincipal, db: DbDep):
 
 
 @router.post("/api-keys", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
-async def create_key(data: ApiKeyIn, principal: CurrentPrincipal, db: DbDep):
-    if principal.via == "api_key":
-        raise Forbidden("API keys cannot mint new API keys")
+async def create_key(data: ApiKeyIn, principal: SessionPrincipal, db: DbDep):
     plaintext, prefix, digest = generate_api_key()
     key = ApiKey(
         user_id=principal.id,
@@ -146,7 +152,7 @@ async def create_key(data: ApiKeyIn, principal: CurrentPrincipal, db: DbDep):
 
 
 @router.delete("/api-keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_key(key_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+async def revoke_key(key_id: uuid.UUID, principal: SessionPrincipal, db: DbDep):
     key = await db.get(ApiKey, key_id)
     if key is None or key.user_id != principal.id:
         raise NotFound("API key not found")

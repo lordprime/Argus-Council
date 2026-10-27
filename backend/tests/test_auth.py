@@ -110,7 +110,7 @@ async def test_update_profile_and_password(client, auth):
         headers=auth,
         json={"current_password": "wrong", "new_password": "brand new password!"},
     )
-    assert r.status_code == 401
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_password"
     r = await client.patch(
         "/api/v1/auth/me",
         headers=auth,
@@ -141,3 +141,52 @@ async def test_api_key_cannot_change_password(client, auth):
         json={"current_password": "correct horse battery staple", "new_password": "brand new password!"},
     )
     assert r.status_code == 403
+
+
+async def test_empty_scopes_are_read_only(client, auth):
+    key = (
+        await client.post("/api/v1/auth/api-keys", json={"name": "ro", "scopes": []}, headers=auth)
+    ).json()["key"]
+    kh = {"X-API-Key": key}
+    assert (await client.get("/api/v1/runs", headers=kh)).status_code == 200
+    r = await client.post("/api/v1/runs", headers=kh, json={"topic": "x", "mode": "chat", "size": 2})
+    assert r.status_code == 403
+    r = await client.post("/api/v1/providers", headers=kh, json={"name": "p", "kind": "mock"})
+    assert r.status_code == 403
+
+
+async def test_write_scopes_cover_every_router(client, auth):
+    async def key(scopes):
+        r = await client.post("/api/v1/auth/api-keys", json={"name": "k", "scopes": scopes}, headers=auth)
+        assert r.status_code == 201, r.text
+        return {"X-API-Key": r.json()["key"]}
+
+    runs_only = await key(["runs:write"])
+    council = {"name": "c", "members": [{"name": "a", "role": "worker", "provider": "mock", "model": "mock"}]}
+    assert (await client.post("/api/v1/councils", json=council, headers=runs_only)).status_code == 403
+    hook = {"url": "https://example.com/hook", "events": ["run.completed"]}
+    assert (await client.post("/api/v1/webhooks", json=hook, headers=runs_only)).status_code == 403
+    assert (await client.get("/api/v1/councils", headers=runs_only)).status_code == 200
+    # Validation changes nothing, so it needs no write scope.
+    r = await client.post("/api/v1/skills/validate", json={"skill_md": "x"}, headers=runs_only)
+    assert r.status_code == 200
+    councils = await key(["councils:write"])
+    r = await client.post("/api/v1/councils", json=council, headers=councils)
+    assert r.status_code == 201, r.text
+
+
+async def test_api_keys_cannot_manage_the_account(client, auth):
+    r = await client.post("/api/v1/auth/api-keys", json={"name": "k", "scopes": ["*"]}, headers=auth)
+    full = {"X-API-Key": r.json()["key"]}
+    key_id = r.json()["id"]
+    assert (await client.post("/api/v1/auth/api-keys", json={"name": "x"}, headers=full)).status_code == 403
+    assert (await client.delete(f"/api/v1/auth/api-keys/{key_id}", headers=full)).status_code == 403
+    r = await client.patch(
+        "/api/v1/auth/me", headers=full, json={"current_password": "x", "new_password": "brand new password!"}
+    )
+    assert r.status_code == 403
+
+
+async def test_unknown_scope_rejected(client, auth):
+    r = await client.post("/api/v1/auth/api-keys", json={"name": "k", "scopes": ["admin"]}, headers=auth)
+    assert r.status_code == 422

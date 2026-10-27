@@ -7,14 +7,16 @@ from fastapi import APIRouter, File, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 
-from argus.api.deps import CurrentPrincipal, DbDep
+from argus.api.deps import CurrentPrincipal, DbDep, write_scope
 from argus.api.schemas import SkillIn, SkillPatch
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound
 from argus.db.models import Skill
 from argus.skills.library import builtin_skills, from_row
 from argus.skills.package import SkillError, SkillPackage, load_zip, parse_skill_md, validate_files
 
-router = APIRouter(prefix="/skills", tags=["skills"])
+router = APIRouter(
+    prefix="/skills", tags=["skills"], dependencies=[write_scope("skills:write", exempt=("/validate",))]
+)
 
 MAX_UPLOAD = 8 * 1024 * 1024
 

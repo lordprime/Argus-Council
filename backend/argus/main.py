@@ -17,7 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, connections, councils, health, observability, providers, runs, skills
+from argus.api.v1 import auth, connections, councils, health, observability, providers, runs, skills, webhooks
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
@@ -31,6 +31,7 @@ from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.audit import audit
 from argus.services.llm import LLMRouter
+from argus.services.webhooks import WebhookDispatcher
 
 log = get_logger(__name__)
 
@@ -94,13 +95,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await _bootstrap_admin(app, settings)
         backend = app.state.cache.backend
         app.state.broker = build_broker(backend.client if isinstance(backend, RedisBackend) else None)
-        app.state.runs = RunManager(settings, app.state.db.sessionmaker, app.state.broker, app.state.llm)
+        app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
+        app.state.runs = RunManager(
+            settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
+        )
         await app.state.runs.recover()
         log.info("argus.started", env=settings.env, version=__version__)
         try:
             yield
         finally:
             await app.state.runs.shutdown()
+            await app.state.webhooks.drain()
             if app.state.background:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
             await app.state.broker.close()
@@ -123,8 +128,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID", "Idempotency-Key"],
+        expose_headers=["X-Request-ID", "Idempotent-Replayed"],
     )
 
     @app.middleware("http")
@@ -199,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(skills.router, prefix=api)
     app.include_router(connections.router, prefix=api)
     app.include_router(observability.router, prefix=api)
+    app.include_router(webhooks.router, prefix=api)
     # Agent protocols
     app.include_router(mcp_server.router)
     app.include_router(a2a.router)

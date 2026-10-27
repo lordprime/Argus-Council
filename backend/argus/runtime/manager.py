@@ -50,7 +50,9 @@ class RunManager:
         broker: Broker,
         llm: LLMRouter,
         tool_factory: Any = None,
+        webhooks: Any = None,
     ) -> None:
+        self.webhooks = webhooks
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.broker = broker
@@ -101,6 +103,9 @@ class RunManager:
             sessionmaker=self.sessionmaker,
             blob_root=self.blob_root,
         )
+        if self.webhooks is not None:
+            owner = run.owner_id
+            ctx.notify = lambda event, data: self.webhooks.emit(owner, event, data)
         skills = await skills_for_owner(self.sessionmaker, run.owner_id)
         ctx.skills = {
             n: p for n, p in skills.items() if skill_permitted(n, rails.skills.allow, rails.skills.deny)
@@ -128,6 +133,7 @@ class RunManager:
         ctx = live.ctx
         status, error, result = "completed", None, ""
         RUNS_STARTED.labels(ctx.mode).inc()
+        ctx.notify("run.started", {"run_id": str(ctx.run_id), "topic": ctx.topic, "mode": ctx.mode})
         RUNS_ACTIVE.inc()
         await self._set(ctx.run_id, status="running", started_at=datetime.now(UTC))
         await ctx.sink.emit("run.status", {"status": "running"})
@@ -175,6 +181,17 @@ class RunManager:
             self.live.pop(ctx.run_id, None)
             RUNS_ACTIVE.dec()
             RUNS_FINISHED.labels(ctx.mode, status).inc()
+            ctx.notify(
+                f"run.{status}",
+                {
+                    "run_id": str(ctx.run_id),
+                    "topic": ctx.topic,
+                    "mode": ctx.mode,
+                    "status": status,
+                    "error": error,
+                    "usage": usage,
+                },
+            )
 
     async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
         from argus.services.exports import export_markdown

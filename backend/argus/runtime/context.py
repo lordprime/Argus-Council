@@ -292,6 +292,8 @@ class RunContext:
         self.by_member: dict[str, dict[str, float]] = defaultdict(lambda: {"usd": 0.0, "tokens": 0})
         self.extra: dict[str, Any] = {}
         self.skills: dict[str, Any] = {}  # name -> SkillPackage available to this run
+        # External notification hook (webhooks); set by the run manager.
+        self.notify: Any = lambda event, data: None
 
     # -------------------------------------------------- control flow
     async def checkpoint(self, member_id: str | None = None) -> None:
@@ -325,6 +327,10 @@ class RunContext:
         aid = f"apr_{uuid.uuid4().hex[:12]}"
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.approvals[aid] = Approval(aid, member.member_id or "", summary, risk, fut)
+        self.notify(
+            "approval.requested",
+            {"run_id": str(self.run_id), "approval_id": aid, "summary": summary, "risk": risk},
+        )
         await self.sink.emit(
             "approval.requested",
             {

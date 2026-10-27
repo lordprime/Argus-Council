@@ -253,3 +253,36 @@ class AuditEvent(Base):
     ip: Mapped[str] = mapped_column(String(64), default="")
     user_agent: Mapped[str] = mapped_column(String(200), default="")
     detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class Webhook(IdMixin, TimestampMixin, Base):
+    """An outbound HTTPS endpoint notified of run events, signed with a per-hook secret."""
+
+    __tablename__ = "webhooks"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    events: Mapped[list[Any]] = mapped_column(default=list)
+    secret_enc: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(String(200), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_status: Mapped[str] = mapped_column(String(40), default="")
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), index=True
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event: Mapped[str] = mapped_column(String(60))
+    delivery_id: Mapped[str] = mapped_column(String(40))
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str] = mapped_column(String(300), default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)

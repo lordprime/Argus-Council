@@ -5,11 +5,11 @@ import uuid
 from fastapi import APIRouter, status
 
 from argus.agents.roles import DEFAULT_ROSTERS, ROLES
-from argus.api.deps import CurrentPrincipal, DbDep
+from argus.api.deps import CurrentPrincipal, DbDep, write_scope
 from argus.api.schemas import CouncilIn, CouncilOut, CouncilPatch, MemberIn, MemberOut, MemberPatch, ResizeIn
 from argus.services import councils as svc
 
-router = APIRouter(tags=["councils"])
+router = APIRouter(tags=["councils"], dependencies=[write_scope("councils:write")])
 
 
 @router.get("/roles")

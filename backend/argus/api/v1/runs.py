@@ -12,7 +12,8 @@ from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from sqlalchemy import select
 
-from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal
+from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
+from argus.api.idempotency import idempotent
 from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunDetail, RunIn, RunOut
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
@@ -21,7 +22,10 @@ from argus.runtime.manager import RunManager
 from argus.runtime.snapshot import reduce_events
 from argus.services.runs import create_and_start_run
 
-router = APIRouter(prefix="/runs", tags=["runs"])
+# stream-ticket only grants read access to a run's own event stream.
+router = APIRouter(
+    prefix="/runs", tags=["runs"], dependencies=[write_scope("runs:write", exempt=("/stream-ticket",))]
+)
 
 TICKET_TTL_S = 300
 HEARTBEAT_S = 15.0
@@ -39,9 +43,13 @@ async def _own_run(db, owner_id: uuid.UUID, run_id: uuid.UUID) -> Run:
 
 
 @router.post("", response_model=RunOut, status_code=status.HTTP_201_CREATED)
-async def create_run(data: RunIn, principal: CurrentPrincipal, db: DbDep, request: Request):
+async def create_run(data: RunIn, principal: CurrentPrincipal, db: DbDep, request: Request, cache: CacheDep):
     principal.require_scope("runs:write")
-    return await create_and_start_run(db, _manager(request), principal.id, data)
+
+    async def run() -> RunOut:
+        return RunOut.model_validate(await create_and_start_run(db, _manager(request), principal.id, data))
+
+    return await idempotent(request, cache, str(principal.id), 201, run)
 
 
 @router.get("", response_model=list[RunOut])
@@ -50,9 +58,12 @@ async def list_runs(
     db: DbDep,
     status_: str | None = Query(default=None, alias="status"),
     mode: str | None = None,
+    before: datetime | None = Query(default=None, description="Cursor: return runs created before this time"),
     limit: int = Query(default=50, ge=1, le=200),
 ):
     q = select(Run).where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
+    if before:
+        q = q.where(Run.created_at < before)
     if status_:
         q = q.where(Run.status == status_)
     if mode:

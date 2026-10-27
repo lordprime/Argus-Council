@@ -36,7 +36,9 @@ def get_cache(request: Request) -> Cache:
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
-DbDep = Annotated[AsyncSession, Depends(get_db)]
+# scope="function": commit before the response is sent, so clients never observe a 2xx for an
+# uncommitted write (e.g. create-then-immediately-delete).
+DbDep = Annotated[AsyncSession, Depends(get_db, scope="function")]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 
 
@@ -68,7 +70,9 @@ async def _principal_from_api_key(db: AsyncSession, token: str) -> Principal:
     if user is None or not user.is_active:
         raise Unauthorized("Inactive user")
     key.last_used_at = now
-    return Principal(user=user, via="api_key", scopes=set(key.scopes or ["*"]))
+    # An empty scope list means "no write scopes" (read-only), never full access.
+    scopes = {"*"} if key.scopes is None else set(key.scopes)
+    return Principal(user=user, via="api_key", scopes=scopes)
 
 
 async def resolve_principal(db: AsyncSession, settings: Settings, token: str) -> Principal:
@@ -92,6 +96,10 @@ async def get_principal(
     cache: CacheDep,
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Principal:
+    # Memoised so the router-level scope check and the endpoint share one lookup and one rate-limit hit.
+    cached = getattr(request.state, "principal", None)
+    if cached is not None:
+        return cached
     token = creds.credentials if creds else request.headers.get("X-API-Key")
     if not token:
         raise Unauthorized("Authentication required")
@@ -99,10 +107,47 @@ async def get_principal(
     request.state.actor_id = principal.id
     if await cache.hit_rate_limit(f"user:{principal.id}", settings.rate_limit_per_minute):
         raise RateLimited("Too many requests")
+    request.state.principal = principal
     return principal
 
 
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def write_scope(scope: str, *, exempt: tuple[str, ...] = ()) -> object:
+    """Router dependency: every state-changing method on the router needs `scope`.
+
+    Reads are left to the endpoint's own auth (some, like the SSE stream, use a ticket instead).
+    `exempt` lists route-path suffixes for POSTs that change nothing, such as validation.
+    """
+
+    async def check(
+        request: Request,
+        db: DbDep,
+        settings: SettingsDep,
+        cache: CacheDep,
+        creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    ) -> None:
+        if request.method in _SAFE_METHODS:
+            return
+        if exempt and getattr(request.scope.get("route"), "path", "").endswith(exempt):
+            return
+        principal = await get_principal(request, db, settings, cache, creds)
+        principal.require_scope(scope)
+
+    return Depends(check)
+
+
+async def require_session(principal: CurrentPrincipal) -> Principal:
+    """Account management (keys, password) needs an interactive sign-in, never an API key."""
+    if principal.via != "jwt":
+        raise Forbidden("This action requires signing in; API keys cannot manage the account")
+    return principal
+
+
+SessionPrincipal = Annotated[Principal, Depends(require_session)]
 
 
 async def require_admin(principal: CurrentPrincipal) -> Principal:
