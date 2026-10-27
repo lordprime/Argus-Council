@@ -66,7 +66,9 @@ class WebhookDispatcher:
         self.box = SecretBox(settings)
         self.client_factory = client_factory or (
             lambda: guarded_client(
-                settings.connections_allow_private_urls, timeout=httpx.Timeout(10.0, connect=5.0)
+                settings.connections_allow_private_urls,
+                max_response_bytes=64 * 1024,  # the body is never used; only the status code
+                timeout=httpx.Timeout(10.0, connect=5.0),
             )
         )
         self.sleep = sleep

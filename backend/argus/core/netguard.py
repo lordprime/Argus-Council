@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpcore
@@ -56,10 +57,20 @@ class GuardedBackend(httpcore.AsyncNetworkBackend):
     """httpcore network backend that vets every resolved address before connecting."""
 
     def __init__(
-        self, allow_private: bool = False, inner: httpcore.AsyncNetworkBackend | None = None
+        self,
+        allow_private: bool = False,
+        inner: httpcore.AsyncNetworkBackend | None = None,
+        *,
+        core: Any = httpcore,
     ) -> None:
+        # ``core`` is httpcore, or httpcore2 (the fork the Anthropic SDK's httpx2 is built on);
+        # both expose the same backend interface and ConnectError, which their httpx maps.
         self.allow_private = allow_private
-        self.inner = inner or httpcore.AnyIOBackend()
+        self.core = core
+        self.inner = inner or core.AnyIOBackend()
+
+    def _blocked(self, message: str) -> Exception:
+        return BlockedDestination(message) if self.core is httpcore else self.core.ConnectError(message)
 
     async def _resolve(self, host: str, port: int) -> list[str]:
         try:
@@ -70,7 +81,7 @@ class GuardedBackend(httpcore.AsyncNetworkBackend):
         try:
             infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         except OSError as exc:
-            raise httpcore.ConnectError(f"Could not resolve {host}") from exc
+            raise self.core.ConnectError(f"Could not resolve {host}") from exc
         return list(dict.fromkeys(str(info[4][0]) for info in infos))
 
     async def connect_tcp(
@@ -83,16 +94,66 @@ class GuardedBackend(httpcore.AsyncNetworkBackend):
     ) -> httpcore.AsyncNetworkStream:
         ips = await self._resolve(host, port)
         if not ips or any(ip_blocked(ip, self.allow_private) for ip in ips):
-            raise BlockedDestination(f"Destination {host} resolves to a disallowed address")
+            raise self._blocked(f"Destination {host} resolves to a disallowed address")
         return await self.inner.connect_tcp(
             ips[0], port, timeout=timeout, local_address=local_address, socket_options=socket_options
         )
 
     async def connect_unix_socket(self, *args: Any, **kwargs: Any) -> httpcore.AsyncNetworkStream:
-        raise BlockedDestination("Unix sockets are not reachable through a guarded client")
+        raise self._blocked("Unix sockets are not reachable through a guarded client")
 
     async def sleep(self, seconds: float) -> None:
         await self.inner.sleep(seconds)
+
+
+DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+class ResponseTooLarge(httpx.TransportError):
+    """The peer sent more than the configured number of body bytes."""
+
+
+class _CappedStream(httpx.AsyncByteStream):
+    def __init__(self, inner: httpx.AsyncByteStream, limit: int, request: httpx.Request) -> None:
+        self.inner = inner
+        self.limit = limit
+        self.request = request
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        seen = 0
+        async for chunk in self.inner:
+            seen += len(chunk)
+            if seen > self.limit:
+                raise ResponseTooLarge(f"Response body exceeds {self.limit} bytes", request=self.request)
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+class CappedTransport(httpx.AsyncBaseTransport):
+    """Wraps a transport so no response body larger than ``max_bytes`` is ever buffered.
+
+    The limit is enforced while streaming (a lying or absent ``Content-Length`` does not help), and a
+    declared length above the limit is refused before any body byte is read.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, max_bytes: int) -> None:
+        self.inner = inner
+        self.max_bytes = max_bytes
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self.inner.handle_async_request(request)
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > self.max_bytes:
+            await response.aclose()
+            raise ResponseTooLarge(f"Response body exceeds {self.max_bytes} bytes", request=request)
+        assert isinstance(response.stream, httpx.AsyncByteStream)
+        response.stream = _CappedStream(response.stream, self.max_bytes, request)
+        return response
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
 
 
 def guarded_transport(allow_private: bool = False) -> httpx.AsyncHTTPTransport:
@@ -105,10 +166,30 @@ def guarded_transport(allow_private: bool = False) -> httpx.AsyncHTTPTransport:
     return transport
 
 
-def guarded_client(allow_private: bool = False, **kwargs: Any) -> httpx.AsyncClient:
+def guarded_client(
+    allow_private: bool = False, *, max_response_bytes: int | None = None, **kwargs: Any
+) -> httpx.AsyncClient:
     """An ``httpx.AsyncClient`` that only connects to allowed addresses and never follows redirects.
 
-    Environment proxies are ignored (``trust_env=False``): a proxy would hide the real destination.
+    ``max_response_bytes`` caps every response body. Environment proxies are ignored
+    (``trust_env=False``): a proxy would hide the real destination.
     """
     kwargs.setdefault("follow_redirects", False)
-    return httpx.AsyncClient(transport=guarded_transport(allow_private), trust_env=False, **kwargs)
+    transport: httpx.AsyncBaseTransport = guarded_transport(allow_private)
+    if max_response_bytes is not None:
+        transport = CappedTransport(transport, max_response_bytes)
+    return httpx.AsyncClient(transport=transport, trust_env=False, **kwargs)
+
+
+def guarded_httpx2_client(allow_private: bool = False, **kwargs: Any) -> Any:
+    """The same guard for the ``httpx2`` client the Anthropic SDK requires (``http_client=``)."""
+    import httpcore2
+    import httpx2
+
+    transport = httpx2.AsyncHTTPTransport()
+    transport._pool = httpcore2.AsyncConnectionPool(
+        ssl_context=httpx2.create_ssl_context(),
+        network_backend=GuardedBackend(allow_private, core=httpcore2),
+    )
+    kwargs.setdefault("follow_redirects", False)
+    return httpx2.AsyncClient(transport=transport, trust_env=False, **kwargs)

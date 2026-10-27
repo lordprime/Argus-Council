@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import httpx
+
+from argus.core.netguard import guarded_client, guarded_httpx2_client
 from argus.providers.anthropic import AnthropicProvider
 from argus.providers.base import Provider
 from argus.providers.gemini import GeminiProvider
 from argus.providers.mock import MockProvider
 from argus.providers.openai_compat import OpenAICompatProvider
+
+PROVIDER_TIMEOUT_S = 600.0
 
 
 @dataclass(frozen=True)
@@ -86,7 +91,14 @@ def build_provider(
     api_key: str | None = None,
     base_url: str | None = None,
     options: dict | None = None,
+    guard_private: bool | None = None,
 ) -> Provider:
+    """Build a provider client.
+
+    ``guard_private`` routes the client through :mod:`argus.core.netguard` (connect-time SSRF check,
+    ``True`` = private networks allowed, link-local never). ``None`` leaves it unguarded, which is
+    for operator-configured system providers only.
+    """
     spec = KINDS.get(kind)
     if spec is None:
         raise ValueError(f"Unknown provider kind: {kind}")
@@ -98,9 +110,19 @@ def build_provider(
             base_url=base_url,
             name=name or kind,
             refusal_fallback=options.get("refusal_fallback", True),
+            http_client=None
+            if guard_private is None
+            else guarded_httpx2_client(guard_private, timeout=PROVIDER_TIMEOUT_S),
         )
+    client = (
+        None
+        if guard_private is None
+        else guarded_client(guard_private, timeout=httpx.Timeout(PROVIDER_TIMEOUT_S, connect=10.0))
+    )
     if spec.protocol == "gemini":
-        return GeminiProvider(api_key, base_url=url or spec.default_base_url or "", name=name or kind)
+        return GeminiProvider(
+            api_key, base_url=url or spec.default_base_url or "", name=name or kind, client=client
+        )
     if spec.protocol == "openai":
         if not url:
             raise ValueError(f"Provider kind '{kind}' requires base_url")
@@ -108,6 +130,6 @@ def build_provider(
         if kind == "openrouter":
             headers = {"X-Title": "Argus Council"}
         return OpenAICompatProvider(
-            base_url=url, api_key=api_key, name=name or kind, kind=kind, extra_headers=headers
+            base_url=url, api_key=api_key, name=name or kind, kind=kind, extra_headers=headers, client=client
         )
     return MockProvider(name=name or kind)

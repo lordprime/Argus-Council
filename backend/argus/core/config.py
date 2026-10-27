@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
     remote_agent_timeout_s: float = 600.0
+    # Largest response body read from an MCP server, A2A/ACP agent or webhook receiver (bytes).
+    protocol_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
 
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
