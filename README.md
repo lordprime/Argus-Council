@@ -1,130 +1,150 @@
-# Argus Council
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/argus-lockup-dark.svg">
+    <img src="docs/brand/argus-lockup-light.svg" alt="Argus Council" width="420">
+  </picture>
+</p>
 
-Autonomous, guarded multi-agent councils for **research**, **coding** and **chat**.
+<p align="center">
+  <a href="https://github.com/morpheuslord/Argus-Council/actions/workflows/ci.yml"><img src="https://github.com/morpheuslord/Argus-Council/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/morpheuslord/Argus-Council/actions/workflows/pages.yml"><img src="https://github.com/morpheuslord/Argus-Council/actions/workflows/pages.yml/badge.svg?branch=main" alt="Docs"></a>
+  <a href="https://morpheuslord.github.io/Argus-Council/"><img src="https://img.shields.io/badge/docs-morpheuslord.github.io%2FArgus--Council-4338CA" alt="Documentation"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4338CA" alt="MIT License"></a>
+</p>
 
-You give Argus a topic and a goal. A council of agents (chair, researchers, analysts, coders, testers,
-writers, and overseers such as monitor, critic and security officer) plans the work, debates it, executes
-it with tools and skills, and delivers the result in the format you want (text, Markdown, LaTeX, PDF, code).
-Overseer agents watch every thought in real time and can **intercept and correct** drift, loops and
-guardrail breaches, and you can step in and correct the council at any point.
+<p align="center"><b>A council of LLM agents that plans, debates, votes and delivers, with you in the loop.</b></p>
 
-> Status: under active development. See the roadmap below for what has landed.
+Argus Council is a self-hosted platform for autonomous, guarded multi-agent work in **research**,
+**coding** and **chat**. You give it a topic and a goal; a council of agents (a chair, researchers,
+analysts, coders, testers, writers, and overseers such as a monitor, a critic and a security
+officer) plans the work, executes it with tools and skills, votes on the result and delivers it as
+Markdown, plain text, HTML, LaTeX, PDF, DOCX or JSON. Every thought passes a *thought bus* before it
+is acted on, where guardrails and overseer agents can annotate, hold or block it; risky tool calls
+wait for a human; and you can intercept and correct any agent, or the whole council, at any moment.
+
+**Documentation: [morpheuslord.github.io/Argus-Council](https://morpheuslord.github.io/Argus-Council/)**
+
+## Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Using the API](#using-the-api)
+- [How a run works](#how-a-run-works)
+- [Agent protocols and the ledger](#agent-protocols-and-the-ledger)
+- [Project layout](#project-layout)
+- [Development](#development)
+- [Security](#security)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features
+
+| Area | What you get |
+| --- | --- |
+| **Councils** | Resizable groups of seats with a role, provider, model, persona and tools; twelve built-in roles and a priority roster per mode |
+| **Modes** | `research` (cited reports), `coding` (versioned workspace and a network-less sandbox), `chat`, `general` |
+| **Oversight** | A thought bus with deterministic guardrails, a loop detector and overseer agents; hold, correct, release, halt and message from the UI or API |
+| **Guardrails and approvals** | Budgets in dollars and tokens, step, runtime, parallelism and file limits, tool, skill and domain allow and deny lists, content policy, and human approval for risky tools (with argument editing) |
+| **Sub-councils** | Members delegate self-contained tasks to child councils with clamped guardrails, a depth limit and budget charge-back |
+| **Models** | Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp, any OpenAI-compatible endpoint, and an offline `mock` provider; retries, fallbacks, caching, cost accounting and health checks |
+| **Skills** | `SKILL.md` packages loaded on demand, six built-ins, an eight-skill marketplace, import and export, version history and restore |
+| **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory |
+| **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call |
+| **Run views** | Timeline, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
+| **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, regenerated on demand |
+| **Operations** | Webhooks, templates with variables, in-app notifications, Prometheus metrics, an audit log, insights, data retention, account export and deletion, and deploy, update, rollback, backup and restore scripts |
 
 ## Architecture
 
-```
-            ┌──────────────┐        ┌───────────────────────────────────────────────┐
-  Browser ─▶│  Web UI      │──REST─▶│  API (FastAPI)                                │
-            │  (React)     │◀─WS/SSE│  auth · councils · runs · skills · artifacts  │
-            └──────────────┘        │  MCP · A2A · ACP endpoints                     │
-                                    └──────┬───────────────┬──────────────┬─────────┘
-                                           │               │              │
-                                    ┌──────▼─────┐  ┌──────▼─────┐  ┌─────▼────────────┐
-                                    │ PostgreSQL │  │   Redis    │  │ LLM providers    │
-                                    │ (state)    │  │ cache/bus  │  │ cloud + self-host│
-                                    └────────────┘  └────────────┘  └──────────────────┘
+```mermaid
+flowchart TB
+    browser([Browser]) -->|HTTPS| web
+    client([MCP / A2A / ACP clients]) --> web
+    web["web: nginx + React UI<br/>strict CSP, port 8080"] -->|"/api /mcp /a2a /acp /.well-known"| api
+    subgraph apibox [api container]
+        api["API (FastAPI)"] --- runtime["Council runtime<br/>orchestrator, thought bus,<br/>guardrails, approvals"]
+    end
+    subgraph backend [backend network, internal]
+        pg[(PostgreSQL 17)]
+        redis[(Redis 7)]
+    end
+    subgraph sandboxnet [sandbox network, internal]
+        sb[sandbox<br/>no network route]
+    end
+    api --> pg
+    api --> redis
+    runtime -->|token| sb
+    runtime --> llm([LLM providers<br/>cloud and self-hosted])
+    runtime --> peers([MCP servers and<br/>A2A / ACP agents])
 ```
 
 | Layer | Implementation |
 | --- | --- |
 | API | FastAPI, Pydantic v2, async SQLAlchemy 2, Alembic migrations |
-| Database | PostgreSQL 17 (SQLite for local dev/tests) |
-| Cache | Redis 7 (JSON cache, request coalescing, rate limiting); in-memory fallback |
+| Database | PostgreSQL 17 (SQLite for local development and tests) |
+| Cache | Redis 7 (JSON cache, request coalescing, rate limiting, event fan-out); in-memory fallback |
 | Auth | Argon2id passwords, short-lived JWT access tokens, rotating single-use refresh tokens, scoped API keys, roles (admin, member, viewer) |
-| Web UI | React, served by the web container on the same origin as the API |
-| Containers | Multi-stage builds, non-root users, read-only root FS, all capabilities dropped, internal DB network |
+| Web UI | React, TypeScript, Vite and Tailwind, served by the web container on the same origin as the API |
+| Containers | Multi-stage builds, non-root users, read-only root filesystems, all capabilities dropped, internal networks for the database, cache and sandbox |
 
-## Quick start (Docker)
+More in [Architecture](https://morpheuslord.github.io/Argus-Council/architecture/).
+
+## Quick start
+
+Requirements: Docker with the Compose plugin, Git, and `openssl` or Python 3.
 
 ```bash
+git clone https://github.com/morpheuslord/Argus-Council.git
+cd Argus-Council
 ./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, starts, waits, smoke-tests
-./scripts/update.sh           # git pull, back up DB + artifacts to backups/, rebuild, restart; rolls back if unhealthy
-./scripts/update.sh --rollback  # previous images; schema via alembic downgrade (--restore-db: pre-update backup)
-./scripts/backup.sh           # verified, checksummed backup into backups/ (cron-safe)
-./scripts/restore.sh --list   # then ./scripts/restore.sh [TIMESTAMP]; refuses corrupt or truncated backups
+```
+
+Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent
+protocols (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a strict
+Content-Security-Policy. The first account that registers becomes an `admin`; later accounts are
+`member`s. Set `ARGUS_ALLOW_REGISTRATION=false` once your accounts exist.
+
+Without provider keys, every council runs on the offline `mock` provider. Add keys to `deploy/.env`
+(for example `ANTHROPIC_API_KEY` or `ARGUS_OLLAMA_BASE_URL`) and run `./scripts/deploy.sh --no-build`,
+or add your own connection under *Connections, Providers*.
+
+```bash
+./scripts/update.sh              # git pull, back up DB + artifacts to backups/, rebuild, restart; rolls back if unhealthy
+./scripts/update.sh --rollback   # previous images; schema via alembic downgrade (--restore-db: pre-update backup)
+./scripts/backup.sh              # verified, checksummed backup into backups/ (cron-safe)
+./scripts/restore.sh --list      # then ./scripts/restore.sh <timestamp>; refuses corrupt or truncated backups
 ./scripts/build.sh [--version TAG] [--ca corp-ca.crt] [api|web]   # images only
 ```
 
-Add provider keys to `deploy/.env`, then re-run `./scripts/deploy.sh`. Each script has `--help`. The
-manual steps the scripts automate:
+Each script has `--help`. See [Deployment and operations](https://morpheuslord.github.io/Argus-Council/deployment/).
 
-```bash
-cp deploy/.env.example deploy/.env
-# fill ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN, e.g.
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+## Configuration
 
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
-./scripts/smoke.sh http://127.0.0.1:8080
-```
+The API reads `ARGUS_*` environment variables (`backend/argus/core/config.py`). The most important:
 
-Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent protocols
-(`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a strict Content-Security-Policy.
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ARGUS_SECRET_KEY` | ephemeral outside production | Signs tokens; at least 32 characters, required in production |
+| `ARGUS_ENCRYPTION_KEY` | derived from the secret key | Encrypts stored provider credentials |
+| `ARGUS_DATABASE_URL` | `sqlite+aiosqlite:///./argus.db` | Async SQLAlchemy URL (Compose builds a Postgres URL) |
+| `ARGUS_REDIS_URL` | unset | Redis for cache, rate limits and fan-out; in-memory fallback without it |
+| `ARGUS_ALLOW_REGISTRATION` | `true` | Whether new accounts can register |
+| `ARGUS_BOOTSTRAP_ADMIN_EMAIL`, `_PASSWORD` | unset | Create this admin at startup |
+| `ARGUS_CORS_ORIGINS` | `http://localhost:5173,http://localhost:8080` | Allowed origins |
+| `ARGUS_SEARCH_PROVIDER` | unset | `searxng`, `tavily` or `brave` (with `ARGUS_SEARCH_API_KEY` or `ARGUS_SEARXNG_URL`) |
+| `ARGUS_SANDBOX_URL`, `ARGUS_SANDBOX_TOKEN` | unset | The sandbox service for `shell` (set by Compose) |
+| `ARGUS_MCP_ALLOW_STDIO` | `false` | Allow admins to register stdio MCP servers |
+| `ARGUS_METRICS_TOKEN` | unset | Bearer token for `/metrics` (required to scrape in production) |
+| `ARGUS_RETENTION_RUN_DAYS` / `_EVENT_DAYS` / `_AUDIT_DAYS` / `_LEDGER_DAYS` | `0` / `0` / `365` / `0` | Data retention in days; `0` keeps forever |
+| `ARGUS_RATE_LIMIT_PER_MINUTE` | `120` | Requests per minute per user or API key |
+| `<KIND>_API_KEY`, `ARGUS_<KIND>_BASE_URL` | unset | System providers, e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARGUS_OLLAMA_BASE_URL` |
 
-The first account that registers becomes an `admin`; later accounts are `member`s. Set
-`ARGUS_ALLOW_REGISTRATION=false` after that. See [Roles](#roles) for what each role may do.
+The full table, including which variables Compose passes through, is in
+[Configuration](https://morpheuslord.github.io/Argus-Council/configuration/).
 
-## Local development
-
-```bash
-cd backend
-uv sync
-uv run uvicorn argus.main:create_app --factory --reload
-uv run pytest
-uv run ruff check . && uv run ruff format --check .
-```
-
-API docs are served at `http://localhost:8000/docs` outside production.
-
-```bash
-cd frontend
-npm ci
-npm run dev          # http://localhost:5173, proxies /api to localhost:8000
-npm test && npm run lint && npm run typecheck
-```
-
-## Providers
-
-Every agent seat names a provider and a model. Providers come from three places:
-
-1. **Your own connections** (`POST /api/v1/providers`): API keys are encrypted at rest and never returned.
-2. **System providers** from the environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-   `MISTRAL_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, or `ARGUS_<KIND>_BASE_URL` for self-hosted servers
-   (`ARGUS_OLLAMA_BASE_URL=http://ollama:11434/v1`, `ARGUS_VLLM_BASE_URL`, `ARGUS_LMSTUDIO_BASE_URL`).
-3. **`mock`**: an offline deterministic provider, so everything works without keys.
-
-The router adds retries with backoff, fallback chains, response caching for deterministic calls, and
-token and cost accounting. Claude uses the official `anthropic` SDK with adaptive thinking and server-side
-refusal fallback on the models that support it; OpenAI-compatible servers and Gemini use plain HTTP.
-Anthropic connections use only the configured key and base URL, never ambient environment credentials.
-
-**Key hints and health.** Provider responses never include the key, only a masked `key_hint` (`sk-…abcd`) and
-the last known health: `health_status` (`unknown`, `ok`, `unreachable`, `auth_failed`, `rate_limited`, `error`),
-`health_detail`, `health_latency_ms` and `health_checked_at`.
-
-- `POST /api/v1/providers/{name}/test` probes a provider now (needs `providers:write`). With `{"model": "..."}` it
-  sends a tiny completion; without, it lists models (no tokens spent) and falls back to a completion against the
-  default model if the provider cannot list. The result is persisted on your config (`persisted: true`); system
-  providers can be tested but nothing is stored. Disabled configs can be tested before enabling them.
-- Health is also updated passively from real completions and model listings (throttled, written in the background).
-- Changing a provider's key or base URL resets its health to `unknown`.
-
-## Councils
-
-A council is a resizable group of agent seats. Each seat has a role, a provider/model and a persona.
-
-```bash
-# create a research council with 5 seats from the default roster
-curl -X POST localhost:8000/api/v1/councils -H "Authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' -d '{"name":"lit-review","mode":"research","size":5}'
-
-# grow it to 8 seats (new seats come from the mode's priority roster)
-curl -X POST localhost:8000/api/v1/councils/$ID/resize -H "Authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' -d '{"size":8}'
-```
-
-`min_size`/`max_size` bound every resize and membership change.
-
-## Running a council
+## Using the API
 
 ```bash
 # start an autonomous research run (uses the offline mock council unless you pick a provider)
@@ -136,238 +156,214 @@ curl -X POST localhost:8000/api/v1/runs -H "Authorization: Bearer $TOKEN" -H 'co
 curl -X POST localhost:8000/api/v1/runs/$RUN/stream-ticket -H "Authorization: Bearer $TOKEN"
 curl -N "localhost:8000/api/v1/runs/$RUN/events/stream?ticket=$TICKET"
 
-# step in: correct an agent, message the council, pause, or cancel
+# step in: correct the council, then approve a pending tool call with edited arguments
 curl -X POST localhost:8000/api/v1/runs/$RUN/interventions -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"kind":"correct","text":"Prioritise peer-reviewed sources","scope":"council"}'
+curl -X POST localhost:8000/api/v1/runs/$RUN/approvals/$APPROVAL -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"decision":"approve","edited_args":{"command":"pytest -q"}}'
 ```
 
-How a run works:
+| Group | Endpoints |
+| --- | --- |
+| Auth and keys | `/api/v1/auth/*` (register, login, refresh, me, API keys), `/api/v1/admin/users` |
+| Councils | `/api/v1/councils`, `/councils/{id}/resize`, `/councils/{id}/members`, `/api/v1/roles` |
+| Providers | `/api/v1/providers`, `/providers/{name}/models`, `/providers/{name}/test` |
+| Runs | `/api/v1/runs`, `pause`, `resume`, `cancel`, `interventions`, `approvals/{id}`, `events`, `snapshot`, `stream-ticket`, `events/stream`, `artifacts`, `exports` |
+| Skills | `/api/v1/skills`, `validate`, `import`, `marketplace`, `{name}/export`, `{name}/versions` |
+| Knowledge | `/api/v1/knowledge-bases`, `/documents`, `/search`, `/api/v1/memory` |
+| Connections | `/api/v1/mcp-servers`, `/api/v1/remote-agents`, `/api/v1/ledger`, `/ledger/verify` |
+| Integration | `/api/v1/webhooks`, `/api/v1/templates`, `/api/v1/notifications` |
+| Data and ops | `/api/v1/me/export`, `DELETE /api/v1/me`, `/api/v1/admin/retention`, `/api/v1/audit`, `/api/v1/insights`, `/metrics`, `/health/*` |
+
+Writes need a scope on API keys (`runs:write`, `councils:write`, `providers:write`, `skills:write`,
+`connections:write`, `webhooks:write`, `knowledge:write`, or `*`); viewers are read-only everywhere.
+Webhooks are signed with HMAC-SHA256, run creation is idempotent with `Idempotency-Key`, and the
+full reference is generated from the OpenAPI document:
+[API reference](https://morpheuslord.github.io/Argus-Council/api/).
+
+## How a run works
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: POST /runs
+    queued --> running
+    queued --> cancelled: cancel before start
+    running --> paused: pause
+    paused --> running: resume
+    running --> completed: deliverable written
+    running --> halted: guardrail breach
+    running --> cancelled: cancel
+    paused --> cancelled: cancel
+    running --> failed: error or server restart
+    completed --> [*]
+    halted --> [*]
+    cancelled --> [*]
+    failed --> [*]
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as You
+    participant C as Chair
+    participant M as Members
+    participant B as Thought bus
+    participant O as Guardrails and overseers
+    participant W as Writer and reviewers
+    U->>C: topic, mode, outputs, guardrails
+    C->>C: plan steps with assignees and dependencies
+    par up to max_parallel_agents
+        C->>M: step
+        loop agent turn
+            M->>B: thought and tool calls
+            B->>O: review
+            O-->>B: pass, annotate, hold or block
+            opt risky tool
+                B-->>U: approval.requested
+                U-->>B: approve (optionally edited) or reject
+            end
+        end
+    end
+    U-)B: intercept, correct, message, halt at any time
+    C->>W: work so far
+    W->>W: synthesise, then reviewers vote (ties approve)
+    opt vote fails
+        W->>W: one revision with the critiques
+    end
+    W-->>U: deliverable and exports
+```
 
 1. **Plan**: the chair turns the topic into steps with assignees and dependencies.
-2. **Execute**: independent steps run in parallel (bounded by `max_parallel_agents`). Each agent loops LLM ↔ tools.
-3. **Oversight**: every thought passes the *thought bus* before it is acted on. Deterministic guardrails, a loop
-   detector and overseer agents (security > monitor > critic) can annotate, hold (regenerate with a correction)
-   or block it. `oversight.intercept_mode` caps what overseers may do; the user outranks everyone.
-4. **Approvals**: tools tagged with risks listed in `approval_required` (e.g. `shell`) wait for a human decision,
-   which can also edit the arguments.
-5. **Synthesise and vote**: the writer produces the deliverable, the council votes, and one revision round follows
-   critiques if the vote fails.
-6. **Limits**: budget ($ and tokens), steps, runtime and file size are enforced throughout; a breach halts the run.
+2. **Execute**: independent steps run in parallel (bounded by `max_parallel_agents`); each agent loops between the model and its tools.
+3. **Oversight**: deterministic guardrails, a loop detector and overseer agents (security, monitor, critic) review every thought; `oversight.intercept_mode` caps what overseers may do, and the user outranks everyone.
+4. **Approvals**: tools tagged with a risk in `approval_required` (by default `shell`, `package_install`, `remote_agent`, `network_write`) wait for a human decision, which can also edit the arguments.
+5. **Synthesise and vote**: the writer produces the deliverable, the chair, critic, analyst, security officer and tester vote, and one revision round follows if the vote fails.
+6. **Limits**: budget, steps, runtime and file size are enforced throughout; a breach halts the run.
 
 Every event is stored in an append-only log with a per-run sequence number, so runs can be replayed
-(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`. Every outbound
-MCP, A2A or ACP call an agent makes is announced on the stream as a `protocol.call` event carrying the
-protocol, peer, method, status, latency and the matching ledger entry's `ledger_id` and `hash`, so external
-traffic shows up live and links to the [ledger](#agent-protocols).
+(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`.
 
 ### Sub-councils
 
-A member can hand a self-contained task to a smaller child council with the `subcouncil` tool
-(arguments: `task`, `mode`, `size` 2-6, default 3). Only the chair has it by default; give it to other seats
-through their tools.
+A member can hand a self-contained task to a smaller child council with the `subcouncil` tool. The
+child is a real run with `parent_run_id`, guardrails clamped to the parent's, a depth limit
+(`max_subcouncil_depth`, default 2), and its spend charged back to the parent:
 
-| Aspect | Behaviour |
-| --- | --- |
-| Linkage | The child is a real run with `parent_run_id` set. `GET /api/v1/runs` lists top-level runs only. |
-| Seats | An ephemeral roster for the chosen mode, using the calling member's provider and model. |
-| Guardrails | Clamped to the parent's: budgets, steps, runtime, parallelism and iterations take the minimum; tool and skill deny lists and `approval_required` are unioned; a restricted tool allow list is intersected. |
-| Budget | Capped at what the parent has left; the child's tokens and cost are charged back to the parent. No budget left means the tool refuses. |
-| Depth | `guardrails.max_subcouncil_depth` (default 2, max 5) drops by one per level; at 0 the tool refuses. |
-| Live relay | `subcouncil.started` and `subcouncil.completed` are stored in the parent's log. Plan, step, thought, tool, intercept, approval, vote, `protocol.call` and status events from the child are relayed live as ephemeral `subcouncil.event` envelopes (with `child_run_id`). |
-| Lifetime | The child is stopped if it exceeds its runtime or the parent is cancelled. The tool returns the child's deliverable, or an error if it did not complete. |
-
-## Skills
-
-Skills are packaged instructions, the same idea as Claude Code skills: a folder with a `SKILL.md` and any
-templates or references it needs.
-
-```markdown
----
-name: research-report
-description: Plan, evidence and write a rigorous research report with inline citations. Use for ...
-allowed-tools: [web_search, web_fetch, notes_write]
----
-# Research report
-1. Frame ... 2. Gather ... 3. Analyse ... 4. Write using templates/report.md ...
+```mermaid
+sequenceDiagram
+    participant P as Parent run
+    participant T as subcouncil tool
+    participant C as Child run
+    P->>T: subcouncil(task, mode, size 2-6)
+    alt depth limit reached or no budget left
+        T-->>P: refuse
+    else
+        T->>C: start (guardrails clamped, dollar budget capped at the parent's remainder)
+        C--)P: live relay as subcouncil.event
+        C-->>T: deliverable, tokens, cost
+        T->>P: charge tokens and cost to the parent
+        T-->>P: deliverable
+    end
 ```
 
-- Every agent sees each available skill's **name and description**. It calls `use_skill` to load the full
-  instructions only when needed, and `skill_read` to open bundled files (progressive disclosure).
-- Built-in skills: `research-report`, `latex-paper`, `code-review`, `python-project`, `source-evaluation`,
-  `executive-summary`.
-- Add your own with `POST /api/v1/skills` (SKILL.md + files), import a zip with `POST /api/v1/skills/import`, and
-  export any skill with `GET /api/v1/skills/{name}/export`. A user skill with the same name as a built-in overrides it.
-- Guardrails control which skills a council may use: `"skills": {"allow": ["*"], "deny": ["latex-*"]}`.
-  `GET /api/v1/skills/{name}` and `GET /api/v1/skills/{name}/usage` report `used_by_councils`.
-- Uploads are validated: frontmatter rules, text files only, no hidden files or path traversal, and size limits
-  checked before extraction.
-
-## Modes, tools and outputs
-
-| Mode | What the council does | Key tools |
-| --- | --- | --- |
-| `research` | Frames sub-questions, gathers evidence, analyses, writes a cited report | `web_search`, `web_fetch` (every fetch becomes a numbered source), `notes_*`, `research-report` skill |
-| `coding` | Designs, implements, tests and documents software | `fs_read/write/edit/list/search/delete` on a versioned workspace, `shell` in the sandbox |
-| `chat` | Answers directly with an overseer watching | notes, skills, optional web |
-| `general` | Plans and produces whatever is asked | all permitted tools |
-
-**Sandbox.** `shell` commands run in a separate `sandbox` container with no network route (internal Docker
-network), a read-only root FS, a tmpfs work area, dropped capabilities, and CPU/memory/pid limits plus rlimits per
-command. The workspace is copied in and changed files are versioned back. With the isolated sandbox, coding
-councils run commands without per-command approval. For development, `ARGUS_SANDBOX_LOCAL=true` runs commands
-on the host with rlimits only, keeps approvals on, and is refused in production.
-
-**Web.** `web_fetch` only fetches http(s) URLs. It enforces `guardrails.network.allow_domains`, rejects hosts that
-resolve to private, loopback, link-local or metadata addresses (re-checked on every redirect), caps size and
-content types, strips scripts and navigation, and treats page text as untrusted data. `web_search` uses SearXNG
-(self-hosted), Tavily or Brave (`ARGUS_SEARCH_PROVIDER`).
-
-**Outputs.** Request any of `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json` in `outputs`. They are generated when
-the run completes, can be regenerated with `POST /runs/{id}/exports`, and are downloaded from
-`/runs/{id}/artifacts/download?path=exports/...`. Exports escape raw HTML from model output and drop unsafe link schemes.
-
-## Agent protocols
-
-Argus speaks the main agent interoperability protocols, in both directions.
+## Agent protocols and the ledger
 
 | Protocol | Argus as a server | Argus as a client |
 | --- | --- | --- |
-| **MCP** | `POST /mcp` (Streamable HTTP, JSON-RPC). Tools: `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`. Run deliverables are **resources**, skills are **prompts**. | Register external MCP servers (`/api/v1/mcp-servers`, HTTP or admin-only stdio). Their tools appear to agents as `mcp__<server>__<tool>`, filtered by `tool_allow`, gated by `risk` tags and by the server's trust level (below). |
-| **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`). Each task is a council run. | Register remote agents (`/api/v1/remote-agents`, `protocol: a2a`). Councils delegate through the `remote_agent` tool; `requires_approval` (default `true`) gates each delegation. |
-| **ACP** | REST under `/acp`: `GET /agents` (modes plus your saved councils), `POST /runs` (sync/async), `GET /runs/{id}`, `POST /runs/{id}/cancel`. | Register remote ACP agents (`protocol: acp`, `agent_name`), used through the same `remote_agent` tool. `agent_name` can be changed with `PATCH /api/v1/remote-agents/{id}`. |
-
-Inbound protocol calls that start, steer or cancel runs need the `runs:write` scope, like `POST /api/v1/runs`:
-A2A `message/send` and `tasks/cancel` (JSON-RPC error `-32010` otherwise), ACP run cancel, and the MCP
-`intervene` and `cancel_run` tools. Read-only keys can still query.
-
-**MCP trust levels.** Each MCP server has a `trust` level and an optional `require_approval` list of tool names:
-
-| `trust` | Effect |
-| --- | --- |
-| `trusted` | Tools run without extra approval (servers registered before trust levels existed behave this way). |
-| `ask` | Default for new servers. Every tool call goes through the approval flow. |
-| `blocked` | The server is not contacted during runs and its tools are never attached. |
-
-Tools named in `require_approval` always need approval, whatever the trust level.
-
-Connect Claude Code (or any MCP client) to Argus with an API key:
+| **MCP** | `POST /mcp` (Streamable HTTP): tools `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`; deliverables as resources, skills as prompts | Registered MCP servers' tools appear as `mcp__<server>__<tool>`, gated by trust level (`trusted`, `ask`, `blocked`) and per-tool approval |
+| **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`) | Remote agents through the `remote_agent` tool, approval by default |
+| **ACP** | REST under `/acp`: agents, sync and async runs, cancel | Remote ACP agents through the same tool |
 
 ```bash
 claude mcp add --transport http argus http://localhost:8000/mcp --header "Authorization: Bearer argus_..."
 ```
 
-**Ledger.** Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user, hash-chained
-ledger. Each entry holds SHA-256 digests of the request and response, the peer, method, status, latency and
-run, with `hash = sha256(prev_hash ‖ entry)`. `GET /api/v1/ledger` lists entries and `GET /api/v1/ledger/verify`
-detects any edit, deletion or reordering. Connection housekeeping is ledgered too: MCP discovery (`initialize`,
-`tools/list`, from `POST /mcp-servers/{id}/discover` or when a run attaches the server) and A2A/ACP card
-refreshes (`POST /remote-agents/{id}/refresh`), with the run id when they happen during a run.
+Every inbound and outbound MCP, A2A and ACP call is written to a per-user ledger with SHA-256 digests
+of the request and response, chained so that any edit, deletion or reordering is detected by
+`GET /api/v1/ledger/verify`:
 
-## Integrating with the API
-
-**Webhooks.** Register an HTTPS endpoint with `POST /api/v1/webhooks` (`url`, `events`) to be notified of
-`run.started`, `run.completed`, `run.failed`, `run.halted`, `run.cancelled` and `approval.requested`
-(`GET /api/v1/webhooks/events` lists them). The signing secret is shown once at creation; rotate it with
-`POST /webhooks/{id}/rotate-secret` and send a test with `POST /webhooks/{id}/test`. Each delivery carries:
-
-```
-X-Argus-Event: run.completed
-X-Argus-Delivery: <id, stable across retries>
-X-Argus-Signature: t=<unix ts>,v1=<hex HMAC-SHA256(secret, "<ts>.<raw body>")>
+```mermaid
+flowchart LR
+    G["genesis<br/>000…0"] --> E1["entry 1<br/>peer, method, status,<br/>request and response digests"]
+    E1 -->|"hash₁ = sha256(genesis ‖ entry₁)"| E2["entry 2"]
+    E2 -->|"hash₂ = sha256(hash₁ ‖ entry₂)"| E3["entry 3"]
+    E3 -->|"hash₃ = sha256(hash₂ ‖ entry₃)"| N["…"]
 ```
 
-Verify the signature over the raw body and reject old timestamps. Failed deliveries are retried after 1s, 5s
-and 30s; an endpoint that fails 20 times in a row is disabled. `GET /webhooks/{id}/deliveries` shows the
-recent attempts. Private and loopback addresses are refused.
+## Project layout
 
-**Idempotent run creation.** Send `Idempotency-Key: <unique string>` with `POST /api/v1/runs` to make
-retries safe. A repeat with the same key and body within 24 hours returns the original response with
-`Idempotent-Replayed: true`. The same key with a different body, or while the first request is still in flight,
-returns `409`.
+```
+backend/            FastAPI service (uv project)
+  argus/api/v1/     REST routers
+  argus/runtime/    run manager, orchestrator, agents, oversight, guardrails, events
+  argus/protocols/  MCP, A2A and ACP servers and clients
+  argus/providers/  LLM providers, pricing, health
+  argus/tools/      agent tools (web, code, shell, skills, knowledge, remote agents, sub-councils)
+  argus/skills/     SKILL.md packages, built-ins and marketplace
+  argus/services/   ledger, exports, webhooks, notifications, retention, audit
+  alembic/          migrations
+  tests/            pytest suite
+frontend/           React + TypeScript + Vite web UI (npm project), nginx config, Playwright e2e
+deploy/             docker-compose.yml and .env.example
+scripts/            deploy, update, restore, build, smoke test, OpenAPI dump
+docs/               documentation site sources (MkDocs Material), brand assets, review reports
+tools/              docs requirements, wiki mirror, brand and figure generators
+```
 
-**Pagination.** `GET /api/v1/runs` returns newest first; pass the last run's `created_at` as `?before=` for
-the next page. `GET /api/v1/audit` uses `?before_id=`.
+## Development
 
-**API keys.** Every key can read. Writes need a scope: `runs:write`, `councils:write`, `providers:write`,
-`skills:write`, `connections:write`, `webhooks:write`, or `*` for all of them. A key with no scopes (or `read`)
-is read-only. Creating or revoking keys and changing the password need a signed-in session, never a key.
+```bash
+cd backend
+uv sync
+uv run uvicorn argus.main:create_app --factory --reload   # http://localhost:8000, docs at /docs
+uv run pytest
+uv run ruff check . && uv run ruff format --check .
+```
 
-### Roles
+```bash
+cd frontend
+npm ci
+npm run dev          # http://localhost:5173, proxies /api to localhost:8000
+npm test && npm run lint && npm run typecheck
+npm run build
+```
 
-| Role | Can do |
-| --- | --- |
-| `admin` | Everything a member can, plus user management and `?all=true` on the audit log. |
-| `member` | Create and change their own councils, runs, skills, providers, connections, webhooks and keys. |
-| `viewer` | Read only. Every state-changing route and protocol write returns `403`, whatever the key's scopes, and viewers can only create keys with `scopes: ["read"]`. |
+```bash
+# documentation site (exact, hash-pinned requirements)
+./scripts/gen-openapi.sh
+uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs serve
+```
 
-Admins manage accounts with `GET /api/v1/admin/users` (role, active flag, last sign-in, run count) and
-`PATCH /api/v1/admin/users/{id}` (`role`, `is_active`). An admin cannot demote or deactivate themselves, and the
-last active admin cannot be demoted or deactivated (`409`). `GET /api/v1/auth/me` returns the caller's `role`.
+### Testing
 
-## Observability
-
-- **Metrics**: `GET /metrics` (Prometheus) covers HTTP traffic and latency, runs started/finished/active, LLM
-  calls/tokens/cost/latency per provider and model, tool calls and latency, intercepts, guardrail violations,
-  approvals and protocol calls. Set `ARGUS_METRICS_TOKEN` to scrape it in production.
-- **Audit log**: every state-changing API request is recorded (actor, action, target, IP, user agent, outcome),
-  including failed sign-ins. Secrets are never stored. `GET /api/v1/audit`; admins can add `?all=true`.
-- **Insights**: `GET /api/v1/insights?days=30` analyses your runs and their event logs: success rate, spend and
-  latency per model, tool error rates, intercepts by reason, guardrail violations and top failure reasons.
-  The web UI shows it at `/insights` and the audit log at `/insights/audit`.
-- **Structured logs**: JSON logs with request ids in production.
-
-## Web UI
-
-| Area | Route | What it shows |
-| --- | --- | --- |
-| Home, runs | `/`, `/runs` | Run composer, command palette, runs list |
-| Run workspace | `/runs/:runId` | Live run with a view switcher (below), intercept/correct, approvals, votes, budget meter, inspector, deliverable and exports |
-| Councils | `/councils`, `/councils/new`, `/councils/:id` | Council builder and detail (resize, seats, guardrails, runs by council) |
-| Skills | `/skills`, `/skills/new`, `/skills/:name` | Library, editor and detail |
-| Connections | `/connections/providers`, `/mcp`, `/agents`, `/ledger` | Providers with key hint, health and Test connection; MCP servers; remote agents; ledger browser with verification |
-| Insights | `/insights` | KPIs with sparklines (runs, success rate, spend, tokens, average runtime), spend by model, runs over time, model and provider health, tool reliability, oversight (intercepts by reason, approvals), run distribution by status and mode, top failures, guardrail violations |
-| Audit log | `/insights/audit` | Audit events filtered by action and result (admins: all users), paged, with CSV export |
-| Settings | `/settings/profile`, `/api-keys`, `/webhooks`, `/users` | Profile and appearance; API keys; webhooks (secret shown once, rotate, test, recent deliveries); user management (admins only: role, active) |
-
-**Run views.** All views read one communication log derived from the run stream (who sent what to whom,
-including relayed sub-council traffic and ledgered `protocol.call`s). Selecting an item in a view jumps to it
-in the timeline.
-
-| View | Shows |
-| --- | --- |
-| Timeline | Chronological feed of plan, thoughts, tool calls, intercepts, corrections, approvals and votes, with density control |
-| Map | Isometric map of agents, overseers, sub-councils, tools, MCP servers and remote agents, with live message pulses along the links, filters, pause/live, zoom/pan and a details panel including ledger id and hash |
-| Gantt | Steps and per-agent activity over time with a live now-line |
-| Heatmap | Who talks when: rows for agents, sub-agents and external peers, auto-sized time bins, intensity by messages, tokens, cost or errors |
-| Route | The plan as a trail from start to deliverable (solid where covered, dashed ahead) with pins for intercepts, corrections, approvals, votes, sub-councils and protocol calls, beside a chronological run log |
-
-Views are keyboard-navigable, have text alternatives, and stop animating under reduced motion.
+CI (`.github/workflows/ci.yml`) runs the backend lint and tests, migrations against Postgres
+(`alembic upgrade`, `check` and `downgrade`), integration tests with Postgres and Redis, the frontend
+audit, lint, typecheck, tests and build, a Compose smoke test, a UI end-to-end test against the
+production build with its strict CSP, and Trivy image and secret scans. The docs workflow builds
+the site with `mkdocs build --strict` on every pull request.
 
 ## Roadmap
 
-- [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI
-- [x] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp)
-- [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
-- [x] M4 Protocols: MCP (server + client), A2A, ACP, hash-chained protocol ledger
-- [x] M5 Modes: coding sandbox, research tools with citations, chat; exporters (txt, md, html, LaTeX, PDF, DOCX, JSON)
-- [x] M6 Web UI: shell, auth, run composer, live run workspace (timeline, intercept/correct, approvals, votes,
-  budget meter, inspector, deliverable and exports), command palette, runs list, council builder and detail
-  (resize, seats, guardrails), skills library and editor, connections (providers, MCP servers, remote agents,
-  ledger), settings (profile, appearance, API keys)
-- [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
-- [x] API integration: webhooks, idempotent run creation, write scopes on every router and protocol write path
-- [x] Sub-councils (`subcouncil` tool, clamped guardrails, budget charge-back, depth limit, live relay)
-- [x] Live `protocol.call` events; MCP discovery and A2A/ACP refreshes ledgered
-- [x] MCP trust levels and per-tool approval; remote-agent approval flag
-- [x] Provider health checks and masked key hints
-- [x] Roles (admin, member, viewer) and admin user management
-- [x] Run views: Timeline, Map, Gantt, Heatmap, Route
-- [x] Insights dashboard, audit log UI, settings for webhooks and users
-- [ ] M7 Dev-council review passes
-- [ ] Memory and knowledge base
-- [ ] Backup and retention
-- [ ] Notifications, run templates and replay
+- [x] Backend foundation, multi-provider LLM layer, council runtime with oversight and live streaming
+- [x] Protocols (MCP, A2A, ACP) and the hash-chained ledger
+- [x] Modes, sandbox, research tools, exporters; web UI with five run views, insights and settings
+- [x] Skills and marketplace, sub-councils, roles, webhooks, MCP trust levels, provider health
+- [x] Knowledge bases and memory, run templates, notifications, data retention, export and erasure
+- [ ] Dev-council review passes (reports in [`docs/review`](docs/review) and [`docs/design`](docs/design))
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability, and the
+[security overview](https://morpheuslord.github.io/Argus-Council/security-overview/) for the
+controls in place. Please do not open public issues for security problems.
+
+## Contributing
+
+Contributions are welcome: read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[code of conduct](CODE_OF_CONDUCT.md) first.
 
 ## License
 
-MIT
+[MIT](LICENSE)
