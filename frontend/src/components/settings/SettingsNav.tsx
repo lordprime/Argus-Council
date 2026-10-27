@@ -1,21 +1,26 @@
-import { KeyRound, UserRound } from "lucide-react";
+import { KeyRound, UserRound, Users, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 
 import { PageHeader } from "@/components/ui";
+import { useIsAdmin } from "@/features/admin/queries";
 import { cn } from "@/lib/cn";
 
 const LINKS = [
   { to: "/settings/profile", label: "Profile", icon: UserRound },
   { to: "/settings/api-keys", label: "API keys", icon: KeyRound },
+  { to: "/settings/webhooks", label: "Webhooks", icon: Webhook },
+  { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
 ];
 
 /** Sub-navigation shared by the settings pages. NavLink sets aria-current="page" on the active link. */
 export function SettingsNav() {
+  const admin = useIsAdmin();
+  const links = LINKS.filter((l) => !("adminOnly" in l) || admin);
   return (
     <nav aria-label="Settings" className="border-b border-border mb-6">
       <ul className="flex gap-1 -mb-px overflow-x-auto">
-        {LINKS.map((l) => (
+        {links.map((l) => (
           <li key={l.to}>
             <NavLink to={l.to} end
               className={({ isActive }) => cn(

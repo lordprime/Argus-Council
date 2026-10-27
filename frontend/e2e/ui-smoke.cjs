@@ -6,7 +6,7 @@ const SHOTS = process.env.E2E_SHOTS;
 const stamp = Date.now();
 const PAGES = [
   '/runs', '/councils', '/councils/new', '/skills', '/skills/new', '/connections/providers', '/connections/mcp',
-  '/connections/agents', '/connections/ledger', '/settings/profile', '/settings/api-keys',
+  '/connections/agents', '/connections/ledger', '/settings/profile', '/settings/api-keys', '/insights', '/insights/audit', '/settings/webhooks',
 ];
 (async () => {
   // E2E_CHROMIUM points at a preinstalled browser when the local Playwright's own download is absent.
@@ -35,6 +35,12 @@ const PAGES = [
     await page.waitForTimeout(500);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/run-${theme}.png` });
     const feedCount = await page.locator('[role=feed] article').count();
+    // Every live visualisation of the run renders without errors.
+    for (const view of ['Map', 'Gantt', 'Heatmap', 'Route', 'Timeline']) {
+      await page.getByRole('tab', { name: view, exact: true }).click();
+      await page.waitForTimeout(400);
+      if (SHOTS) await page.screenshot({ path: `${SHOTS}/run-${view.toLowerCase()}-${theme}.png` });
+    }
     await page.getByRole('link', { name: 'Open deliverable' }).click();
     await page.getByRole('heading', { name: /Solid-state batteries/ }).first().waitFor();
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/output-${theme}.png` });

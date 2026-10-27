@@ -2,6 +2,7 @@ import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { Command } from "cmdk";
 import {
   Activity,
+  BarChart3,
   Home,
   KeyRound,
   LayoutGrid,
@@ -33,6 +34,7 @@ const NAV = [
   { to: "/councils", label: "Councils", icon: Users },
   { to: "/skills", label: "Skills", icon: Sparkles },
   { to: "/connections/providers", label: "Connections", icon: Plug, match: "/connections" },
+  { to: "/insights", label: "Insights", icon: BarChart3, match: "/insights" },
   { to: "/settings/profile", label: "Settings", icon: Settings, match: "/settings" },
 ];
 

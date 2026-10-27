@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, Download, FileText, FolderTree, Pause, Play, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router";
 
 import {
@@ -22,10 +22,91 @@ import { clock, duration, usd } from "@/lib/format";
 import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
 import type { OutputFormat, RunDetail } from "@/lib/types";
-import { isTerminal, useRun, useRuns, type TimelineItem } from "@/stores/run";
+import { isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
 import { toast } from "@/stores/toast";
 
 type Density = "decisions" | "working" | "everything";
+
+/* ------------------------------------------------------------ view switcher */
+
+export type VizSelect = (ref: { itemId?: string; nodeId?: string }) => void;
+type VizProps = { run: RunState; onSelect?: VizSelect };
+
+const CouncilMap = lazy(() => import("@/components/viz/map/CouncilMap"));
+const RunGantt = lazy(() => import("@/components/viz/gantt/RunGantt"));
+const CommsHeatmap = lazy(() => import("@/components/viz/heatmap/CommsHeatmap"));
+const RunRoute = lazy(() => import("@/components/viz/route/RunRoute"));
+
+type RunView = "timeline" | "map" | "gantt" | "heatmap" | "route";
+const VIEWS: { value: RunView; label: string; component?: ComponentType<VizProps> }[] = [
+  { value: "timeline", label: "Timeline" },
+  { value: "map", label: "Map", component: CouncilMap },
+  { value: "gantt", label: "Gantt", component: RunGantt },
+  { value: "heatmap", label: "Heatmap", component: CommsHeatmap },
+  { value: "route", label: "Route", component: RunRoute },
+];
+const VIEW_KEY = "argus.runView";
+
+function loadView(): RunView {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    if (v && VIEWS.some((x) => x.value === v)) return v as RunView;
+  } catch {
+    /* storage unavailable */
+  }
+  return "timeline";
+}
+
+function saveView(v: RunView) {
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function ViewSwitcher({ value, onChange }: { value: RunView; onChange: (v: RunView) => void }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const i = VIEWS.findIndex((v) => v.value === value);
+    let next = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (i + 1) % VIEWS.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (i - 1 + VIEWS.length) % VIEWS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = VIEWS.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    onChange(VIEWS[next]!.value);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div role="tablist" aria-label="Run visualisation"
+      className="inline-flex rounded-md bg-surface-2 p-0.5 overflow-x-auto max-w-full">
+      {VIEWS.map((v, i) => {
+        const on = v.value === value;
+        return (
+          <button key={v.value} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`run-view-tab-${v.value}`}
+            aria-selected={on} aria-controls="run-view-panel" tabIndex={on ? 0 : -1} onClick={() => onChange(v.value)} onKeyDown={onKey}
+            className={cn("px-3 h-7 rounded text-sm whitespace-nowrap focus-visible:outline-2 focus-visible:outline-accent",
+              on ? "bg-surface shadow-1 font-medium" : "text-fg-muted hover:text-fg")}>
+            {v.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+class VizBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
+  state = { error: null as unknown };
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) return <div className="p-4"><ErrorState error={this.state.error} onRetry={() => this.setState({ error: null })} /></div>;
+    return this.props.children;
+  }
+}
 
 function visible(item: TimelineItem, density: Density): boolean {
   if (density === "everything") return true;
@@ -127,8 +208,10 @@ function Banner({ run, runId }: { run: RunDetail; runId: string }) {
   return null;
 }
 
-function Timeline({ runId, density, focus, onSelect, selected }: {
+function Timeline({ runId, density, focus, onSelect, selected, reveal, onRevealed }: {
   runId: string; density: Density; focus: string | null; onSelect: (id: string) => void; selected: string | null;
+  /** item id to scroll into view and flash once (set by a visualisation's onSelect) */
+  reveal?: string | null; onRevealed?: () => void;
 }) {
   const order = useRun(runId, (s) => s.order);
   const items = useRun(runId, (s) => s.items);
@@ -154,6 +237,21 @@ function Timeline({ runId, density, focus, onSelect, selected }: {
     if (atBottom) el.scrollTop = el.scrollHeight;
     else if (added > 0) setUnseen((u) => u + added);
   }, [shown, atBottom]);
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    const el = document.getElementById(`run-item-${reveal}`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      setFlash(reveal);
+    }
+    onRevealed?.();
+  }, [reveal, shown]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!flash) return;
+    const t = window.setTimeout(() => setFlash(null), 2000);
+    return () => window.clearTimeout(t);
+  }, [flash]);
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;
@@ -172,8 +270,8 @@ function Timeline({ runId, density, focus, onSelect, selected }: {
         className="flex-1 min-h-0 overflow-auto p-3 flex flex-col gap-2 scroll-pb-24">
         {shown.length === 0 && <EmptyState title={live ? "Waiting for the council…" : "No events"} />}
         {shown.map((it, i) => (
-          <article key={it.id} aria-posinset={i + 1} aria-setsize={shown.length} aria-label={`${it.kind} ${"actor" in it ? it.actor?.name ?? "" : ""}`}
-            className="animate-enter">
+          <article key={it.id} id={`run-item-${it.id}`} aria-posinset={i + 1} aria-setsize={shown.length} aria-label={`${it.kind} ${"actor" in it ? it.actor?.name ?? "" : ""}`}
+            className={cn("animate-enter rounded-md transition-shadow", flash === it.id && "ring-2 ring-accent")}>
             {it.kind === "plan" && plan ? <PlanCard plan={plan} members={members} />
               : it.kind === "thought" ? <ThoughtCard runId={runId} t={it} live={live} selected={selected === it.id} onSelect={() => onSelect(it.id)} />
               : it.kind === "tool" ? <ToolChip t={it} onSelect={() => onSelect(it.id)} />
@@ -384,6 +482,25 @@ export default function RunWorkspace() {
   const [density, setDensity] = useState<Density>("working");
   const [focus, setFocus] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [view, setViewState] = useState<RunView>(loadView);
+  const [reveal, setReveal] = useState<string | null>(null);
+  const setView = useCallback((v: RunView) => {
+    setViewState(v);
+    saveView(v);
+  }, []);
+  const onVizSelect = useCallback<VizSelect>(({ itemId, nodeId }) => {
+    const st = useRuns.getState().runs[runId];
+    setView("timeline");
+    if (itemId && st?.items[itemId]) {
+      const it = st.items[itemId];
+      if (!visible(it, density)) setDensity("everything");
+      if (focus && !("actor" in it && it.actor?.member_id === focus)) setFocus(null);
+      setSelected(itemId);
+      setReveal(itemId);
+    } else if (nodeId && st?.members.some((m) => m.id === nodeId)) {
+      setFocus(nodeId);
+    }
+  }, [runId, density, focus, setView]);
   const pendingCount = Object.values(state.items).filter((i) => i.kind === "approval" && i.status === "pending").length;
   useEffect(() => {
     if (!detail.data) return;
@@ -413,6 +530,8 @@ export default function RunWorkspace() {
             </div>
             <div className="flex flex-col min-h-0 min-w-0">
               <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-surface">
+                <ViewSwitcher value={view} onChange={setView} />
+                {view === "timeline" && <>
                 <label htmlFor="density" className="text-xs text-fg-subtle">Show</label>
                 <select id="density" value={density} onChange={(e) => setDensity(e.target.value as Density)}
                   className="h-8 rounded-md border border-border-strong bg-surface px-2 text-sm">
@@ -421,9 +540,24 @@ export default function RunWorkspace() {
                   <option value="everything">Everything</option>
                 </select>
                 {focus && <Button size="sm" variant="ghost" onClick={() => setFocus(null)}>Clear focus</Button>}
+                </>}
                 <span className="ml-auto text-xs text-fg-subtle tabular">{state.order.length} events · seq {state.lastSeq}</span>
               </div>
-              <Timeline runId={runId} density={density} focus={focus} onSelect={setSelected} selected={selected} />
+              <div id="run-view-panel" role="tabpanel" aria-labelledby={`run-view-tab-${view}`} className="flex-1 min-h-0 flex flex-col">
+                {view === "timeline" ? (
+                  <Timeline runId={runId} density={density} focus={focus} onSelect={setSelected} selected={selected}
+                    reveal={reveal} onRevealed={() => setReveal(null)} />
+                ) : (() => {
+                  const View = VIEWS.find((v) => v.value === view)?.component;
+                  return View ? (
+                    <VizBoundary key={view}>
+                      <Suspense fallback={<div className="p-4"><Skeleton className="h-96" /></div>}>
+                        <div className="flex-1 min-h-0 overflow-auto"><View run={state} onSelect={onVizSelect} /></div>
+                      </Suspense>
+                    </VizBoundary>
+                  ) : null;
+                })()}
+              </div>
             </div>
             <div className="hidden xl:flex border-l border-border min-h-0 flex-col">
               <Inspector runId={runId} selected={selected} />

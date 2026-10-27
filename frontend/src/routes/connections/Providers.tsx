@@ -3,6 +3,7 @@ import {
   ChevronDown,
   CircleDashed,
   Cloud,
+  Hourglass,
   Cpu,
   KeyRound,
   Pencil,
@@ -10,7 +11,10 @@ import {
   PowerOff,
   RefreshCw,
   Server,
+  ShieldAlert,
   Trash2,
+  TriangleAlert,
+  Unplug,
   XCircle,
   Zap,
   type LucideIcon,
@@ -42,9 +46,12 @@ import {
   useProviderModels,
   useTestProvider,
   useUpdateProvider,
+  type HealthStatus,
+  type ProviderWithHealth,
   type TestResult,
 } from "@/features/connections/queries";
 import { errorMessage } from "@/lib/api";
+import { relTime } from "@/lib/format";
 import { useProviderKinds, useProviders } from "@/lib/queries";
 import type { ProviderConfig, ProviderKind } from "@/lib/types";
 import { toast } from "@/stores/toast";
@@ -52,9 +59,20 @@ import { toast } from "@/stores/toast";
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
-function providerStatus(p: ProviderConfig, kind: ProviderKind | undefined, test?: TestResult): { tone: Tone; label: string; icon: LucideIcon } {
+type StatusInfo = { tone: Tone; label: string; icon: LucideIcon };
+const HEALTH: Record<Exclude<HealthStatus, "unknown">, StatusInfo> = {
+  ok: { tone: "success", label: "Connected", icon: CheckCircle2 },
+  unreachable: { tone: "danger", label: "Unreachable", icon: Unplug },
+  auth_failed: { tone: "danger", label: "Auth failed", icon: ShieldAlert },
+  rate_limited: { tone: "warning", label: "Rate limited", icon: Hourglass },
+  error: { tone: "danger", label: "Error", icon: TriangleAlert },
+};
+
+/** Persisted health (from the server) wins; a just-run test on an older server fills in until then. */
+function providerStatus(p: ProviderWithHealth, kind: ProviderKind | undefined, test?: TestResult): StatusInfo {
   if (!p.enabled) return { tone: "neutral", label: "Disabled", icon: PowerOff };
   if (kind?.requires_api_key && !p.has_api_key) return { tone: "warning", label: "Missing key", icon: KeyRound };
+  if (p.health_status && p.health_status !== "unknown" && HEALTH[p.health_status]) return HEALTH[p.health_status];
   if (test?.ok) return { tone: "success", label: "Connected", icon: CheckCircle2 };
   if (test && /\b429\b|rate.?limit/i.test(test.text)) return { tone: "warning", label: "Rate limited", icon: XCircle };
   if (test) return { tone: "danger", label: "Unreachable", icon: XCircle };
@@ -194,7 +212,21 @@ function ModelList({ name }: { name: string }) {
   );
 }
 
-function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderConfig; kind?: ProviderKind; onEdit: () => void; onDelete: () => void }) {
+function HealthLine({ p }: { p: ProviderWithHealth }) {
+  if (!p.health_checked_at || !p.health_status || p.health_status === "unknown") return null;
+  const bad = p.health_status !== "ok";
+  return (
+    <div className="text-xs text-fg-muted">
+      <p>
+        Checked <time dateTime={p.health_checked_at} title={new Date(p.health_checked_at).toLocaleString()}>{relTime(p.health_checked_at)}</time>
+        {p.health_latency_ms != null && <span className="tabular"> · {Math.round(p.health_latency_ms)} ms</span>}
+      </p>
+      {bad && p.health_detail && <p className={p.health_status === "rate_limited" ? "text-warning break-words" : "text-danger break-words"}>{p.health_detail}</p>}
+    </div>
+  );
+}
+
+function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderWithHealth; kind?: ProviderKind; onEdit: () => void; onDelete: () => void }) {
   const test = useTestProvider();
   const update = useUpdateProvider();
   const [showModels, setShowModels] = useState(false);
@@ -223,15 +255,27 @@ function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderConfig; kind?:
         <Meta label="Default model" mono>{p.default_model || "—"}</Meta>
         <Meta label="API key">
           {p.has_api_key ? (
-            <span className="inline-flex items-center gap-1"><KeyRound className="size-3.5" aria-hidden />Stored · write-only</span>
+            p.key_hint ? (
+              <span className="inline-flex items-center gap-1" title="Stored key (masked)">
+                <KeyRound className="size-3.5" aria-hidden /><span className="sr-only">Stored key </span>
+                <code className="font-mono text-xs">{p.key_hint}</code>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1"><KeyRound className="size-3.5" aria-hidden />Stored · write-only</span>
+            )
           ) : kind?.requires_api_key ? <span className="text-warning">Not set</span> : "Not required"}
         </Meta>
       </dl>
+      <HealthLine p={p} />
       {test.data && (
         <Callout tone={test.data.ok ? "success" : "danger"}
           title={test.data.ok ? `Connected · ${test.data.latencyMs} ms` : `Test failed after ${test.data.latencyMs} ms`}>
-          <span className="font-mono text-xs">{test.data.model}</span>
-          {test.data.text && <span className="block break-words mt-0.5">{test.data.ok ? `“${test.data.text}”` : test.data.text}</span>}
+          {test.data.source !== "server" && <span className="font-mono text-xs">{test.data.model}</span>}
+          {test.data.text && (
+            <span className="block break-words mt-0.5">
+              {test.data.ok && test.data.source !== "server" ? `“${test.data.text}”` : test.data.text}
+            </span>
+          )}
         </Callout>
       )}
       <div>

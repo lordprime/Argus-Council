@@ -3,6 +3,8 @@
 
 import { create } from "zustand";
 
+import { applyComms } from "@/features/viz/comms";
+import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
 import type { Actor, Member, RunEvent } from "@/lib/types";
 
 export type MemberStatus = "idle" | "thinking" | "tool" | "waiting" | "held" | "blocked" | "error";
@@ -22,6 +24,8 @@ export interface ToolCallItem {
   preview?: string;
   output: string;
   durationMs?: number;
+  /** ts of tool.call.completed */
+  endTs?: string;
 }
 
 export interface InterceptInfo {
@@ -52,6 +56,8 @@ export interface ThoughtItem {
   latencyMs?: number;
   model?: string;
   finish?: string;
+  /** ts of thought.completed (ts is thought.started) */
+  endTs?: string;
   intercepts: InterceptInfo[];
 }
 
@@ -66,6 +72,7 @@ export interface ApprovalItem {
   toolCallId?: string;
   status: "pending" | "approved" | "rejected" | "expired";
   reason?: string;
+  resolvedTs?: string;
 }
 
 export interface VoteItem {
@@ -134,6 +141,10 @@ export interface RunState {
   exports: Record<string, { format: string; status: string; path?: string; error?: string }>;
   connection: "connecting" | "live" | "reconnecting" | "closed" | "lost";
   reconnectAttempt: number;
+  /** Agent-to-agent/tool/peer exchanges for the live visualisations; capped at 4000, newest last. */
+  comms: CommEvent[];
+  /** Sub-councils spawned by this run, keyed by child run id. */
+  subcouncils: Record<string, SubCouncilInfo>;
 }
 
 export function emptyRun(runId: string, members: Member[] = []): RunState {
@@ -152,6 +163,8 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     exports: {},
     connection: "connecting",
     reconnectAttempt: 0,
+    comms: [],
+    subcouncils: {},
   };
 }
 
@@ -223,6 +236,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
         latencyMs: d.latency_ms,
         model: d.model,
         finish: d.finish,
+        endTs: ev.ts,
       } as ThoughtItem;
       push(s, done);
       break;
@@ -274,7 +288,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "tool.call.completed": {
       const t = s.items[d.tool_call_id];
       if (t?.kind === "tool") {
-        s.items[d.tool_call_id] = { ...t, status: d.status, preview: d.result_preview, durationMs: d.duration_ms };
+        s.items[d.tool_call_id] = { ...t, status: d.status, preview: d.result_preview, durationMs: d.duration_ms, endTs: ev.ts };
       }
       break;
     }
@@ -286,7 +300,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       break;
     case "approval.resolved": {
       const a = s.items[d.approval_id];
-      if (a?.kind === "approval") s.items[d.approval_id] = { ...a, status: d.decision, reason: d.reason };
+      if (a?.kind === "approval") s.items[d.approval_id] = { ...a, status: d.decision, reason: d.reason, resolvedTs: ev.ts };
       break;
     }
     case "vote.opened":
@@ -339,10 +353,11 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     default:
       if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
   }
+  applyComms(s, ev);
 }
 
 export function reduceAll(state: RunState, events: RunEvent[]): RunState {
-  const s: RunState = { ...state, order: [...state.order], items: { ...state.items } };
+  const s: RunState = { ...state, order: [...state.order], items: { ...state.items }, comms: [...(state.comms ?? [])], subcouncils: state.subcouncils ?? {} };
   for (const ev of events) applyEvent(s, ev);
   return s;
 }

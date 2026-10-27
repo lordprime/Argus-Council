@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
-import { api, V1 } from "@/lib/api";
+import { api, ApiError, V1 } from "@/lib/api";
 import { keys } from "@/lib/queries";
 import type { LedgerEntry, McpServerInfo, ProviderConfig, RemoteAgentInfo } from "@/lib/types";
 
@@ -47,18 +47,55 @@ export const useProviderModels = (name: string, enabled: boolean) =>
     staleTime: 60_000,
   });
 
+export type HealthStatus = "unknown" | "ok" | "unreachable" | "auth_failed" | "rate_limited" | "error";
+
+/** Fields the backend adds once provider health is persisted; all optional so older servers still render. */
+export interface ProviderHealth {
+  key_hint?: string | null;
+  health_status?: HealthStatus | null;
+  health_detail?: string | null;
+  health_checked_at?: string | null;
+  health_latency_ms?: number | null;
+}
+export type ProviderWithHealth = ProviderConfig & ProviderHealth;
+
 export interface TestResult {
   ok: boolean;
   latencyMs: number;
   model: string;
   text: string;
+  /** "server": the persisting health probe (text is a status detail); otherwise text is the model's reply. */
+  source?: "server" | "completion";
 }
 
-/** "Test connection": one tiny completion through the router; resolves with timing whether it succeeds or not. */
+type ServerTest = ProviderHealth & { ok?: boolean; latency_ms?: number | null; detail?: string | null; model?: string | null; content?: string; status?: HealthStatus };
+
+/**
+ * "Test connection". Prefers the persisting endpoint (POST /providers/{name}/test), which stores health on the provider,
+ * and falls back to one tiny completion through the router on servers without it. Resolves whether it succeeds or not,
+ * and always refetches the provider list so persisted health shows.
+ */
 export function useTestProvider() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider, model }: { provider: string; model: string }): Promise<TestResult> => {
       const t0 = performance.now();
+      const elapsed = () => Math.round(performance.now() - t0);
+      try {
+        const r = await api.post<ServerTest>(`${V1}/providers/${enc(provider)}/test`, model ? { model } : {});
+        const ok = r.ok ?? (r.status ?? r.health_status) === "ok";
+        return {
+          ok,
+          latencyMs: r.latency_ms ?? r.health_latency_ms ?? elapsed(),
+          model: r.model || model,
+          text: (r.detail ?? r.health_detail ?? r.content ?? "").slice(0, 200),
+          source: "server",
+        };
+      } catch (err) {
+        if (!(err instanceof ApiError && (err.status === 404 || err.status === 405))) {
+          return { ok: false, latencyMs: elapsed(), model, text: (err instanceof Error ? err.message : "Request failed").slice(0, 200) };
+        }
+      }
       try {
         const r = await api.post<{ model: string; content: string }>(`${V1}/llm/complete`, {
           provider,
@@ -66,12 +103,13 @@ export function useTestProvider() {
           messages: [{ role: "user", content: "Reply with the single word OK." }],
           max_tokens: 16,
         });
-        return { ok: true, latencyMs: Math.round(performance.now() - t0), model: r.model || model, text: (r.content ?? "").slice(0, 200) };
+        return { ok: true, latencyMs: elapsed(), model: r.model || model, text: (r.content ?? "").slice(0, 200) };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Request failed";
-        return { ok: false, latencyMs: Math.round(performance.now() - t0), model, text: msg.slice(0, 200) };
+        return { ok: false, latencyMs: elapsed(), model, text: msg.slice(0, 200) };
       }
     },
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.providers }),
   });
 }
 
