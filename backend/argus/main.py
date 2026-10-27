@@ -34,7 +34,7 @@ from argus.api.v1 import (
     templates,
     webhooks,
 )
-from argus.cache.store import RedisBackend, build_cache
+from argus.cache.store import RedisBackend, build_cache, redis_client
 from argus.core.config import Settings, get_settings
 from argus.core.errors import error_response, install_error_handlers
 from argus.core.logging import configure_logging, get_logger
@@ -125,15 +125,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.background = set()
         app.state.db = Database(settings)
-        app.state.cache = await build_cache(settings.redis_url, settings.cache_default_ttl)
+        app.state.cache = await build_cache(
+            settings.redis_url,
+            settings.cache_default_ttl,
+            socket_timeout=settings.redis_socket_timeout_s,
+            connect_timeout=settings.redis_connect_timeout_s,
+        )
         if not hasattr(app.state, "llm"):
             app.state.llm = LLMRouter(settings, app.state.cache, sessionmaker=app.state.db.sessionmaker)
         if not settings.is_production:
             # Production schemas are managed by Alembic migrations.
             await app.state.db.create_all()
         await _bootstrap_admin(app, settings)
-        backend = app.state.cache.backend
-        app.state.broker = build_broker(backend.client if isinstance(backend, RedisBackend) else None)
+        # Pub/sub gets its own client: subscribers block on reads for minutes, which the cache
+        # client's read timeout would cut off.
+        app.state.broker_client = (
+            redis_client(settings.redis_url, connect_timeout=settings.redis_connect_timeout_s)
+            if isinstance(app.state.cache.backend, RedisBackend) and settings.redis_url
+            else None
+        )
+        app.state.broker = build_broker(app.state.broker_client)
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
         app.state.runs = RunManager(
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
@@ -157,6 +168,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if app.state.background:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
             await app.state.broker.close()
+            if app.state.broker_client is not None:
+                await app.state.broker_client.aclose()
             await app.state.llm.aclose()
             await app.state.cache.close()
             await app.state.db.dispose()

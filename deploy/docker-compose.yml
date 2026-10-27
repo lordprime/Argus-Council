@@ -33,9 +33,13 @@ services:
   redis:
     <<: *hardening
     image: redis:7-alpine
+    # noeviction: idempotency records, refresh-token revocations and stream tickets must never be
+    # evicted (every key has a TTL, so volatile-* policies would evict them too). When memory is
+    # full, writes fail instead: the API skips LLM caching, rate-limits per process and answers 503
+    # where a record is required (argus/cache/store.py); the RedisMemoryHigh alert fires first.
     command: >
       redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-      --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+      --maxmemory 512mb --maxmemory-policy noeviction --appendonly yes
       --rename-command FLUSHALL "" --rename-command CONFIG ""
     user: "999:1000" # redis user in the alpine image
     volumes: ["redisdata:/data"]

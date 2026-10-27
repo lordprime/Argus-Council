@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -176,6 +177,11 @@ async def test_run_duration_observed_on_finish(client, auth):
     before = _value("argus_run_duration_seconds_count", labels)
     r = await client.post(API, headers=auth, json={"topic": "d", "mode": "chat", "size": 2})
     await wait_status(client, auth, r.json()["id"])
+    # Metrics are recorded at the end of the run task, just after the terminal status is committed.
+    for _ in range(100):
+        if _value("argus_run_duration_seconds_count", labels) > before:
+            break
+        await asyncio.sleep(0.02)
     assert _value("argus_run_duration_seconds_count", labels) == before + 1
 
 

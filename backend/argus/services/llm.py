@@ -269,7 +269,7 @@ class LLMRouter:
             request = req.model_copy(update={"model": r.model})
             cache_key = self._cache_key(owner_id, r.provider, request) if self._cacheable(request) else None
             if cache_key:
-                hit = await self.cache.get(cache_key)
+                hit = await self.cache.get_best_effort(cache_key)
                 if hit is not None:
                     resp = CompletionResponse.model_validate(hit)
                     resp.cached = True
@@ -300,7 +300,9 @@ class LLMRouter:
             if ledger:
                 ledger.record(resp)
             if cache_key and resp.finish_reason in ("stop", "tool_calls"):
-                await self.cache.set(cache_key, resp.model_dump(mode="json"), ttl=self.settings.llm_cache_ttl)
+                await self.cache.set_best_effort(
+                    cache_key, resp.model_dump(mode="json"), ttl=self.settings.llm_cache_ttl
+                )
             return resp
         assert last_error is not None
         raise last_error
