@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-10-27 |
-| Commit audited | `83d91ae` (main), fixes on top of it |
+| Commit audited | `83d91ae` (main), fixes on top of it; follow-up pass on the merged main |
 | Scope | `backend/` (FastAPI API, runtime, tools, protocols, sandbox), `frontend/` (SPA, nginx), `deploy/`, `backend/Dockerfile`, `frontend/Dockerfile`, `.github/workflows/` |
 | Companion | [`threat-model.md`](threat-model.md) (TM-x threats), [`/SECURITY.md`](https://github.com/lordprime/Argus-Council/blob/main/SECURITY.md) (reporting policy) |
 
@@ -15,9 +15,21 @@ internal services and cloud metadata. One went through the `web_fetch` tool, who
 block any run could switch off (SEC-02). The other went through webhooks, MCP servers and remote
 agents, which allowed private targets by default and could be bypassed with DNS rebinding (SEC-03).
 
-Five Medium findings. Four are fixed: scoped admin API keys (SEC-04), session revocation (SEC-05),
-the sandbox reaching the API (SEC-07) and open registration in the example config (SEC-09, partly).
-One is still open: users share a sandbox uid (SEC-08).
+Five Medium findings, all fixed: scoped admin API keys (SEC-04), session revocation (SEC-05),
+the sandbox reaching the API (SEC-07), sandbox runs sharing one uid (SEC-08), and open
+self-registration in deployments (SEC-09).
+
+A follow-up pass closed the items the first pass left open or partly fixed:
+- SEC-08: every sandbox execution now runs as its own uid.
+- SEC-09: registration is off by default in compose.
+- SEC-12: peer response bodies are capped.
+- SEC-13: stdio MCP servers stay tied to an active admin owner.
+- SEC-14: provider endpoints are re-checked at connect time.
+- SEC-05 residual: session revocation is enforced on the protocol endpoints and the SSE stream.
+- SEC-22: optional TOTP two-factor authentication.
+
+The pass also found and fixed one new High: the smoke test left a known admin password behind
+(SEC-25). SEC-23 (action pinning) was fixed on main.
 
 The rest are Low and Info. Authorisation is consistent: every router checks ownership, so no
 cross-user access (IDOR) was found. The scanners report no known vulnerable dependencies.
@@ -108,13 +120,13 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
 | SEC-05 | Medium | Sessions not ended on logout, password change or refresh-token reuse | Fixed |
 | SEC-06 | Low | Refresh-token rotation race: concurrent reuse both succeed | Fixed |
 | SEC-07 | Medium | Sandbox shared a Docker network with the API | Fixed |
-| SEC-08 | Medium | All sandbox executions share one uid and container (cross-tenant workspace access) | **Open** (partly mitigated) |
-| SEC-09 | Medium | Self-registration open by default in deployments | Partly fixed |
+| SEC-08 | Medium | All sandbox executions share one uid and container (cross-tenant workspace access) | Fixed (follow-up) |
+| SEC-09 | Medium | Self-registration open by default in deployments | Fixed (follow-up) |
 | SEC-10 | Low | First account to register on a fresh install becomes admin | Accepted risk |
 | SEC-11 | Low | A2A endpoint not rate limited; client-chosen blocking wait unbounded | Fixed |
-| SEC-12 | Low | Unbounded response bodies from MCP/A2A/ACP peers | Open |
-| SEC-13 | Low | stdio MCP servers keep running after their admin owner is demoted | Open |
-| SEC-14 | Low | LLM provider base URLs not re-checked at connect time (DNS rebinding) | Partly fixed |
+| SEC-12 | Low | Unbounded response bodies from MCP/A2A/ACP peers | Fixed (follow-up) |
+| SEC-13 | Low | stdio MCP servers keep running after their admin owner is demoted | Fixed (follow-up) |
+| SEC-14 | Low | LLM provider base URLs not re-checked at connect time (DNS rebinding) | Fixed (follow-up) |
 | SEC-15 | Low | Rate-limit and revocation state can be evicted from the cache | Accepted risk |
 | SEC-16 | Low | Secret-encryption key derived from `ARGUS_SECRET_KEY` when unset | Accepted risk |
 | SEC-17 | Low | Request-size limit relies on `Content-Length` (chunked bodies) | Accepted risk |
@@ -122,9 +134,10 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
 | SEC-19 | Info | SSE stream ticket travels in the query string | Accepted risk |
 | SEC-20 | Info | Registration reveals whether an email has an account (409) | Accepted risk |
 | SEC-21 | Info | Run owners can relax tool approvals for their own runs | Accepted risk |
-| SEC-22 | Info | No multi-factor authentication | Open (recommendation) |
-| SEC-23 | Info | GitHub Actions pinned by tag, not commit SHA | Open (recommendation) |
+| SEC-22 | Info | No multi-factor authentication | Fixed (follow-up): optional TOTP |
+| SEC-23 | Info | GitHub Actions pinned by tag, not commit SHA | Fixed (on main) |
 | SEC-24 | Info | Web container serves plain HTTP; TLS must be terminated upstream | Accepted (documented) |
+| SEC-25 | High | `deploy.sh --smoke` left an account with a published password (admin on a fresh install) | Fixed (follow-up) |
 | SEC-P1 | (was Critical) | Empty-scope API keys had full access | Fixed earlier; verified |
 | SEC-P2 | (was High) | Read-only keys could start or cancel runs over A2A/ACP/MCP | Fixed earlier; verified |
 
@@ -241,11 +254,18 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
     the change.
   - Revocation state lives in Redis with the refresh-token TTL. `get_principal` checks it on every
     JWT request.
-- **Residual:** the protocol endpoints (`/mcp`, `/a2a`) and the SSE `Authorization` fallback call
-  `resolve_principal` without the cache. A revoked JWT used there still works until it expires (at
-  most 60 minutes). These endpoints normally use API keys, which are revoked directly.
+- **Follow-up:** the first pass left the protocol endpoints (`/mcp`, `/a2a`) and the SSE
+  `Authorization` fallback calling `resolve_principal` without the cache. `resolve_principal` now
+  takes the cache as a required argument, so every caller checks revocation. `/acp` already used
+  `get_principal`.
+- **Outage policy:** the per-request check uses the same `session_revoked` helper everywhere. It
+  reads best-effort (`cache.get_best_effort`), so a Redis outage does not turn every request into
+  a 503. The cost is that during an outage, revoked access tokens keep working until they expire
+  (at most 60 minutes). Refresh-token single use goes through the strict `cache.incr_window` and
+  fails closed (503).
 - **Status:** Fixed. Tests: `test_logout_ends_session_server_side`,
-  `test_refresh_reuse_revokes_whole_session`, `test_password_change_signs_out_other_sessions`.
+  `test_refresh_reuse_revokes_whole_session`, `test_password_change_signs_out_other_sessions`,
+  `test_security_followups.py::test_signed_out_token_rejected_on_protocols_and_stream`.
 
 ### SEC-06 · Low · Refresh-token rotation race
 
@@ -264,7 +284,7 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
   `/mcp`) directly. Because `FORWARDED_ALLOW_IPS=*`, it could also forge any client IP and so
   bypass the IP throttles.
 - **Fix:** the sandbox now runs with `network_mode: none` and serves the API over a Unix socket on
-  a shared volume (`sandboxsock`, seeded by the image with `argus` ownership).
+  a shared volume (`sandboxsock`). Since SEC-08 the socket directory is owned by root, mode 0755.
   `RemoteSandbox` accepts `unix:/path` URLs. The `sandbox` network is gone and the API is no longer
   attached to it. A new CI compose-smoke assertion checks that sandbox code cannot reach `api:8000`.
 - **Status:** Fixed. Test: `test_remote_sandbox_over_unix_socket`, plus the CI check
@@ -273,30 +293,65 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
   was not reachable in the audit environment, so the container wiring itself is exercised only by
   CI's compose smoke test.
 
-### SEC-08 · Medium · Sandbox executions share one uid (open)
+### SEC-08 · Medium · Sandbox executions share one uid
 
 - **Location:** `backend/argus/sandbox/executor.py:execute`, `backend/argus/sandbox/server.py`.
-- **Description:** every command, for every user, runs in the same container as the same uid
+- **Description:** every command, for every user, ran in the same container as the same uid
   (10001) as the sandbox server. Each workspace is a `mkdtemp` directory under `/work`. These
-  directories are mode 0700, but all of them belong to that one uid.
-- **Exploit:** code in one run, for example written after a prompt injection, can:
-  1. start a process that calls `setsid` to escape the process-group kill and outlives the
+  directories were mode 0700, but all of them belonged to that one uid.
+- **Exploit:** code in one run, for example written after a prompt injection, could:
+  1. start a process that calls `setsid` to escape the process-group kill and outlive the
      command;
   2. read or modify other users' workspaces under `/work/run-*` while their commands run;
   3. replace the server's Unix socket to intercept later requests;
-  4. read the sandbox token from `/proc/<pid>/environ`. The token only grants access to the
-     sandbox itself.
-- **Mitigation applied:** the sandbox has no network (SEC-07), so nothing can be exfiltrated
-  except through the run's own output. After each command the executor also kills the process
-  group, which reaps ordinary background jobs (`cmd &`).
-- **Recommended fix:** give each execution its own uid from a pool. This needs `CAP_SETUID` and
-  `CAP_SETGID`, with the server starting as root and the children dropping to that uid. After the
-  command, kill every process of that uid (`kill -9 -1` run as the uid), and keep the socket
-  directory unwritable for it. A stronger option is one short-lived container (or gVisor or
-  Firecracker sandbox) per execution.
-- **Status:** **Open.** Fixing this needs a privilege model change in the container that could
-  not be validated without a Docker daemon. Until then, treat runs on one deployment as mutually
-  trusted, or run one sandbox per tenant.
+  4. read the sandbox token from `/proc/<pid>/environ`.
+- **Fix (follow-up):** new module `backend/argus/sandbox/isolation.py`, enabled by
+  `ARGUS_SANDBOX_UID_POOL=20000-20999` in compose. The sandbox container starts as root with only
+  `CAP_SETUID`, `CAP_SETGID` and `CAP_CHOWN`. It runs under `no-new-privileges`, without
+  `CAP_DAC_OVERRIDE` and without `CAP_KILL`. Each execution:
+  1. leases a uid of its own from the pool; no two concurrent executions share one;
+  2. gets a workspace that the server writes, then hands to that uid bottom-up with the top
+     directory set to 0700; `/work` itself is mode 0711, so a command can enter its own workspace
+     but cannot list or create anything else there;
+  3. runs as that uid, with no supplementary groups, umask 077, `HOME` and `TMPDIR` inside the
+     workspace, and rlimits that are now per execution, since `RLIMIT_NPROC` counts per uid;
+  4. ends with `kill(-1, SIGKILL)` from a helper that has dropped to the same uid; this reaches
+     every process of that uid, including `setsid` and double-forked ones, and nothing else; the
+     same sweep runs before the workspace is handed over;
+  5. has its workspace taken back by chown, top-down and without following symlinks, so the
+     server can read and delete it;
+  6. has whatever the uid left in `/tmp` and `/dev/shm` deleted before the uid returns to the
+     pool.
+
+  The command itself has no capabilities, and the token sits in a root process's environment,
+  which other uids cannot read. Root owns the socket directory (0755), so a sandboxed uid cannot
+  replace the socket. Older volumes are fixed at startup. If the pool is set but cannot be used
+  (the server did not start as root), `/exec` and `/health` return 503 instead of running
+  commands without isolation.
+- **Status:** Fixed. Tests: `backend/tests/test_sandbox_isolation.py` checks the decisions without
+  root or Docker, with the privileged calls replaced by a recording fake:
+  - uid leasing, release and exhaustion;
+  - ownership hand-over, done bottom-up, and take-back, done top-down without following symlinks;
+  - preexec ordering;
+  - the kill sweep running as the uid;
+  - scratch purge;
+  - the full executor lifecycle;
+  - fail-closed startup.
+
+  The CI compose smoke test checks the real container on every push:
+  - two concurrent runs, where one tries to read the other's `secret.txt` through `/work`, `/tmp`
+    and `/dev/shm`;
+  - a `setsid sleep 300` that must not survive its run;
+  - a `/tmp` leftover that must not reach the next run.
+- **Residual risk:**
+  - Isolation is by uid inside one container on one kernel. A kernel or container-runtime escape
+    is out of scope; use gVisor or Kata, or one sandbox per tenant, where that matters.
+  - Hard links into a workspace are limited by the host's `fs.protected_hardlinks` setting, which
+    defaults to on.
+  - Memory, CPU and pids limits are shared at the container level (2 GiB, 2 CPUs, 256 pids), so
+    one run can still slow others down (resource contention, not disclosure).
+  - The privileged sandbox calls are verified only by CI's compose test. The audit machine had no
+    Docker daemon and no subordinate uid range.
 
 ### SEC-09 · Medium · Self-registration open by default
 
@@ -307,10 +362,11 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
   code in the sandbox and use `web_fetch`.
 - **Fix:** `deploy/.env.example` now ships `ARGUS_ALLOW_REGISTRATION=false`. The first account can
   still register, because `register` always allows it while there are no users.
-- **Residual:** the compose fallback (`${ARGUS_ALLOW_REGISTRATION:-true}`) and the `Settings`
-  default stay `true`, because CI and the e2e smoke test register several users. Operators who
-  start from `.env.example` get the safe default.
-- **Status:** Partly fixed.
+- **Follow-up:** the compose default is now `false` too (`${ARGUS_ALLOW_REGISTRATION:-false}`).
+  CI's compose `.env` sets `ARGUS_ALLOW_REGISTRATION=true` explicitly for the smoke, UI and backup
+  tests. The `Settings` default stays `true` for local development and the test suite; production
+  installs go through compose.
+- **Status:** Fixed.
 
 ### SEC-10 · Low · First registrant becomes admin
 
@@ -326,37 +382,61 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
 - **Description:** `/a2a` skipped the per-principal rate limit that `/mcp` applies. A client-chosen
   `timeout_s` was unbounded, so one request could hold a worker and a DB session indefinitely, and
   a non-numeric value caused a 500.
-- **Fix:** the endpoint now applies the per-principal rate limit, and `_wait_seconds` clamps the
-  wait to 0–600 s and ignores invalid values.
-- **Status:** Fixed. Test: `test_a2a_blocking_wait_is_bounded`.
+- **Fix:** the endpoint now applies the per-principal rate limit. On main the wait clamp is now
+  shared by all protocols: `services.runs.wait_seconds` parses the client value and `wait_for_run`
+  caps it at `ARGUS_PROTOCOL_MAX_WAIT_S` (default 600 s).
+- **Status:** Fixed. Test: `test_a2a_blocking_wait_is_bounded` (retargeted to the shared clamp).
 
 ### SEC-12 · Low · Unbounded peer response bodies
 
 - **Location:** `backend/argus/protocols/mcp_client.py:_request` (`resp.text`),
   `a2a_client.py` and `acp_client.py` (`resp.json()`).
-- **Description:** a malicious or broken MCP server or remote agent can return a body of any size,
-  which is read fully into memory. `web_fetch` already caps reads at 2 MB.
-- **Status:** Open. Recommended fix: stream responses and stop after N MB. The risk is low because
-  these peers are configured by the user.
+- **Description:** a malicious or broken MCP server or remote agent could return a body of any
+  size, which was read fully into memory. `web_fetch` already capped reads at 2 MB.
+- **Fix (follow-up):** `netguard.CappedTransport` counts body bytes while streaming and raises
+  `ResponseTooLarge` past the limit; a declared `Content-Length` over the limit is refused before
+  any body is read. The limit applies to:
+  - MCP, A2A and ACP clients, through the connections service and the `remote_agent` tool:
+    `ARGUS_PROTOCOL_MAX_RESPONSE_BYTES`, default 10 MiB;
+  - webhook deliveries: 64 KiB, since only the status code is used.
+- **Status:** Fixed. Tests: `test_security_followups.py::test_capped_transport_bounds_peer_bodies`,
+  `test_mcp_client_rejects_oversized_response`, `test_outbound_clients_carry_the_configured_cap`.
 
 ### SEC-13 · Low · stdio MCP servers outlive their owner's admin role
 
 - **Location:** `backend/argus/services/connections.py:build_mcp_client`.
 - **Description:** only admins can register stdio MCP servers, and only when
-  `ARGUS_MCP_ALLOW_STDIO=true`. If the owner is later demoted, the server still spawns its command
-  in their runs, with environment variables they chose.
-- **Status:** Open. Recommended fix: check the owner's role when attaching stdio servers. The risk
-  is low because stdio is off by default.
+  `ARGUS_MCP_ALLOW_STDIO=true`. If the owner was later demoted, the server still spawned its
+  command in their runs, with environment variables they chose.
+- **Fix (follow-up):**
+  - Demoting or deactivating a user (`PATCH /admin/users/{id}`) disables their stdio servers, and
+    the audit row records how many.
+  - A non-admin cannot re-enable or discover a stdio server.
+  - When a run starts, `attach_connections` skips stdio servers unless the owner is still an
+    active admin, and emits `mcp_stdio_not_permitted` for each one skipped.
+  - Deleting an account removes its servers (cascade).
+- **Status:** Fixed. Tests: `test_stdio_servers_follow_their_owners_admin_role`,
+  `test_deactivation_disables_stdio_servers`, `test_attach_connections_skips_stdio_of_non_admin_owner`.
 
 ### SEC-14 · Low · Provider base URLs not re-checked at connect time
 
 - **Location:** `backend/argus/providers/*` (the OpenAI-compatible, Anthropic and Gemini clients).
-- **Description:** private provider URLs are allowed by design, since self-hosted models live on
-  private networks. A public hostname can be rebound to a link-local address after it is saved.
-- **Fix applied:** link-local, multicast and unspecified addresses are now refused when the URL is
-  saved.
-- **Status:** Partly fixed. To close it, give provider SDK clients the netguard transport with
-  `allow_private=settings.provider_allow_private_urls`.
+- **Description:** a provider URL was checked only when it was saved, so a public hostname could
+  later be rebound to a private or link-local address.
+- **Fix:** the first pass refused link-local, multicast and unspecified addresses at save time. The
+  follow-up re-checks the address at connect time:
+  - User-configured providers connect through the netguard backend. This covers the
+    OpenAI-compatible and Gemini clients (`httpx`) and the Anthropic SDK, which uses its own
+    `httpx2`/`httpcore2` stack.
+  - Private addresses follow `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS`. The compose default is `false`;
+    set it to `true` to let users add self-hosted Ollama, vLLM or LM Studio servers on the local
+    network. Link-local addresses are refused regardless.
+  - Operator-configured system providers (`ARGUS_OLLAMA_BASE_URL` and the like) are not guarded and
+    keep working as before.
+- **Upgrade note:** existing user providers that point at private addresses need
+  `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS=true`.
+- **Status:** Fixed. Tests: `test_user_provider_clients_recheck_addresses_at_connect`,
+  `test_anthropic_provider_uses_guarded_httpx2_client`, `test_router_guards_user_providers_with_the_setting`.
 
 ### SEC-15 to SEC-24 · Low / Info
 
@@ -382,11 +462,45 @@ Locations point at the pre-fix code (`83d91ae`) unless the finding is still open
   for their own runs. This makes prompt-injection-driven tool use possible, but only inside their
   own data and the network-less sandbox. The defaults are safe: shell, package installs, remote
   agents and network writes all need approval, and MCP servers start in the `ask` trust level.
-- **SEC-22 (Info, open):** there is no MFA. Recommended for admins.
-- **SEC-23 (Info, open):** workflow actions use version tags (`@v4`, `@v6`), not commit SHAs.
-  Workflow permissions are `contents: read`.
+- **SEC-22 (Info, fixed in the follow-up):** optional TOTP two-factor authentication (RFC 6238;
+  `backend/argus/api/v1/mfa.py`, `backend/argus/core/totp.py`, migration 0015).
+  - Enrolment needs the password. Turning MFA on returns ten single-use recovery codes and signs
+    out the account's other sessions.
+  - With MFA on, `/auth/login` returns a 5-minute `mfa_token` challenge. The challenge allows five
+    attempts and is single-use. `POST /auth/mfa/verify` exchanges it, together with an
+    authenticator code or a recovery code, for tokens.
+  - Each authenticator code is accepted once (its time step is recorded), and recovery codes are
+    consumed on use.
+  - Every step is rate limited per account and per IP.
+  - Turning MFA off or replacing the recovery codes needs the password and a code. Admins can
+    reset a user's MFA (`reset_mfa`).
+  - The secret is SecretBox-encrypted and recovery codes are stored as SHA-256 hashes; account
+    exports include neither.
+  - The web app has a second sign-in step and a Profile section for all of this.
+  - API keys are not covered: creating one needs a signed-in session, which now passes the second
+    factor. MFA is optional, not enforced; requiring it for admins is a possible next step.
+  - Tests: `backend/tests/test_mfa.py` (including the RFC 6238 test vectors) and two login-step
+    tests in `frontend/src/test/shell.test.tsx`. Those frontend tests run in CI; the audit
+    machine's Node 18 cannot run vitest.
+- **SEC-23 (Info, fixed on main):** every action in `ci.yml` is pinned to a commit SHA, with the
+  same pins as `pages.yml` and `wiki.yml`. Checkouts use `persist-credentials: false`, and workflow
+  permissions are `contents: read`.
 - **SEC-24 (Info, documented):** the web container listens on plain HTTP on port 8080. Put a TLS
   proxy in front of it. The API sends HSTS in production.
+
+### SEC-25 · High · Smoke test left a known password behind (follow-up)
+
+- **Location:** `scripts/smoke.sh`, as run by `scripts/deploy.sh --smoke` and CI.
+- **Description:** the smoke test registered an account with the fixed password
+  `smoke-test-password-123`, which is published in the repository, and kept it. On a fresh install
+  the first account becomes the admin. So `deploy.sh --smoke` left an admin account that anyone
+  could sign in to, and every later smoke run left another member account with a known password.
+- **Fix:** each run now uses a random password from `secrets.token_urlsafe` and deletes its
+  account afterwards with `DELETE /me`. If the smoke account is the only admin, deletion is refused
+  (409); the account is then kept with its unknown password, and the script prints how to recover
+  with `ARGUS_BOOTSTRAP_ADMIN_*`. The backup and restore e2e test counts accounts, so it sets
+  `SMOKE_KEEP_ACCOUNT=1`.
+- **Status:** Fixed. The CI compose smoke test and `scripts/tests/e2e.sh` exercise it.
 
 ### SEC-P1 / SEC-P2 · Previously fixed issues, verified
 
@@ -502,3 +616,41 @@ and `owner_id`, and a mismatch returns 404.
 New configuration: `ARGUS_CONNECTIONS_ALLOW_PRIVATE_URLS` and `ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS`,
 both defaulting to `false`. The new endpoint is `POST /api/v1/auth/logout`, which takes
 `{"refresh_token": ...}` and returns 204.
+
+### Follow-up pass
+
+- New:
+  - `backend/argus/sandbox/isolation.py`
+  - `backend/argus/core/totp.py`
+  - `backend/argus/api/v1/mfa.py`
+  - `backend/alembic/versions/20261027_0015_user_totp.py`
+  - `frontend/src/components/settings/MfaSection.tsx`
+  - tests: `test_sandbox_isolation.py`, `test_security_followups.py`, `test_mfa.py`
+- Changed in the backend:
+  - `core/netguard.py`, which gains the body cap and the `httpx2` guard
+  - `core/config.py`, `core/security.py`
+  - `providers/{catalog,anthropic}.py`
+  - `services/{llm,connections,webhooks,account_export}.py`
+  - `protocols/{a2a,mcp_server,a2a_client,acp_client,mcp_client}.py`
+  - `tools/remote.py`
+  - `api/deps.py`, `api/v1/{runs,auth,admin,connections}.py`
+  - `sandbox/{executor,server}.py`
+  - `db/models.py`, `main.py`
+  - `Dockerfile`
+- Changed in the frontend:
+  - `src/routes/Auth.tsx`, `src/routes/settings/Profile.tsx`
+  - `src/stores/session.ts`
+  - `src/lib/{api,types}.ts`
+  - `src/test/shell.test.tsx`
+- Changed in deploy, scripts and CI:
+  - `deploy/docker-compose.yml`, `deploy/.env.example`
+  - `scripts/smoke.sh`, `scripts/tests/e2e.sh`
+  - `.github/workflows/ci.yml`
+
+New configuration:
+- `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS` (compose default `false`);
+- `ARGUS_PROTOCOL_MAX_RESPONSE_BYTES` (default 10 MiB);
+- `ARGUS_SANDBOX_UID_POOL` and `ARGUS_SANDBOX_SOCKET_DIR` (sandbox container);
+- `ARGUS_ALLOW_REGISTRATION`, whose compose default is now `false`.
+
+New endpoints: `GET /api/v1/auth/mfa` and `POST /api/v1/auth/mfa/{setup,enable,disable,recovery-codes,verify}`.

@@ -49,7 +49,7 @@ Python 3.12, FastAPI, SQLAlchemy, PyJWT (HS256), argon2-cffi, httpx/httpcore, Re
 - **Data Affected:** user accounts
 - **Status:** mitigated
 
-**Mitigation:** nginx overwrites X-Forwarded-For with $remote_addr; login is additionally throttled per account. Recommend MFA for admins (not implemented).
+**Mitigation:** nginx overwrites X-Forwarded-For with $remote_addr; login is additionally throttled per account. Optional TOTP two-factor authentication (SEC-22) protects accounts whose password leaks.
 
 **Evidence:**
 
@@ -88,9 +88,9 @@ Python 3.12, FastAPI, SQLAlchemy, PyJWT (HS256), argon2-cffi, httpx/httpcore, Re
 - **Impact:** Cross-tenant disclosure or tampering of code and outputs; attacks on the API from inside the deployment.
 - **Likelihood:** medium
 - **Data Affected:** run workspaces, artifacts
-- **Status:** in_progress
+- **Status:** mitigated
 
-**Mitigation:** Sandbox now has network_mode none and is reached over a Unix socket (no route to API, DB, cache or internet); background processes reaped after each command. Open: per-execution uid or container isolation (SEC-08).
+**Mitigation:** Sandbox now has network_mode none and is reached over a Unix socket (no route to API, DB, cache or internet); background processes reaped after each command. Each execution runs as its own uid from a pool (0700 workspace, kill(-1) sweep as that uid, scratch purge, no capabilities for the command); residual: shared kernel and container resource limits (SEC-08).
 
 **Evidence:**
 
@@ -160,9 +160,9 @@ Python 3.12, FastAPI, SQLAlchemy, PyJWT (HS256), argon2-cffi, httpx/httpcore, Re
 - **Impact:** Cost abuse; admin takeover of a new deployment.
 - **Likelihood:** medium
 - **Data Affected:** provider budget, admin account
-- **Status:** in_progress
+- **Status:** mitigated
 
-**Mitigation:** deploy/.env.example now disables self-registration; ARGUS_BOOTSTRAP_ADMIN_* creates the admin without a public window. Residual: compose fallback stays 'true' for CI.
+**Mitigation:** deploy/.env.example now disables self-registration; ARGUS_BOOTSTRAP_ADMIN_* creates the admin without a public window. The compose default is now false as well; CI opts in explicitly. The smoke test no longer leaves a known password behind (SEC-25).
 
 **Evidence:**
 
