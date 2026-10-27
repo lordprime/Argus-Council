@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub `curl` for scripts/tests/run.sh: the UI and /health/ready answer while the stub API is healthy.
+S="${STUB_STATE:?STUB_STATE is not set}"
+url="${*: -1}"
+[ "$(cat "$S/ct/api.status" 2>/dev/null)" = healthy ] || exit 22
+case "$url" in
+  */health/ready) printf '{"status":"ok"}\n' ;;
+  *) ;; # the UI page; wait_healthy discards it (-o /dev/null)
+esac

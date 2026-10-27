@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Stub `docker` for scripts/tests/run.sh. It records every call in $STUB_STATE/calls.log and
+# simulates just enough of Docker, Compose, Postgres and the API entrypoint for the deploy scripts:
+#
+#   images     $STUB_STATE/tags/<repo:tag> holds an image id; $STUB_STATE/ids/<id> its properties
+#              (head = the newest migration the image knows, healthy = 1 or 0).
+#   database   $STUB_STATE/db/{rev,data}; rev is a number, 0 shown as "base".
+#   api        starting it runs the entrypoint: a database ahead of the image crash-loops (Alembic
+#              cannot locate the revision), otherwise it migrates to the image's head.
+#
+# Knobs (environment): STUB_BUILD_HEAD, STUB_BUILD_HEALTHY, STUB_BUILD_FAIL, STUB_PGDUMP_FAIL,
+# STUB_TAR_FAIL, STUB_FORCE_UNHEALTHY, STUB_DOWNGRADE_FAIL.
+set -euo pipefail
+S="${STUB_STATE:?STUB_STATE is not set}"
+mkdir -p "$S/tags" "$S/ids" "$S/db" "$S/ct"
+printf '%s\n' "docker $*" >>"$S/calls.log"
+
+fail() { printf 'stub docker: %s\n' "$*" >&2; exit 1; }
+tagfile() { printf '%s/tags/%s' "$S" "$(printf '%s' "$1" | tr '/:' '__')"; }
+resolve() { # NAME or id -> id
+  case "$1" in sha256:*) [ -f "$S/ids/$1" ] && printf '%s' "$1" ;; *) [ -f "$(tagfile "$1")" ] && cat "$(tagfile "$1")" ;; esac
+}
+idprop() { grep -E "^$2=" "$S/ids/$1" | cut -d= -f2-; }
+rev() { cat "$S/db/rev"; }
+revname() { local r; r="$(rev)"; [ "$r" = 0 ] && printf 'base' || printf '%s' "$r"; }
+num() { [ "$1" = base ] && printf 0 || printf '%s' "$1"; }
+pg_up() { [ -f "$S/postgres_up" ]; }
+
+start_api() { # run the entrypoint of the image ARGUS_VERSION names
+  local id head
+  id="$(resolve "argus-council/api:${ARGUS_VERSION:-latest}")" || true
+  [ -n "$id" ] || fail "no such image: argus-council/api:${ARGUS_VERSION:-latest}"
+  echo "$id" >"$S/ct/api"
+  local wid; wid="$(resolve "argus-council/web:${ARGUS_VERSION:-latest}")" || true
+  [ -n "$wid" ] || fail "no such image: argus-council/web:${ARGUS_VERSION:-latest}"
+  echo "$wid" >"$S/ct/web"
+  head="$(idprop "$id" head)"
+  if [ "$(rev)" -gt "$head" ]; then
+    echo crashed >"$S/ct/api.status" # FAILED: Can't locate revision identified by ...
+    return 0
+  fi
+  if [ "$(rev)" -lt "$head" ]; then
+    echo "$head" >"$S/db/rev"
+    echo "$(cat "$S/db/data")+m$head" >"$S/db/data"
+  fi
+  if [ "${STUB_FORCE_UNHEALTHY:-0}" = 1 ] || [ "$(idprop "$id" healthy)" = 0 ]; then
+    echo unhealthy >"$S/ct/api.status"
+  else
+    echo healthy >"$S/ct/api.status"
+  fi
+}
+
+compose() {
+  while [ $# -gt 0 ]; do
+    case "$1" in -f | --env-file) shift 2 ;; *) break ;; esac
+  done
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    version) echo "Docker Compose version v2.99.0-stub" ;;
+    ps)
+      case "$*" in
+        *--services*)
+          pg_up && echo postgres
+          [ -f "$S/ct/api.status" ] && grep -qv stopped "$S/ct/api.status" && echo api
+          true ;;
+        *-q*)
+          local svc="${*: -1}"
+          [ -f "$S/ct/$svc" ] && echo "cid-$svc"
+          true ;;
+        *) echo "stub ps: api=$(cat "$S/ct/api.status" 2>/dev/null || echo none)" ;;
+      esac ;;
+    logs) echo "stub logs" ;;
+    up)
+      local svcs=() a
+      for a in "$@"; do case "$a" in -*) ;; *) svcs+=("$a") ;; esac; done
+      touch "$S/postgres_up"
+      if [ ${#svcs[@]} -eq 0 ] || printf '%s\n' "${svcs[@]}" | grep -qx api; then start_api; fi ;;
+    stop)
+      if printf '%s\n' "$@" | grep -qx api; then echo stopped >"$S/ct/api.status"; fi ;;
+    exec)
+      [ "${1:-}" = -T ] && shift
+      [ "$1" = postgres ] || fail "exec only supports postgres"
+      shift
+      pg_up || fail "postgres is not running"
+      local cmd="$1"; shift
+      case "$cmd" in
+        pg_isready) echo "accepting connections" ;;
+        pg_dump)
+          printf 'ARGUSDUMP\nrev=%s\n' "$(rev)"
+          [ "${STUB_PGDUMP_FAIL:-0}" = 1 ] && fail "pg_dump: connection lost"
+          printf 'data=%s\nEND\n' "$(cat "$S/db/data")" ;;
+        pg_restore)
+          local in; in="$(cat)"
+          if [ "$(printf '%s\n' "$in" | head -n1)" != ARGUSDUMP ] || [ "$(printf '%s\n' "$in" | tail -n1)" != END ]; then
+            fail "pg_restore: could not read input file: end of file"
+          fi
+          case "$*" in
+            *"-f /dev/null"*) ;;
+            *) printf '%s\n' "$in" | grep -E '^(rev|data)=' | sed 's/^/RESTORE /' ;;
+          esac ;;
+        psql)
+          local q="" prev=""
+          for a in "$@"; do [ "$prev" = -tAc ] && q="$a"; prev="$a"; done
+          if [ -n "$q" ]; then
+            case "$q" in
+              *to_regclass*) [ "$(rev)" = 0 ] && echo f || echo t ;;
+              *string_agg*) echo "$(rev)" ;;
+              *) fail "unexpected query: $q" ;;
+            esac
+          else
+            local sql; sql="$(cat)"
+            echo "$sql" >"$S/last.sql"
+            if printf '%s\n' "$sql" | grep -qx 'COMMIT;' && ! printf '%s\n' "$sql" | grep -qx 'ROLLBACK;' \
+              && printf '%s\n' "$sql" | grep -qx 'DROP SCHEMA IF EXISTS public CASCADE;'; then
+              printf '%s\n' "$sql" | sed -n 's/^RESTORE rev=//p' >"$S/db/rev"
+              printf '%s\n' "$sql" | sed -n 's/^RESTORE data=//p' >"$S/db/data"
+              echo restore >>"$S/restores.log"
+            fi
+          fi ;;
+        *) fail "unexpected exec: $cmd" ;;
+      esac ;;
+    run)
+      local a args=() target=""
+      for a in "$@"; do args+=("$a"); done
+      case "${args[*]}" in
+        *"alembic downgrade"*)
+          target="${args[${#args[@]}-1]}"
+          [ "${STUB_DOWNGRADE_FAIL:-0}" = 1 ] && fail "alembic downgrade failed"
+          local id; id="$(resolve "argus-council/api:${ARGUS_VERSION:-latest}")" || fail "no such image"
+          [ "$(idprop "$id" head)" -ge "$(rev)" ] || fail "Can't locate revision identified by $(rev)"
+          num "$target" >"$S/db/rev"
+          echo downgrade >>"$S/downgrades.log" ;;
+        *) fail "unexpected compose run: $*" ;;
+      esac ;;
+    *) fail "unexpected compose command: $sub" ;;
+  esac
+}
+
+case "${1:-}" in
+  compose) shift; compose "$@" ;;
+  info) echo "stub docker info" ;;
+  build)
+    shift
+    [ "${STUB_BUILD_FAIL:-0}" = 1 ] && fail "build failed"
+    tags=() ctx=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) tags+=("$2"); shift 2 ;;
+        --secret) shift 2 ;;
+        -*) shift ;;
+        *) ctx="$1"; shift ;;
+      esac
+    done
+    n=$(($(cat "$S/build_counter" 2>/dev/null || echo 0) + 1)); echo "$n" >"$S/build_counter"
+    id="sha256:built$n-${ctx##*/}"
+    printf 'head=%s\nhealthy=%s\n' "${STUB_BUILD_HEAD:-1}" "${STUB_BUILD_HEALTHY:-1}" >"$S/ids/$id"
+    for t in "${tags[@]}"; do echo "$id" >"$(tagfile "$t")"; done ;;
+  image)
+    case "$2" in
+      inspect) [ -n "$(resolve "$3")" ] ;;
+      ls)
+        repo="$(printf '%s' "$3" | tr '/:' '__')"
+        for f in "$S/tags/${repo}_"*; do [ -e "$f" ] && printf '%s\n' "${f##*/"${repo}"_}"; done
+        true ;;
+      rm) rm -f "$(tagfile "$3")" ;;
+      *) fail "unexpected image command: $2" ;;
+    esac ;;
+  inspect)
+    # docker inspect --format '{{.Image}}' cid-<svc>
+    svc="${*: -1}"; svc="${svc#cid-}"
+    cat "$S/ct/$svc" ;;
+  tag)
+    id="$(resolve "$2")" || true
+    [ -n "$id" ] || fail "no such image: $2"
+    echo "$id" >"$(tagfile "$3")" ;;
+  run)
+    case "$*" in
+      *"czf -"*)
+        [ "${STUB_TAR_FAIL:-0}" = 1 ] && fail "tar failed"
+        d="$(mktemp -d)"; cp "$S/artifacts" "$d/blob"
+        tar czf - -C "$d" . && rm -rf "$d" ;;
+      *"tar xzf -"*)
+        d="$(mktemp -d)"; tar xzf - -C "$d"
+        cp "$d/blob" "$S/artifacts" && rm -rf "$d" ;;
+      *) fail "unexpected docker run: $*" ;;
+    esac ;;
+  *) fail "unexpected docker command: $*" ;;
+esac
