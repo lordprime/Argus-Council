@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.errors import Conflict, NotFound
-from argus.core.logging import get_logger
+from argus.core.logging import fresh_log_context, get_logger
 from argus.core.metrics import RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run
 from argus.runtime.agent import MemberSpec
@@ -143,7 +143,13 @@ class RunManager:
         orchestrator = CouncilOrchestrator(ctx, members, registry)
         live = LiveRun(ctx, orchestrator, members)
         self.live[run.id] = live
-        live.task = asyncio.create_task(self._drive(live), name=f"run-{run.id}")
+        live.task = asyncio.create_task(
+            self._drive(live),
+            name=f"run-{run.id}",
+            context=fresh_log_context(
+                run_id=str(run.id), owner_id=str(run.owner_id), mode=run.mode, depth=depth
+            ),
+        )
 
     async def _set(self, run_id: uuid.UUID, **values: Any) -> None:
         async with self.sessionmaker() as s:

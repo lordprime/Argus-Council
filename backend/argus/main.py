@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
@@ -35,9 +35,16 @@ from argus.api.v1 import (
 )
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
-from argus.core.errors import install_error_handlers
+from argus.core.errors import error_response, install_error_handlers
 from argus.core.logging import configure_logging, get_logger
-from argus.core.metrics import HTTP_LATENCY, HTTP_REQUESTS, REGISTRY
+from argus.core.metrics import (
+    HTTP_LATENCY,
+    HTTP_REQUESTS,
+    REGISTRY,
+    UNMATCHED_ROUTE,
+    method_label,
+    route_template,
+)
 from argus.core.security import hash_password
 from argus.db.models import User
 from argus.db.session import Database
@@ -161,26 +168,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rid = request.headers.get("X-Request-ID", "")
         if not (0 < len(rid) <= 64 and rid.replace("-", "").isalnum()):
             rid = uuid.uuid4().hex
+        request.state.request_id = rid
         structlog.contextvars.bind_contextvars(request_id=rid)
         try:
             length = request.headers.get("content-length")
             is_upload = request.headers.get("content-type", "").startswith("multipart/form-data")
             limit = settings.max_upload_bytes if is_upload else settings.max_request_bytes
             if length is not None and (not length.isdigit() or int(length) > limit):
-                return JSONResponse(
-                    status_code=413,
-                    content={"error": {"code": "payload_too_large", "message": "Request body too large"}},
-                    headers={"X-Request-ID": rid},
-                )
+                return error_response(request, 413, "payload_too_large", "Request body too large")
             started = time.perf_counter()
-            response = await call_next(request)
-            route = request.scope.get("route")
-            template = getattr(route, "path", None) or "unmatched"
-            HTTP_REQUESTS.labels(request.method, template, str(response.status_code)).inc()
+            try:
+                response = await call_next(request)
+            except Exception:
+                # Nothing mapped it to a response: answer with the envelope, then count and audit it
+                # like any other response. The traceback is logged under the request id.
+                log.exception(
+                    "http.unhandled_exception",
+                    method=request.method,
+                    path=request.url.path,
+                    route=route_template(request),
+                )
+                response = error_response(request, 500, "internal_error", "Internal error")
+            template = route_template(request)
+            method = method_label(request.method)
+            HTTP_REQUESTS.labels(method, template, str(response.status_code)).inc()
             if (
                 request.method in ("POST", "PUT", "PATCH", "DELETE")
                 and request.url.path.startswith("/api/v1/")
                 and template not in _NOT_AUDITED
+                and template != UNMATCHED_ROUTE
             ):
                 params = dict(request.path_params)
                 # Fire-and-forget: the write must neither wait on nor block the request's own transaction.
@@ -197,7 +213,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ),
                 )
             if not template.endswith("/events/stream"):
-                HTTP_LATENCY.labels(request.method, template).observe(time.perf_counter() - started)
+                HTTP_LATENCY.labels(method, template).observe(time.perf_counter() - started)
         finally:
             structlog.contextvars.unbind_contextvars("request_id")
         response.headers["X-Request-ID"] = rid

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 REGISTRY = CollectorRegistry(auto_describe=True)
@@ -55,6 +57,21 @@ APPROVALS = Counter("argus_approvals_total", "Approval decisions", ["decision"],
 PROTOCOL_CALLS = Counter(
     "argus_protocol_calls_total", "MCP/A2A/ACP calls", ["protocol", "direction", "status"], registry=REGISTRY
 )
+
+
+UNMATCHED_ROUTE = "unmatched"
+_HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+
+
+def route_template(request: Any) -> str:
+    """The matched route's path template (``/api/v1/runs/{run_id}``), never the raw URL path."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or UNMATCHED_ROUTE
+
+
+def method_label(method: str) -> str:
+    """HTTP methods are client-chosen strings; anything non-standard is folded into ``other``."""
+    return method if method in _HTTP_METHODS else "other"
 
 
 def safe_label(value: str | None, limit: int = 80) -> str:
