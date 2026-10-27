@@ -1,4 +1,4 @@
-import { ArrowLeft, History, Plus, Users } from "lucide-react";
+import { History, Plus, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
@@ -224,16 +224,10 @@ export default function CouncilDetail() {
   const [guardrailsDraft, setGuardrailsDraft] = useState<Dict | null>(null);
   const tab = TABS.includes(params.get("tab") as (typeof TABS)[number]) ? params.get("tab")! : "seats";
 
-  const back = (
-    <Link to="/councils" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-3">
-      <ArrowLeft className="size-4" aria-hidden />Councils
-    </Link>
-  );
-
+  // The way back is the top-bar breadcrumb (Councils › name), not a per-page link (audit C-11).
   if (council.isLoading) {
     return (
       <div className="p-4 md:p-6 max-w-5xl mx-auto" aria-busy="true">
-        {back}
         <Skeleton className="h-7 w-64" />
         <Skeleton className="h-4 w-96 max-w-full mt-3" />
         <Skeleton className="h-9 w-72 mt-8" />
@@ -245,7 +239,6 @@ export default function CouncilDetail() {
     const notFound = council.error instanceof ApiError && council.error.status === 404;
     return (
       <div className="p-4 md:p-6 max-w-5xl mx-auto">
-        {back}
         <h1 className="sr-only">Council</h1>
         <Card as="div">
           {notFound ? (
@@ -274,7 +267,6 @@ export default function CouncilDetail() {
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto">
-      {back}
       <CouncilHeader council={c} onDelete={() => setConfirmDelete(true)} />
       <Tabs value={tab} className="[&>div[role=tablist]]:px-0"
         onValueChange={(v) => setParams(v === "seats" ? {} : { tab: v }, { replace: true })}

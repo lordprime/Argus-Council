@@ -1,6 +1,5 @@
-import { ChevronDown, ChevronRight, Download, ScrollText } from "lucide-react";
+import { ChevronDown, Download, ScrollText } from "lucide-react";
 import { Fragment, useState, type FormEvent } from "react";
-import { Link } from "react-router";
 
 import { Badge, Button, Card, EmptyState, ErrorState, IconButton, SelectField, Skeleton, TextField, Toggle } from "@/components/ui";
 import { auditCsv, downloadText } from "@/features/insights/logic";
@@ -67,13 +66,6 @@ export default function Audit() {
 
   return (
     <div className="p-4 md:p-6 max-w-[96rem] mx-auto flex flex-col gap-4 min-w-0">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-subtle">
-        <ol className="flex items-center gap-1">
-          <li><Link to="/insights" className="hover:text-fg">Insights</Link></li>
-          <li aria-hidden><ChevronRight className="size-3" /></li>
-          <li aria-current="page" className="text-fg-muted">Audit log</li>
-        </ol>
-      </nav>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl">Audit log</h1>

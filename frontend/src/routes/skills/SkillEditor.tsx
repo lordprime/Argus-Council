@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, Plus, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
@@ -213,7 +213,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
             {previewMode === "rendered" ? (
               <div tabIndex={0} role="region" aria-label="Instructions preview"
                 className="flex-1 min-h-80 max-h-[36rem] overflow-auto rounded-md border border-border bg-surface-2 px-4 py-2">
-                {body.trim() ? <Markdown className={SKILL_PROSE}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
+                {body.trim() ? <Markdown className={SKILL_PROSE} headingOffset={0}>{preview}</Markdown> : <p className="text-sm text-fg-subtle py-2">Nothing to preview yet.</p>}
               </div>
             ) : (
               <pre tabIndex={0} role="region" aria-label="SKILL.md source preview"
@@ -293,12 +293,7 @@ export default function SkillEditor() {
   const mode: "new" | "edit" | "customize" = editName ? "edit" : fromName ? "customize" : "new";
   const title = mode === "edit" ? `Edit ${editName}` : mode === "customize" ? `Customize ${fromName}` : "New skill";
 
-  const back = (
-    <Link to={source ? `/skills/${encodeURIComponent(source)}` : "/skills"} className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-3 min-h-6">
-      <ArrowLeft className="size-4" aria-hidden />{source ? source : "All skills"}
-    </Link>
-  );
-
+  // The way back is the top-bar breadcrumb (Skills › name › Edit), not a per-page link (audit C-11).
   let content;
   if (source && q.isLoading) {
     content = (
@@ -329,7 +324,6 @@ export default function SkillEditor() {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      {back}
       <PageHeader title={title}
         description={mode === "customize"
           ? "Your copy starts from the built-in. Saving it under the same name overrides the built-in for your councils."

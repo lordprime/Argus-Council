@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy, Download, FileText, Pencil, SearchX, Trash2 } from "lucide-react";
+import { Copy, Download, FileText, Pencil, SearchX, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
@@ -40,18 +40,12 @@ export default function SkillDetail() {
   const [confirm, setConfirm] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  const back = (
-    <Link to="/skills" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-3 min-h-6">
-      <ArrowLeft className="size-4" aria-hidden />All skills
-    </Link>
-  );
-
-  if (q.isLoading) return <div className="p-4 md:p-6 max-w-6xl mx-auto">{back}<DetailSkeleton /></div>;
+  // The way back is the top-bar breadcrumb (Skills › name), not a per-page link (audit C-11).
+  if (q.isLoading) return <div className="p-4 md:p-6 max-w-6xl mx-auto"><DetailSkeleton /></div>;
   if (q.error || !q.data) {
     const notFound = q.error instanceof ApiError && q.error.status === 404;
     return (
       <div className="p-4 md:p-6 max-w-6xl mx-auto">
-        {back}
         <h1 className="text-xl mb-4">{notFound ? "Skill not found" : "Could not load skill"}</h1>
         <Card as="div">
           {notFound
@@ -77,7 +71,6 @@ export default function SkillDetail() {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      {back}
       <PageHeader title={s.name} description={s.description}
         actions={
           <div className="flex flex-wrap gap-2">
@@ -113,7 +106,7 @@ export default function SkillDetail() {
           <Card className="p-5" aria-labelledby="instructions-h">
             <h2 id="instructions-h" className="text-lg mb-1">Instructions</h2>
             <p className="text-xs text-fg-subtle mb-3">Loaded when an agent calls use_skill.</p>
-            <Markdown className={SKILL_PROSE}>{demoteHeadings(body)}</Markdown>
+            <Markdown className={SKILL_PROSE} headingOffset={0}>{demoteHeadings(body)}</Markdown>
           </Card>
 
           <Card className="p-5" aria-labelledby="files-h">

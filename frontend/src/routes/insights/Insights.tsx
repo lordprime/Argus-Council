@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, AlertOctagon, ChevronRight, Clock, Coins, Download, Gauge, Hash, Plus, RefreshCw, ScrollText, ShieldAlert, type LucideIcon,
+  Activity, AlertOctagon, Clock, Coins, Download, Gauge, Hash, Plus, RefreshCw, ScrollText, ShieldAlert, type LucideIcon,
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -325,13 +325,6 @@ export default function Insights() {
 
   return (
     <div className="p-4 md:p-6 max-w-[96rem] mx-auto flex flex-col gap-4 min-w-0">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-subtle">
-        <ol className="flex items-center gap-1">
-          <li><Link to="/" className="hover:text-fg">Argus</Link></li>
-          <li aria-hidden><ChevronRight className="size-3" /></li>
-          <li aria-current="page" className="text-fg-muted">Insights</li>
-        </ol>
-      </nav>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-xl">Council insights</h1>
