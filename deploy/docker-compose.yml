@@ -66,6 +66,10 @@ services:
       ARGUS_BOOTSTRAP_ADMIN_PASSWORD: ${ARGUS_BOOTSTRAP_ADMIN_PASSWORD:-}
       ARGUS_ENCRYPTION_KEY: ${ARGUS_ENCRYPTION_KEY:-}
       ARGUS_MCP_ALLOW_STDIO: ${ARGUS_MCP_ALLOW_STDIO:-false}
+      # SSRF guard: private/loopback targets for webhooks, MCP servers and remote agents, and for
+      # the agents' web_fetch tool, are refused unless enabled. Link-local is always refused.
+      ARGUS_CONNECTIONS_ALLOW_PRIVATE_URLS: ${ARGUS_CONNECTIONS_ALLOW_PRIVATE_URLS:-false}
+      ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS: ${ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS:-false}
       ARGUS_METRICS_TOKEN: ${ARGUS_METRICS_TOKEN:-}
       # Retention (0 = keep forever). The ledger is never pruned by default: pruning breaks verification.
       ARGUS_RETENTION_RUN_DAYS: ${ARGUS_RETENTION_RUN_DAYS:-0}
@@ -73,7 +77,8 @@ services:
       ARGUS_RETENTION_AUDIT_DAYS: ${ARGUS_RETENTION_AUDIT_DAYS:-365}
       ARGUS_RETENTION_LEDGER_DAYS: ${ARGUS_RETENTION_LEDGER_DAYS:-0}
       ARGUS_DATA_DIR: /data
-      ARGUS_SANDBOX_URL: http://sandbox:8100
+      # Unix socket on a shared volume: the sandbox container has no network interface at all.
+      ARGUS_SANDBOX_URL: unix:/run/argus-sandbox/sandbox.sock
       ARGUS_SANDBOX_TOKEN: ${ARGUS_SANDBOX_TOKEN:?set ARGUS_SANDBOX_TOKEN}
       ARGUS_SEARCH_PROVIDER: ${ARGUS_SEARCH_PROVIDER:-}
       ARGUS_SEARCH_API_KEY: ${ARGUS_SEARCH_API_KEY:-}
@@ -90,12 +95,12 @@ services:
       ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
       ARGUS_VLLM_BASE_URL: ${ARGUS_VLLM_BASE_URL:-}
       ARGUS_LMSTUDIO_BASE_URL: ${ARGUS_LMSTUDIO_BASE_URL:-}
-    volumes: ["argusdata:/data"]
+    volumes: ["argusdata:/data", "sandboxsock:/run/argus-sandbox"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       sandbox: { condition: service_healthy }
-    networks: [backend, frontend, sandbox]
+    networks: [backend, frontend]
     ports: ["${ARGUS_API_BIND:-127.0.0.1}:${ARGUS_API_PORT:-8000}:8000"]
     deploy:
       resources:
@@ -119,7 +124,7 @@ services:
   sandbox:
     <<: *hardening
     image: argus-council/api:${ARGUS_VERSION:-latest}
-    command: ["uvicorn", "argus.sandbox.server:app", "--host", "0.0.0.0", "--port", "8100", "--no-server-header"]
+    command: ["uvicorn", "argus.sandbox.server:app", "--uds", "/run/argus-sandbox/sandbox.sock", "--no-server-header"]
     read_only: true
     tmpfs:
       - "/work:size=512m,mode=1777"
@@ -128,9 +133,12 @@ services:
       ARGUS_RUN_MIGRATIONS: "false"
       ARGUS_SANDBOX_TOKEN: ${ARGUS_SANDBOX_TOKEN}
       ARGUS_SANDBOX_WORKDIR: /work
-    networks: [sandbox] # internal only: agent code has no route to the internet or other services
+    # No network at all: agent code can reach neither the internet nor the API, database or cache.
+    # The API talks to the sandbox over a Unix socket on the shared sandboxsock volume.
+    network_mode: none
+    volumes: ["sandboxsock:/run/argus-sandbox"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=4).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect("/run/argus-sandbox/sandbox.sock"); s.sendall(b"GET /health HTTP/1.0\r\nHost: sandbox\r\n\r\n"); sys.exit(0 if b" 200 " in s.recv(64) else 1)']
       interval: 15s
       timeout: 5s
       retries: 5
@@ -142,10 +150,9 @@ volumes:
   pgdata:
   redisdata:
   argusdata:
+  sandboxsock:
 
 networks:
   backend:
     internal: true # no egress: database and cache only
   frontend:
-  sandbox:
-    internal: true
