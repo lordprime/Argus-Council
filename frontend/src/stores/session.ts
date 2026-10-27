@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { api, auth, isUnauthorized, V1 } from "@/lib/api";
-import type { TokenPair, User } from "@/lib/types";
+import type { MfaChallenge, TokenPair, User } from "@/lib/types";
 
 interface SessionState {
   user: User | null;
@@ -13,7 +13,12 @@ interface SessionState {
   /** Why the last bootstrap failed, when `status` is `error`. */
   bootError: unknown;
   bootstrap: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  /**
+   * Password step. Resolves with a challenge when the account has two-factor authentication on;
+   * finish with `verifyMfa`. Otherwise the session starts right away.
+   */
+  login: (email: string, password: string) => Promise<MfaChallenge | undefined>;
+  verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -41,7 +46,14 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
   login: async (email, password) => {
-    const tokens = await api.post<TokenPair>(`${V1}/auth/login`, { email, password });
+    const res = await api.post<TokenPair | MfaChallenge>(`${V1}/auth/login`, { email, password });
+    if ("mfa_required" in res && res.mfa_required) return res;
+    auth.setTokens(res as TokenPair);
+    set({ user: await api.get<User>(`${V1}/auth/me`), status: "authenticated", bootError: null });
+    return undefined;
+  },
+  verifyMfa: async (mfaToken, code) => {
+    const tokens = await api.post<TokenPair>(`${V1}/auth/mfa/verify`, { mfa_token: mfaToken, code });
     auth.setTokens(tokens);
     set({ user: await api.get<User>(`${V1}/auth/me`), status: "authenticated", bootError: null });
   },
