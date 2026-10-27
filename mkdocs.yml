@@ -1,0 +1,134 @@
+# MkDocs Material configuration for https://morpheuslord.github.io/Argus-Council/
+#
+# The content lives in the lowercase `docs/` directory, next to the review reports
+# it already held. Never create a capital `Docs/` folder beside it: on
+# case-insensitive filesystems the two collide.
+#
+# Build locally (exact, hash-pinned dependencies):
+#   uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs build --strict
+#   uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs serve
+
+site_name: Argus Council
+site_url: https://morpheuslord.github.io/Argus-Council/
+site_description: >-
+  Self-hosted councils of LLM agents for research, coding and chat: they plan,
+  debate, vote and deliver under guardrails, with overseer agents and a human
+  who can intercept and correct any thought.
+site_author: morpheuslord
+
+repo_url: https://github.com/morpheuslord/Argus-Council
+repo_name: morpheuslord/Argus-Council
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+# Reports written by other reviews land in docs/security/; they are built and
+# searchable, and can be added to the Reports section below once they exist.
+not_in_nav: |
+  /security/
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Introduction: introduction.md
+  - Architecture: architecture.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - Concepts:
+      - Councils and Roles: concepts/councils.md
+      - Runs and Modes: concepts/runs.md
+      - Guardrails and Approvals: concepts/guardrails.md
+      - Sub-councils: concepts/sub-councils.md
+      - Skills: concepts/skills.md
+      - Knowledge and Memory: concepts/knowledge.md
+  - Protocols and Ledger: protocols.md
+  - Run Views: run-views.md
+  - Integration: integration.md
+  - API Reference: api/index.md
+  - Deployment and Operations: deployment.md
+  - Security: security-overview.md
+  - Reports:
+      - Implementation Review: review/implementation-review.md
+      - Design Consistency Audit: design/consistency-audit.md
+      - UI Specification: design/ui-spec.md
+  - Brand: brand/README.md
+
+theme:
+  name: material
+  # Release banner on every page (overrides/main.html; bump it with the version).
+  custom_dir: overrides
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # Dark by default, like the web app's night theme.
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/figures.js
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/morpheuslord/Argus-Council
+    - icon: fontawesome/brands/docker
+      link: https://github.com/morpheuslord/Argus-Council/blob/main/deploy/docker-compose.yml
+
+copyright: Argus Council 0.1.0 · Copyright &copy; morpheuslord — MIT License
