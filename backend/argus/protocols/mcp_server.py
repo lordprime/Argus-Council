@@ -192,6 +192,7 @@ async def _call_tool(request: Request, db, principal: Principal, name: str, args
             }
         )
     if name == "intervene":
+        principal.require_scope("runs:write")
         run = await _own_run(db, principal, args.get("run_id"))
         cmd = {
             "kind": args["kind"],
@@ -201,6 +202,7 @@ async def _call_tool(request: Request, db, principal: Principal, name: str, args
         }
         return _text(await state.runs.intervene(run.id, cmd, user_name="MCP client"))
     if name == "cancel_run":
+        principal.require_scope("runs:write")
         run = await _own_run(db, principal, args.get("run_id"))
         await state.runs.cancel(run.id)
         return _text({"run_id": str(run.id), "status": "cancelling"})

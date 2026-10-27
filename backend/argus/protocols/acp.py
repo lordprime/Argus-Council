@@ -185,6 +185,7 @@ async def get_run(run_id: str, principal: CurrentPrincipal, db: DbDep) -> dict:
 
 @router.post("/runs/{run_id}/cancel", status_code=202)
 async def cancel_run(run_id: str, principal: CurrentPrincipal, db: DbDep, request: Request) -> dict:
+    principal.require_scope("runs:write")
     run = await _own(db, principal.id, run_id)
     await request.app.state.runs.cancel(run.id)
     view = run_view(run, f"argus-{run.mode}")

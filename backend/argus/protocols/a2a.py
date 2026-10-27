@@ -125,6 +125,9 @@ def task_from_run(run: Run, context_id: str | None = None) -> dict[str, Any]:
     return task
 
 
+FORBIDDEN = -32010  # application error: authenticated but not allowed
+
+
 async def _owned_run(db, owner_id: uuid.UUID, task_id: Any) -> Run:
     try:
         rid = uuid.UUID(str(task_id))
@@ -138,6 +141,12 @@ async def _owned_run(db, owner_id: uuid.UUID, task_id: Any) -> Run:
 
 async def _dispatch(request: Request, db, principal, method: str, params: dict[str, Any]) -> Any:
     state = request.app.state
+    if method in ("message/send", "tasks/cancel"):
+        # Starting or cancelling a task changes state: same scope (and viewer rule) as POST /runs.
+        try:
+            principal.require_scope("runs:write")
+        except ArgusError as exc:
+            raise RpcError(FORBIDDEN, exc.message) from None
     if method == "message/send":
         message = params.get("message")
         if not isinstance(message, dict) or not message_text(message).strip():
