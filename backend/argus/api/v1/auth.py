@@ -114,7 +114,7 @@ async def refresh(data: RefreshIn, db: DbDep, settings: SettingsDep, cache: Cach
     # Rotate: each refresh token is single-use. The counter makes the check-and-mark atomic, so two
     # concurrent uses of one token cannot both succeed.
     remaining = max(int(payload["exp"] - datetime.now(UTC).timestamp()), 1)
-    uses = await cache.backend.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
+    uses = await cache.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
     if uses > 1:
         # Reuse means the token leaked (or was replayed): end the whole session, both holders.
         await revoke_session(cache, settings, payload.get("sid"))
@@ -134,7 +134,7 @@ async def logout(data: RefreshIn, settings: SettingsDep, cache: CacheDep) -> Res
         return Response(status_code=status.HTTP_204_NO_CONTENT)  # already invalid: nothing to end
     await revoke_session(cache, settings, payload.get("sid"))
     remaining = max(int(payload["exp"] - datetime.now(UTC).timestamp()), 1)
-    await cache.backend.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
+    await cache.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

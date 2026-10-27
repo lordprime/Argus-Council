@@ -76,17 +76,16 @@ async def test_webhook_api_and_lifecycle_delivery(client, auth, app):
     assert rotated != secret
 
 
-async def test_webhook_retries_then_succeeds_and_4xx_stops(client, auth, app):
-    seen = capture_dispatcher(app, [500, 502, 200])
+async def test_webhook_test_ping_reports_status(client, auth, app):
+    # Retries of real deliveries are covered in test_webhook_outbox.py; /test is one attempt.
+    seen = capture_dispatcher(app, [200])
     hook = (
         await client.post(
             "/api/v1/webhooks", headers=auth, json={"url": "https://h.example.com/x", "events": ["*"]}
         )
     ).json()
     r = await client.post(f"/api/v1/webhooks/{hook['id']}/test", headers=auth)
-    assert r.json()["ok"] is True and len(seen) == 3
-    assert len({req.headers["x-argus-delivery"] for req in seen}) == 1  # same delivery id across retries
-    seen.clear()
+    assert r.json()["ok"] is True and len(seen) == 1 and r.json()["last_status"] == "200"
     capture_dispatcher(app, [410])
     r = await client.post(f"/api/v1/webhooks/{hook['id']}/test", headers=auth)
     assert r.json()["ok"] is False and r.json()["failure_count"] == 1

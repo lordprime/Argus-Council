@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from argus.core.errors import ArgusError
 from argus.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, MemoryItem
 from argus.knowledge.bm25 import Doc, rank
 from argus.knowledge.text import (
+    TooLarge,
     UnsupportedType,
     chunk_text,
     detect_type,
@@ -30,6 +32,7 @@ MAX_SEARCH_CHUNKS = 50_000
 MAX_K = 50
 MAX_MEMORY_TEXT = 4_000
 MAX_MEMORY_PER_SCOPE = 2_000
+EXTRACT_TIMEOUT_S = 30
 
 
 class LimitExceeded(ArgusError):
@@ -80,9 +83,14 @@ async def ingest(
         raise LimitExceeded(f"File exceeds the {MAX_FILE_BYTES // (1024 * 1024)} MB limit")
     try:
         ctype = detect_type(filename, declared_type)
-        text = extract_text(data, ctype)
+        # PDF parsing is CPU-bound: keep it off the event loop and bound how long a request waits.
+        text = await asyncio.wait_for(asyncio.to_thread(extract_text, data, ctype), EXTRACT_TIMEOUT_S)
     except UnsupportedType as exc:
         raise UnsupportedMedia(str(exc)) from exc
+    except TooLarge as exc:
+        raise LimitExceeded(str(exc)) from exc
+    except TimeoutError as exc:
+        raise UnsupportedMedia("The document took too long to read") from exc
     pieces = chunk_text(text)
     if not pieces:
         raise ArgusError("The document contains no text")

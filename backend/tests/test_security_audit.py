@@ -277,10 +277,16 @@ async def test_prior_fixes_hold(client, auth):
     [(None, 600.0), ("abc", 600.0), (1e9, 600.0), (-5, 0.0), (float("nan"), 600.0), (30, 30.0)],
 )
 def test_a2a_blocking_wait_is_bounded(raw, expected):
-    """SEC-11: a client-chosen timeout cannot hold a worker (and its DB session) indefinitely."""
-    from argus.protocols.a2a import _wait_seconds
+    """SEC-11: a client-chosen timeout cannot hold a worker (and its DB session) indefinitely.
 
-    assert _wait_seconds(raw) == expected
+    ``wait_seconds`` parses the client value and ``wait_for_run`` clamps it to
+    [0, ARGUS_PROTOCOL_MAX_WAIT_S]; this mirrors that clamp.
+    """
+    from argus.core.config import Settings
+    from argus.services.runs import wait_seconds
+
+    cap = Settings().protocol_max_wait_s
+    assert min(max(wait_seconds(raw, cap), 0.0), cap) == expected
 
 
 # ------------------------------------------------------------------ sandbox transport (SEC-07)

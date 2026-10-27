@@ -3,7 +3,8 @@
 // it reads (tool calls, thoughts, approvals) are already up to date for the current event.
 
 import type { Actor, Member, RunEvent } from "@/lib/types";
-import type { RunState } from "@/stores/run";
+import { writable } from "@/stores/draft";
+import { findThoughtByIntercept, type RunState } from "@/stores/run";
 
 import type { CommEvent, CommKind, NodeRef, SubCouncilInfo } from "./types";
 
@@ -108,8 +109,9 @@ function short(text: unknown, n = 80): string | undefined {
 }
 
 function add(s: RunState, c: CommEvent) {
-  s.comms.push(c);
-  if (s.comms.length > COMMS_CAP) s.comms.splice(0, s.comms.length - COMMS_CAP);
+  const comms = writable(s, "comms"); // copy-on-write inside reduceAll (stores/draft.ts)
+  comms.push(c);
+  if (comms.length > COMMS_CAP) comms.splice(0, comms.length - COMMS_CAP);
 }
 
 function findComm(s: RunState, id: string): CommEvent | undefined {
@@ -136,10 +138,8 @@ function interceptTarget(s: RunState, d: Record<string, any>): NodeRef | undefin
     if (t && "actor" in t) return actorRef(s, t.actor);
   }
   if (d.intercept_id) {
-    for (let i = s.order.length - 1; i >= 0; i--) {
-      const it = s.items[s.order[i]!];
-      if (it?.kind === "thought" && it.intercepts.some((x) => x.id === d.intercept_id)) return actorRef(s, it.actor);
-    }
+    const it = findThoughtByIntercept(s, d.intercept_id);
+    if (it) return actorRef(s, it.actor);
   }
   return undefined;
 }

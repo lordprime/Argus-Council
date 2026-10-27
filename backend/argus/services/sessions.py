@@ -40,10 +40,17 @@ async def revoke_user_sessions(
 
 
 async def session_revoked(cache: Cache, payload: dict[str, Any]) -> bool:
+    """Whether the access token's session was ended (logout, refresh reuse, password change).
+
+    Checked on every authenticated request, so it reads best-effort: during a Redis outage a
+    revoked access token keeps working until it expires (ARGUS_ACCESS_TOKEN_TTL_MINUTES) rather
+    than every request failing (M8). Refresh-token single-use stays fail-closed, so a revoked
+    session can never be renewed; the degraded read is counted in argus_cache_degraded_total.
+    """
     sid = payload.get("sid")
-    if sid and await cache.get(cache.key("revoked-sid", str(sid))):
+    if sid and await cache.get_best_effort(cache.key("revoked-sid", str(sid))):
         return True
-    cutoff = await cache.get(cache.key("sessions-cutoff", str(payload.get("sub"))))
+    cutoff = await cache.get_best_effort(cache.key("sessions-cutoff", str(payload.get("sub"))))
     if not cutoff:
         return False
     if sid and sid == cutoff.get("keep"):

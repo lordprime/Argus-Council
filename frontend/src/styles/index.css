@@ -11,6 +11,8 @@
      The 14px body copy size is applied on <body>, never on <html> (that would shrink the rem unit). */
   html {
     @apply bg-canvas text-fg font-sans antialiased;
+    /* Height of the mobile bottom tab bar (AppShell), including the home-indicator inset. */
+    --tabbar-h: calc(3.5rem + env(safe-area-inset-bottom, 0px));
   }
   body {
     @apply min-h-screen bg-canvas text-base;
@@ -30,12 +32,30 @@
 }
 
 @layer components {
+  /* App-shell geometry (C-04): the main region clears the fixed mobile tab bar, and the run workspace
+     fills exactly the space between the 48px header and that bar (dvh so mobile browser chrome and
+     the on-screen keyboard do not push the composer out of view). */
+  .pb-tabbar { padding-bottom: var(--tabbar-h); }
+  .h-workspace {
+    height: calc(100vh - 3rem - var(--tabbar-h));
+    height: calc(100dvh - 3rem - var(--tabbar-h));
+  }
+  @media (min-width: 768px) {
+    .pb-tabbar { padding-bottom: 0; }
+    .h-workspace {
+      height: calc(100vh - 3rem);
+      height: calc(100dvh - 3rem);
+    }
+  }
   .prose-argus {
     @apply text-md leading-relaxed;
   }
-  .prose-argus h1 { @apply text-2xl mt-6 mb-3; }
-  .prose-argus h2 { @apply text-xl mt-6 mb-2; }
-  .prose-argus h3 { @apply text-lg mt-4 mb-2; }
+  /* :where() keeps these at class specificity so the size class Markdown puts on each heading (from its
+     source level, after the heading offset) wins over the tag default. */
+  .prose-argus :where(h1) { @apply text-2xl mt-6 mb-3; }
+  .prose-argus :where(h2) { @apply text-xl mt-6 mb-2; }
+  .prose-argus :where(h3) { @apply text-lg mt-4 mb-2; }
+  .prose-argus :where(h4, h5, h6) { @apply mt-4 mb-1.5; }
   .prose-argus p { @apply my-3; }
   .prose-argus ul { @apply list-disc pl-6 my-3; }
   .prose-argus ol { @apply list-decimal pl-6 my-3; }

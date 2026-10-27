@@ -105,7 +105,7 @@ export default function SkillDetail() {
         <div className="flex flex-col gap-6 min-w-0">
           <Card className="p-5" aria-labelledby="instructions-h">
             <SectionTitle id="instructions-h" description="Loaded when an agent calls use_skill.">Instructions</SectionTitle>
-            <Markdown className={SKILL_PROSE}>{demoteHeadings(body)}</Markdown>
+            <Markdown className={SKILL_PROSE} headingOffset={0}>{demoteHeadings(body)}</Markdown>
           </Card>
 
           <Card className="p-5" aria-labelledby="files-h">

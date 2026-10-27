@@ -5,7 +5,7 @@
 | Date | 2026-10-27 |
 | Commit audited | `83d91ae` (main), fixes on top of it |
 | Scope | `backend/` (FastAPI API, runtime, tools, protocols, sandbox), `frontend/` (SPA, nginx), `deploy/`, `backend/Dockerfile`, `frontend/Dockerfile`, `.github/workflows/` |
-| Companion | [`threat-model.md`](threat-model.md) (TM-x threats), [`/SECURITY.md`](../../SECURITY.md) (reporting policy) |
+| Companion | [`threat-model.md`](threat-model.md) (TM-x threats), [`/SECURITY.md`](https://github.com/lordprime/Argus-Council/blob/main/SECURITY.md) (reporting policy) |
 
 ## Summary
 

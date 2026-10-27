@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, Download, FileText, FolderTree, Pause, Play, Square } from "lucide-react";
+import { ArrowDown, Download, FileCode2, FileText, FolderTree, PanelRight, Pause, Play, Square, Users } from "lucide-react";
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router";
 
@@ -14,14 +14,17 @@ import {
   ToolChip,
   VoteCard,
 } from "@/components/run/parts";
+import { ModeLabel } from "@/components/run/ModeLabel";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
-import { Badge, Button, Callout, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs } from "@/components/ui";
+import { Badge, Button, Callout, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
+import { Drawer } from "@/components/ui/Drawer";
 import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, duration, usd } from "@/lib/format";
 import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
+import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type { OutputFormat, RunDetail } from "@/lib/types";
 import { isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
 import { toast } from "@/stores/toast";
@@ -125,29 +128,34 @@ function Header({ run, runId }: { run: RunDetail; runId: string }) {
   const live = !isTerminal(status);
   const loc = useLocation();
   const onOutput = loc.pathname.endsWith("/output");
+  const viewLink = (on: boolean) => cn("px-3 h-8 inline-flex items-center rounded-md text-sm whitespace-nowrap", touchTarget,
+    on ? "bg-surface dark:bg-surface-3 shadow-1 font-medium text-fg ring-1 ring-inset ring-accent" : "text-fg-muted hover:text-fg");
+  // Below sm the title takes the full width and the meters stack under it (audit C-04), so the topic is
+  // never squeezed to a few characters and the mode badge never overlaps the meters.
   return (
-    <div className="border-b border-border bg-surface px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+    <div className="border-b border-border bg-surface px-4 py-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
+      <div className="min-w-0 sm:flex-1 sm:min-w-[16rem]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <StatusPill status={status} />
-          <Badge>{run.mode}</Badge>
-          <span className="text-xs text-fg-subtle truncate">{run.council_snapshot.name}</span>
+          <ModeLabel mode={run.mode} variant="badge" />
+          <span className="text-xs text-fg-subtle truncate min-w-0">{run.council_snapshot.name}</span>
         </div>
-        <h1 className="text-xl truncate mt-1" title={run.topic}>{run.topic}</h1>
+        <h1 className="text-xl mt-1 break-words line-clamp-2 sm:line-clamp-1" title={run.topic}>{run.topic}</h1>
       </div>
       <BudgetMeter budget={budget} />
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {live && (status === "paused" ? (
           <Button icon={Play} loading={busy === "resume"} onClick={() => void act("resume")}>Resume</Button>
         ) : (
           <Button icon={Pause} loading={busy === "pause"} onClick={() => void act("pause")}>Pause</Button>
         ))}
         {live && <Button variant="danger-ghost" icon={Square} loading={busy === "cancel"} onClick={() => void act("cancel")}>Stop</Button>}
-        <nav aria-label="Run views" className="inline-flex rounded-md bg-surface-2 p-0.5">
-          <Link to={`/runs/${runId}`} aria-current={!onOutput ? "page" : undefined}
-            className={cn("px-3 h-8 inline-flex items-center rounded text-sm", !onOutput ? "bg-surface shadow-1 font-medium" : "text-fg-muted")}>Timeline</Link>
-          <Link to={`/runs/${runId}/output`} aria-current={onOutput ? "page" : undefined}
-            className={cn("px-3 h-8 inline-flex items-center rounded text-sm", onOutput ? "bg-surface shadow-1 font-medium" : "text-fg-muted")}>Output</Link>
+        {/* Page-level switch, named apart from the Timeline/Map/… tabs inside the workspace (audit C-16). */}
+        <nav aria-label="Run pages" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">
+          <Link to={`/runs/${runId}`} aria-current={!onOutput ? "page" : undefined} className={viewLink(!onOutput)}>Workspace</Link>
+          <Link to={`/runs/${runId}/output`} aria-current={onOutput ? "page" : undefined} className={viewLink(onOutput)}>
+            <FileText className="size-4 mr-1.5" aria-hidden />Deliverable
+          </Link>
         </nav>
       </div>
     </div>
@@ -159,14 +167,20 @@ function Banner({ run, runId }: { run: RunDetail; runId: string }) {
   const reason = useRun(runId, (s) => s.statusReason);
   const connection = useRun(runId, (s) => s.connection);
   const attempt = useRun(runId, (s) => s.reconnectAttempt);
+  const onOutput = useLocation().pathname.endsWith("/output");
   if (connection === "reconnecting") return <div className="px-4 py-1.5 text-sm bg-warning-subtle text-warning" role="status">Reconnecting… (attempt {attempt})</div>;
   if (connection === "lost") return <div className="px-4 py-1.5 text-sm bg-danger-subtle text-danger" role="alert">Connection lost. The run continues on the server. <button className="underline" onClick={() => window.location.reload()}>Retry</button></div>;
   if (status === "completed") {
     return (
-      <div className="px-4 py-2 bg-success-subtle text-sm flex items-center gap-3" role="status">
+      <div className="px-4 py-2 bg-success-subtle text-sm flex flex-wrap items-center gap-x-3 gap-y-1" role="status">
         <span className="text-success font-semibold">Completed</span>
         <span className="text-fg-muted tabular">{duration(run.usage?.runtime_s)} · {usd(run.usage?.usd)} · {run.usage?.steps ?? 0} steps</span>
-        <Link to={`/runs/${runId}/output`} className="ml-auto text-accent underline">Open deliverable</Link>
+        {!onOutput && (
+          <Link to={`/runs/${runId}/output`}
+            className={cn("ml-auto inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-sm font-medium bg-accent text-accent-fg shadow-1 hover:bg-accent-hover", touchTarget)}>
+            <FileText className="size-4" aria-hidden />Open deliverable
+          </Link>
+        )}
       </div>
     );
   }
@@ -299,7 +313,9 @@ function ArtifactViewer({ runId, path }: { runId: string; path: string }) {
 function Inspector({ runId, selected }: { runId: string; selected: string | null }) {
   const [tab, setTab] = useState("detail");
   const item = useRun(runId, (s) => (selected && !selected.startsWith("artifact:") ? s.items[selected] : undefined));
-  const tools = useRun(runId, (s) => s.order.map((id) => s.items[id]).filter((i) => i?.kind === "tool"));
+  const order = useRun(runId, (s) => s.order);
+  const items = useRun(runId, (s) => s.items);
+  const tools = useMemo(() => order.map((id) => items[id]).filter((i) => i?.kind === "tool"), [order, items]);
   const sources = useRun(runId, (s) => s.sources);
   const artifacts = useArtifacts(runId);
   const [path, setPath] = useState<string | null>(null);
@@ -380,6 +396,40 @@ const EXPORT_FORMATS: { value: OutputFormat; label: string }[] = [
   { value: "html", label: "HTML" }, { value: "docx", label: "Word" }, { value: "txt", label: "Text" }, { value: "json", label: "JSON" },
 ];
 
+const CODE_FILE = /\.(py|js|ts|tsx|jsx|json|ya?ml|toml|sh|go|rs|java|c|cpp|h|css|html|sql)$/i;
+
+/**
+ * The Output view's file lists, styled like the Skill detail FileViewer (audit per-area notes): each
+ * file is a full-width button with a file icon, and the open one is marked with aria-current.
+ */
+function FileList({ label, files, selected, onSelect, className }: {
+  label: string;
+  files: { path: string; version?: number }[];
+  selected: string | null;
+  onSelect: (path: string) => void;
+  className?: string;
+}) {
+  return (
+    <ul aria-label={label} className={cn("flex flex-col gap-0.5", className)}>
+      {files.map((f) => {
+        const on = f.path === selected;
+        const Icon = CODE_FILE.test(f.path) ? FileCode2 : FileText;
+        return (
+          <li key={f.path}>
+            <button type="button" aria-current={on ? "true" : undefined} title={f.path} onClick={() => onSelect(f.path)}
+              className={cn("w-full flex items-center gap-2 rounded-md px-2 h-8 text-left text-sm font-mono", touchTarget,
+                on ? "bg-accent-subtle text-accent font-medium" : "text-fg-muted hover:bg-surface-2 hover:text-fg")}>
+              <Icon className="size-4 shrink-0" aria-hidden />
+              <span className="truncate flex-1">{f.path}</span>
+              {f.version != null && <span className="text-xs text-fg-subtle font-sans tabular shrink-0">v{f.version}</span>}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function OutputView({ runId, run }: { runId: string; run: RunDetail }) {
   const artifacts = useArtifacts(runId);
   const exports = useRun(runId, (s) => s.exports);
@@ -420,21 +470,14 @@ function OutputView({ runId, run }: { runId: string; run: RunDetail }) {
               </Button>
             ))}
           </div>
-          {exportsList.length > 0 && (
-            <ul className="mt-2 text-sm">{exportsList.map((f) => (
-              <li key={f.path}><button className="text-accent underline font-mono text-xs" onClick={() => setSelected(f.path)}>{f.path}</button></li>
-            ))}</ul>
-          )}
+          {exportsList.length > 0 && <FileList label="Exports" files={exportsList} selected={selected} onSelect={setSelected} className="mt-2" />}
         </section>
         <section>
           <h2 className="text-sm font-semibold mb-2">Workspace</h2>
-          {selected && <Button size="sm" variant="ghost" onClick={() => setSelected(null)}>Show deliverable</Button>}
-          <ul className="text-sm">
-            {workspace.map((f) => (
-              <li key={f.path}><button className="w-full text-left font-mono text-xs px-1 py-1 rounded hover:bg-surface-2 truncate" onClick={() => setSelected(f.path)}>{f.path}</button></li>
-            ))}
-            {!workspace.length && <li className="text-fg-subtle text-xs">No files</li>}
-          </ul>
+          {selected && <Button size="sm" variant="ghost" icon={FileText} className="mb-1" onClick={() => setSelected(null)}>Show deliverable</Button>}
+          {workspace.length
+            ? <FileList label="Workspace files" files={workspace} selected={selected} onSelect={setSelected} />
+            : <p className="text-fg-subtle text-xs">No files</p>}
         </section>
       </aside>
     </div>
@@ -456,6 +499,16 @@ export default function RunWorkspace() {
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setViewState] = useState<RunView>(loadView);
   const [reveal, setReveal] = useState<string | null>(null);
+  // Below xl the inspector is a right drawer opened by selecting an item; below md the council rail is a
+  // bottom sheet (audit C-03). The breakpoints match the grid columns below.
+  const railInline = useMediaQuery(BREAKPOINT.md);
+  const inspectorInline = useMediaQuery(BREAKPOINT.xl);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
+  const inspect = useCallback((id: string) => {
+    setSelected(id);
+    setInspectorOpen(true);
+  }, []);
   const setView = useCallback((v: RunView) => {
     setViewState(v);
     saveView(v);
@@ -473,7 +526,11 @@ export default function RunWorkspace() {
       setFocus(nodeId);
     }
   }, [viewId, density, focus, setView]);
-  const pendingCount = Object.values(state.items).filter((i) => i.kind === "approval" && i.status === "pending").length;
+  const pendingCount = useRun(viewId, (s) => {
+    let n = 0;
+    for (const id in s.items) if (s.items[id]!.kind === "approval" && (s.items[id] as { status?: string }).status === "pending") n++;
+    return n;
+  });
   useEffect(() => {
     if (!detail.data) return;
     document.title = `${pendingCount ? `(${pendingCount}) ` : ""}${detail.data.topic} · Argus`;
@@ -488,37 +545,52 @@ export default function RunWorkspace() {
   }
   const run = detail.data;
   const live = !isTerminal(realStatus || run.status);
+  const roster = members.length ? members : run.council_snapshot.members;
   const onOutput = loc.pathname.endsWith("/output");
   return (
-    <div className="flex flex-col h-[calc(100vh-3rem)] md:h-[calc(100vh-3rem)]">
+    <div className="flex flex-col h-workspace">
       <Header run={run} runId={runId} />
       <Banner run={run} runId={runId} />
       {onOutput ? <OutputView runId={runId} run={run} /> : (
         <>
           {!live && <ReplayBar runId={runId} members={run.council_snapshot.members ?? []} />}
           <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[260px_1fr_380px]">
-            <div className="hidden md:block border-r border-border min-h-0 overflow-auto">
-              <CouncilRail runId={runId} members={members.length ? members : run.council_snapshot.members} state={state} live={live}
-                focused={focus} onFocus={setFocus} />
-            </div>
+            {railInline && (
+              <div className="border-r border-border min-h-0 overflow-auto">
+                <CouncilRail runId={runId} members={roster} state={state} live={live} focused={focus} onFocus={setFocus} />
+              </div>
+            )}
             <div className="flex flex-col min-h-0 min-w-0">
               <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-surface">
                 <SegmentedTabs label="Run visualisation" value={view} onChange={setView} options={VIEWS} idPrefix="run-view" panelId="run-view-panel" />
                 {view === "timeline" && <>
                 <label htmlFor="density" className="text-xs text-fg-subtle">Show</label>
                 <select id="density" value={density} onChange={(e) => setDensity(e.target.value as Density)}
-                  className="h-8 rounded-md border border-border-strong bg-surface px-2 text-sm">
+                  className={cn("h-8 rounded-md border border-border-strong bg-surface px-2 text-sm", touchTarget)}>
                   <option value="decisions">Decisions</option>
                   <option value="working">Working</option>
                   <option value="everything">Everything</option>
                 </select>
                 {focus && <Button size="sm" variant="ghost" onClick={() => setFocus(null)}>Clear focus</Button>}
                 </>}
-                <span className="ml-auto text-xs text-fg-subtle tabular">{state.order.length} events · seq {state.lastSeq}</span>
+                <div className="ml-auto flex items-center gap-1">
+                  <span className="hidden sm:inline text-xs text-fg-subtle tabular mr-1">{state.order.length} events · seq {state.lastSeq}</span>
+                  {!railInline && (
+                    <Button size="sm" variant="ghost" icon={Users} aria-haspopup="dialog" aria-expanded={railOpen} onClick={() => setRailOpen(true)}>
+                      Council
+                    </Button>
+                  )}
+                  {!inspectorInline && (
+                    <Button size="sm" variant="ghost" icon={PanelRight} aria-haspopup="dialog" aria-expanded={inspectorOpen}
+                      onClick={() => setInspectorOpen(true)}>
+                      Inspector
+                    </Button>
+                  )}
+                </div>
               </div>
               <div id="run-view-panel" role="tabpanel" aria-labelledby={`run-view-tab-${view}`} className="flex-1 min-h-0 flex flex-col">
                 {view === "timeline" ? (
-                  <Timeline runId={viewId} density={density} focus={focus} onSelect={setSelected} selected={selected}
+                  <Timeline runId={viewId} density={density} focus={focus} onSelect={inspect} selected={selected}
                     reveal={reveal} onRevealed={() => setReveal(null)} />
                 ) : (() => {
                   const View = VIEWS.find((v) => v.value === view)?.component;
@@ -532,11 +604,25 @@ export default function RunWorkspace() {
                 })()}
               </div>
             </div>
-            <div className="hidden xl:flex border-l border-border min-h-0 flex-col">
-              <Inspector runId={runId} selected={selected} />
-            </div>
+            {inspectorInline && (
+              <div className="flex border-l border-border min-h-0 flex-col">
+                <Inspector runId={runId} selected={selected} />
+              </div>
+            )}
           </div>
-          <InterventionBar runId={runId} members={members.length ? members : run.council_snapshot.members} disabled={!live} />
+          <InterventionBar runId={runId} members={roster} disabled={!live} status={realStatus || run.status}
+            followUp={{ topic: run.topic, mode: run.mode, description: run.description }} />
+          {!inspectorInline && (
+            <Drawer open={inspectorOpen} onOpenChange={setInspectorOpen} title="Inspector">
+              <Inspector runId={runId} selected={selected} />
+            </Drawer>
+          )}
+          {!railInline && (
+            <Drawer open={railOpen} onOpenChange={setRailOpen} side="bottom" title="Council">
+              <CouncilRail runId={runId} members={roster} state={state} live={live} focused={focus}
+                onFocus={(id) => { setFocus(id); setRailOpen(false); }} />
+            </Drawer>
+          )}
         </>
       )}
       {run.status === "queued" && !state.lastSeq && <Callout tone="info" title="Waiting to start…" />}

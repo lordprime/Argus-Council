@@ -28,3 +28,6 @@ backups/
 deploy/.rollback-state
 deploy/.rollback-state.*
 deploy/.lock/
+
+# MkDocs build output (mkdocs build)
+/site/
