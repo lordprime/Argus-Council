@@ -85,7 +85,18 @@ describe("Insights dashboard", () => {
     expect(screen.getByRole("img", { name: /Spend by model/ })).toBeInTheDocument();
     // Provider health probe latency is preferred over the average call latency.
     expect(await screen.findByText("321 ms")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open ledger" })).toHaveAttribute("href", "/connections/ledger");
+    // One Insights section (C-10, C-27): eyebrow, h1, section tabs; page actions in the header, no quick-action tiles
+    // and no in-page breadcrumb (the shell header carries the breadcrumb).
+    const nav = screen.getByRole("navigation", { name: "Insights" });
+    expect(within(nav).getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: "Audit log" })).toHaveAttribute("href", "/insights/audit");
+    expect(screen.getByRole("button", { name: "Export JSON" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Quick actions" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // Health labels are sentence-case strings ("OK", "Not probed"), not CSS-capitalised Title Case.
+    expect(screen.getByText("Not probed")).not.toHaveClass("capitalize");
 
     const results = await axe.run(container);
     expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.html).join(" | ")}`)).toEqual([]);
@@ -169,9 +180,12 @@ describe("Audit log", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show details for event 200" }));
     expect(screen.getByText(/"n": 200/)).toBeInTheDocument();
 
+    // Filters apply live (C-28): no Apply button; the typed action is debounced.
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+    expect(within(screen.getByRole("navigation", { name: "Insights" })).getByRole("link", { name: "Audit log" }))
+      .toHaveAttribute("aria-current", "page");
     await userEvent.type(screen.getByLabelText("Action contains"), "auth");
     await userEvent.selectOptions(screen.getByLabelText("Result"), "false");
-    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/audit?action=auth&success=false&limit=50", expect.anything()));
 
     await userEvent.click(screen.getByRole("switch", { name: "All users" }));
@@ -183,7 +197,7 @@ describe("Audit log", () => {
     useSession.setState({ user: { id: "u2", email: "x@y.z", display_name: "X", is_admin: false, created_at: "" }, status: "authenticated" });
     mockFetch((url) => (url.startsWith("/api/v1/audit?") ? json({ events: [] }) : undefined));
     renderAt("/insights/audit", <Audit />);
-    expect(await screen.findByText("No audit events match")).toBeInTheDocument();
+    expect(await screen.findByText("No audit events yet")).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "All users" })).toBeNull();
   });
 });

@@ -1,19 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Activity, AlertOctagon, ChevronRight, Clock, Coins, Download, Gauge, Hash, Plus, RefreshCw, ScrollText, ShieldAlert, type LucideIcon,
-} from "lucide-react";
+import { Activity, AlertOctagon, Clock, Coins, Download, Gauge, Hash, RefreshCw, ShieldAlert, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router";
 
 import {
   AreaChart, BarChart, ChartCard, color, HeatGrid, seriesTone, Sparkline, StackedBar, StatusDot, type Segment, type Tone,
 } from "@/components/insights/charts";
-import { Badge, Card, EmptyState, ErrorState, Segmented, Skeleton } from "@/components/ui";
+import { InsightsPage } from "@/components/insights/InsightsPage";
+import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Segmented, Skeleton } from "@/components/ui";
 import {
   bucketRuns, downloadText, fmtDuration, fmtNum, fmtUsd, RANGES, rateTone, ruleSeverity, SEVERITIES, sortedEntries, type Bucket, type RangeValue,
 } from "@/features/insights/logic";
 import { useInsightRuns, useInsights, useProviderHealth, type Insights as InsightsData, type ProviderWithHealth } from "@/features/insights/queries";
 import { cn } from "@/lib/cn";
+import { modeMeta } from "@/lib/modes";
 import type { Run } from "@/lib/types";
 
 const STATUS_TONE: Record<string, Tone> = {
@@ -39,24 +38,11 @@ function KpiCard({ icon: Icon, label, value, sub, spark, tone, kind }: {
   );
 }
 
-function QuickAction({ icon: Icon, label, to, onClick }: { icon: LucideIcon; label: string; to?: string; onClick?: () => void }) {
-  const inner = (
-    <>
-      <span className="size-11 rounded-full grid place-items-center bg-accent-subtle text-accent group-hover:bg-accent group-hover:text-accent-fg transition-colors duration-fast">
-        <Icon className="size-5" aria-hidden />
-      </span>
-      <span className="text-xs text-fg-muted text-center leading-tight">{label}</span>
-    </>
-  );
-  const cls = "group flex flex-col items-center gap-1.5 w-20 rounded-lg p-1";
-  return to ? <Link to={to} className={cls}>{inner}</Link> : <button type="button" onClick={onClick} className={cls}>{inner}</button>;
-}
-
 function Panel({ title, description, children, className }: { title: string; description?: string; children: ReactNode; className?: string }) {
   return (
     <Card className={cn("p-4 flex flex-col gap-3 min-w-0", className)} aria-label={title}>
       <div>
-        <h2 className="text-md font-semibold">{title}</h2>
+        <CardTitle as="h2">{title}</CardTitle>
         {description && <p className="text-xs text-fg-subtle">{description}</p>}
       </div>
       {children}
@@ -64,11 +50,15 @@ function Panel({ title, description, children, className }: { title: string; des
   );
 }
 
+/** Sentence case for status strings from the server ("rate_limited" -> "Rate limited"). */
+const sentence = (s: string) => { const t = s.replace(/_/g, " "); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); };
+
 function healthTone(status: string | null | undefined): { tone: Tone; label: string } {
-  if (!status) return { tone: "neutral", label: "not probed" };
-  if (/^(ok|up|healthy|pass)/i.test(status)) return { tone: "success", label: status };
-  if (/degrad|slow|warn/i.test(status)) return { tone: "warning", label: status };
-  return { tone: "danger", label: status };
+  if (!status) return { tone: "neutral", label: "Not probed" };
+  const label = sentence(status);
+  if (/^(ok|up|healthy|pass)/i.test(status)) return { tone: "success", label: /^ok$/i.test(status) ? "OK" : label };
+  if (/degrad|slow|warn/i.test(status)) return { tone: "warning", label };
+  return { tone: "danger", label };
 }
 
 function ModelTiles({ data, providers }: { data: InsightsData; providers: ProviderWithHealth[] }) {
@@ -83,7 +73,7 @@ function ModelTiles({ data, providers }: { data: InsightsData; providers: Provid
   });
   for (const p of providers) {
     if (seen.has(p.name)) continue;
-    const h = p.enabled ? healthTone(p.health_status) : { tone: "neutral" as Tone, label: "disabled" };
+    const h = p.enabled ? healthTone(p.health_status) : { tone: "neutral" as Tone, label: "Disabled" };
     tiles.push({ key: p.id, title: p.default_model ? `${p.name}/${p.default_model}` : p.name, latency: p.health_latency_ms ?? 0, calls: 0, ...h });
   }
   if (!tiles.length) return <p className="text-sm text-fg-muted">No model calls or providers yet.</p>;
@@ -99,7 +89,7 @@ function ModelTiles({ data, providers }: { data: InsightsData; providers: Provid
             <div><dt className="text-fg-subtle">Latency</dt><dd className="tabular font-semibold">{t.latency ? `${fmtNum(t.latency)} ms` : "—"}</dd></div>
             <div><dt className="text-fg-subtle">Calls</dt><dd className="tabular font-semibold">{fmtNum(t.calls)}</dd></div>
           </dl>
-          <p className="mt-1 text-2xs text-fg-subtle capitalize">{t.label}</p>
+          <p className="mt-1 text-xs text-fg-subtle">{t.label}</p>
         </li>
       ))}
     </ul>
@@ -169,7 +159,7 @@ function Oversight({ data }: { data: InsightsData }) {
           <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {approvals.map(([k, v]) => (
               <div key={k} className="rounded-lg bg-surface-2/60 p-2">
-                <dt className="text-xs text-fg-subtle capitalize">{k}</dt>
+                <dt className="text-xs text-fg-subtle">{sentence(k)}</dt>
                 <dd className="text-xl tabular">{v}</dd>
               </div>
             ))}
@@ -221,7 +211,7 @@ function Dashboard({ data, runs, providers, days }: { data: InsightsData; runs: 
   const peak = buckets.reduce<Bucket | undefined>((m, b) => (!m || b.runs > m.runs ? b : m), undefined);
   const models = data.models.map((m) => ({ label: m.model, value: m.cost_usd, display: fmtUsd(m.cost_usd), detail: `${m.calls} calls · ${fmtNum(m.tokens)} tokens` }));
   const statusSegs: Segment[] = sortedEntries(data.runs_by_status).map(([k, v]) => ({ label: k.replace(/_/g, " "), value: v, tone: STATUS_TONE[k] ?? "neutral" }));
-  const modeSegs: Segment[] = sortedEntries(data.runs_by_mode).map(([k, v], i) => ({ label: k, value: v, tone: seriesTone(i) }));
+  const modeSegs: Segment[] = sortedEntries(data.runs_by_mode).map(([k, v], i) => ({ label: modeMeta(k).label, value: v, tone: seriesTone(i) }));
   const grid = violationGrid(data, runs, buckets, days);
   const maxFail = Math.max(1, ...data.top_failures.map((f) => f.count));
   const window = `last ${days === 1 ? "24 hours" : `${days} days`}`;
@@ -324,36 +314,21 @@ export default function Insights() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-[96rem] mx-auto flex flex-col gap-4 min-w-0">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-subtle">
-        <ol className="flex items-center gap-1">
-          <li><Link to="/" className="hover:text-fg">Argus</Link></li>
-          <li aria-hidden><ChevronRight className="size-3" /></li>
-          <li aria-current="page" className="text-fg-muted">Insights</li>
-        </ol>
-      </nav>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl">Council insights</h1>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <Badge tone="accent">Window · {days === 1 ? "24h" : `${days}d`}</Badge>
-            <Badge tone="neutral">{q.data ? `${q.data.analysed_runs} runs analysed` : "Loading…"}</Badge>
-            <Badge tone={q.isFetching ? "info" : "success"}>{q.isFetching ? "Updating" : "Up to date"}</Badge>
-          </div>
-        </div>
-        <Segmented label="Range" value={range} onChange={setRange} options={RANGES.map((r) => ({ value: r.value, label: r.label }))} />
-      </div>
-
-      <Card className="p-3" aria-label="Quick actions">
-        <h2 className="sr-only">Quick actions</h2>
-        <div className="flex flex-wrap items-start gap-1 sm:gap-3">
-          <QuickAction icon={Plus} label="New run" to="/" />
-          <QuickAction icon={ScrollText} label="Open ledger" to="/connections/ledger" />
-          <QuickAction icon={Activity} label="Audit log" to="/insights/audit" />
-          <QuickAction icon={Download} label="Export JSON" onClick={exportJson} />
-          <QuickAction icon={RefreshCw} label="Refresh" onClick={refresh} />
-        </div>
-      </Card>
+    <InsightsPage title="Council insights"
+      description="Spend, reliability and oversight across your runs."
+      meta={
+        <>
+          <Badge tone="neutral">{q.data ? `${q.data.analysed_runs} runs analysed` : "Loading…"}</Badge>
+          <Badge tone={q.isFetching ? "info" : "success"}>{q.isFetching ? "Updating" : "Up to date"}</Badge>
+        </>
+      }
+      actions={
+        <>
+          <Button icon={Download} disabled={!q.data} onClick={exportJson}>Export JSON</Button>
+          <Button icon={RefreshCw} loading={q.isFetching && !q.isLoading} onClick={refresh}>Refresh</Button>
+        </>
+      }>
+      <Segmented label="Range" value={range} onChange={setRange} options={RANGES.map((r) => ({ value: r.value, label: r.label }))} />
 
       {q.isLoading ? (
         <div className="grid gap-3 grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-5" aria-hidden>
@@ -367,6 +342,6 @@ export default function Insights() {
       ) : (
         <Dashboard data={q.data} runs={runs.data ?? []} providers={providers.data ?? []} days={days} />
       )}
-    </div>
+    </InsightsPage>
   );
 }
