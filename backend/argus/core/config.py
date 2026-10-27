@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./argus.db"
     redis_url: str | None = None
     cache_default_ttl: int = 300
+    # Bound every cache/rate-limit Redis command so a hung Redis degrades instead of stalling requests.
+    # (Run event pub/sub uses its own connection without a read timeout: subscribers idle for minutes.)
+    redis_socket_timeout_s: float = Field(default=2.0, gt=0)
+    redis_connect_timeout_s: float = Field(default=2.0, gt=0)
+    # Per-dependency timeout for /health/ready.
+    health_check_timeout_s: float = Field(default=2.0, gt=0)
 
     # Auth
     secret_key: SecretStr = SecretStr(_INSECURE_DEFAULT_SECRET)
@@ -86,6 +92,10 @@ class Settings(BaseSettings):
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
+    # Inbound blocking calls (MCP start_run wait_seconds, A2A blocking, ACP sync) waiting at once in
+    # this process; beyond it, calls return the run's current state and the client polls.
+    protocol_max_blocking_waits: int = Field(default=100, ge=0)
+    protocol_max_wait_s: float = Field(default=600.0, gt=0, le=3600)
     remote_agent_timeout_s: float = 600.0
 
     # Runs

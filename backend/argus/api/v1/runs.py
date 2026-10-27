@@ -20,7 +20,7 @@ from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
 from argus.runtime.events import TERMINAL_STATUSES, load_events
 from argus.runtime.manager import RunManager
-from argus.runtime.snapshot import reduce_events
+from argus.runtime.snapshot import SnapshotReducer
 from argus.services.runs import create_and_start_run
 
 # stream-ticket only grants read access to a run's own event stream.
@@ -30,6 +30,7 @@ router = APIRouter(
 
 TICKET_TTL_S = 300
 HEARTBEAT_S = 15.0
+SNAPSHOT_PAGE = 1000  # events per query when reducing a snapshot
 
 
 def _manager(request: Request) -> RunManager:
@@ -163,8 +164,16 @@ async def snapshot(
     at_seq: int | None = Query(default=None, ge=0),
 ) -> dict:
     await _own_run(db, principal.id, run_id)
-    evs = await load_events(request.app.state.db.sessionmaker, run_id, 0, None, 100_000)
-    return reduce_events(evs, at_seq)
+    # Reduce page by page: memory stays at one page however long the event log is.
+    reducer = SnapshotReducer(at_seq)
+    before = at_seq + 1 if at_seq is not None else None
+    after = 0
+    while True:
+        page = await load_events(request.app.state.db.sessionmaker, run_id, after, before, SNAPSHOT_PAGE)
+        reducer.feed(page)
+        if len(page) < SNAPSHOT_PAGE or reducer.done:
+            return reducer.result()
+        after = page[-1]["seq"]
 
 
 @router.post("/{run_id}/stream-ticket")

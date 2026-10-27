@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.errors import ArgusError, Conflict, NotFound
-from argus.core.logging import get_logger
-from argus.core.metrics import RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
+from argus.core.logging import fresh_log_context, get_logger
+from argus.core.metrics import RUN_DURATION, RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run, RunEvent
 from argus.runtime.agent import MemberSpec
 from argus.runtime.context import Correction, RunCancelled, RunContext
@@ -189,7 +189,13 @@ class RunManager:
                 raise RunStartFailed("The run could not be started", details={"run_id": str(run.id)}) from exc
             raise
         self.live[run.id] = live
-        live.task = asyncio.create_task(self._drive(live), name=f"run-{run.id}")
+        live.task = asyncio.create_task(
+            self._drive(live),
+            name=f"run-{run.id}",
+            context=fresh_log_context(
+                run_id=str(run.id), owner_id=str(run.owner_id), mode=run.mode, depth=depth
+            ),
+        )
         return live
 
     async def _prepare(
@@ -322,6 +328,7 @@ class RunManager:
             self.live.pop(ctx.run_id, None)
             RUNS_ACTIVE.dec()
             RUNS_FINISHED.labels(ctx.mode, status).inc()
+            RUN_DURATION.labels(ctx.mode, status).observe(ctx.engine.runtime_s)
 
     async def _finalize(self, live: LiveRun, status: str, error: str | None, result: str) -> None:
         """Record the final status. Each step is isolated; the status write and the terminal

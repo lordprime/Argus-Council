@@ -30,6 +30,7 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from argus.core.logging import get_logger
+from argus.core.metrics import EVENT_PERSIST_FAILURES, counts_failures
 from argus.db.models import Run, RunEvent
 
 log = get_logger(__name__)
@@ -315,6 +316,7 @@ class EventSink:
             q = select(func.max(RunEvent.seq)).where(RunEvent.run_id == self.run_id)
             return int((await session.execute(q)).scalar_one_or_none() or 0)
 
+    @counts_failures(EVENT_PERSIST_FAILURES)
     async def _persist(self, env: Envelope) -> None:
         async with self.sessionmaker() as session:
             session.add(

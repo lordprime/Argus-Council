@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.logging import get_logger
+from argus.core.metrics import RETENTION_DELETED, RETENTION_LAST_SUCCESS
 from argus.db.models import AuditEvent, LedgerEntry, Run, RunEvent
 from argus.runtime.events import TERMINAL_STATUSES
 
@@ -329,6 +330,9 @@ class RetentionService:
                 self.last = stats
                 raise
             self.last = stats
+            for kind in ("runs", "run_events", "audit_events", "ledger_entries", "blob_dirs"):
+                RETENTION_DELETED.labels(kind).inc(getattr(stats, kind))
+            RETENTION_LAST_SUCCESS.set(time.time())
             return stats
 
     async def loop(self) -> None:

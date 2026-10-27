@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.logging import get_logger
+from argus.core.metrics import observes_webhook_delivery
 from argus.core.netguard import guarded_client
 from argus.db.models import Webhook, WebhookDelivery
 
@@ -90,6 +91,7 @@ class WebhookDispatcher:
         targets = [h for h in hooks if event in (h.events or []) or "*" in (h.events or [])]
         await asyncio.gather(*(self.deliver(h, event, data) for h in targets))
 
+    @observes_webhook_delivery
     async def deliver(self, hook: Webhook, event: str, data: dict[str, Any]) -> bool:
         delivery_id = f"dlv_{uuid.uuid4().hex}"
         body = orjson.dumps(

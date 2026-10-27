@@ -14,7 +14,7 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -26,6 +26,7 @@ from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.errors import ArgusError, NotFound
 from argus.core.logging import get_logger
+from argus.core.metrics import LLM_FALLBACKS, record_llm_error, record_llm_response
 from argus.core.netguard import ip_blocked
 from argus.db.models import ProviderConfig
 from argus.providers.base import Provider, ProviderError, retry_delay, with_retries
@@ -128,6 +129,15 @@ async def persist_health(session: AsyncSession, config_id: uuid.UUID, result: He
 
 def _elapsed_ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
+
+
+async def _counted[T](provider: Provider, call: Awaitable[T]) -> T:
+    """Await one provider attempt, counting it in ``argus_llm_errors_total`` if it fails."""
+    try:
+        return await call
+    except ProviderError as exc:
+        record_llm_error(provider, exc)
+        raise
 
 
 class LLMRouter:
@@ -266,11 +276,11 @@ class LLMRouter:
     ) -> CompletionResponse:
         """Try ``route`` then each fallback; non-retryable 4xx errors still fall through."""
         last_error: Exception | None = None
-        for r in [route, *(fallbacks or [])]:
+        for i, r in enumerate([route, *(fallbacks or [])]):
             request = req.model_copy(update={"model": r.model})
             cache_key = self._cache_key(owner_id, r.provider, request) if self._cacheable(request) else None
             if cache_key:
-                hit = await self.cache.get(cache_key)
+                hit = await self.cache.get_best_effort(cache_key)
                 if hit is not None:
                     resp = CompletionResponse.model_validate(hit)
                     resp.cached = True
@@ -284,7 +294,7 @@ class LLMRouter:
                 start = time.perf_counter()
                 try:
                     resp = await with_retries(
-                        lambda p=provider, q=request: p.complete(q),
+                        lambda p=provider, q=request: _counted(p, p.complete(q)),
                         attempts=self.settings.llm_max_retries,
                         base_delay=self.retry_base_delay,
                     )
@@ -296,10 +306,15 @@ class LLMRouter:
                 last_error = exc
                 log.warning("llm.route_failed", provider=r.provider, model=r.model, error=str(exc)[:200])
                 continue
+            record_llm_response(provider, resp, time.perf_counter() - start)
+            if i > 0:
+                LLM_FALLBACKS.labels("route").inc()
             if ledger:
                 ledger.record(resp)
             if cache_key and resp.finish_reason in ("stop", "tool_calls"):
-                await self.cache.set(cache_key, resp.model_dump(mode="json"), ttl=self.settings.llm_cache_ttl)
+                await self.cache.set_best_effort(
+                    cache_key, resp.model_dump(mode="json"), ttl=self.settings.llm_cache_ttl
+                )
             return resp
         assert last_error is not None
         raise last_error
@@ -331,6 +346,8 @@ class LLMRouter:
                 async for event in provider.stream(request):
                     if event.type == "done":
                         self.note_health(provider, HealthResult("ok", latency_ms=_elapsed_ms(start)))
+                        if event.response:
+                            record_llm_response(provider, event.response, time.perf_counter() - start)
                         if event.response and ledger:
                             ledger.record(event.response)
                     if on_event:
@@ -339,6 +356,7 @@ class LLMRouter:
                     yield event
                 return
             except ProviderError as exc:
+                record_llm_error(provider, exc)
                 self.note_health(provider, failure(exc, _elapsed_ms(start)))
                 if emitted or not exc.retryable or attempt == attempts:
                     raise
