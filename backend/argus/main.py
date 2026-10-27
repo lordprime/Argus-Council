@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
 from argus import __version__
+from argus.api.sse import SseHub, chain_shutdown_signals
 from argus.api.v1 import (
     admin,
     auth,
@@ -111,6 +112,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await _bootstrap_admin(app, settings)
         backend = app.state.cache.backend
         app.state.broker = build_broker(backend.client if isinstance(backend, RedisBackend) else None)
+        # Open SSE streams end as soon as SIGTERM/SIGINT arrives, so uvicorn's graceful shutdown
+        # is not held up by them and the run finalisation below gets to run.
+        app.state.sse = SseHub()
+        restore_signals = chain_shutdown_signals(app.state.sse.shutdown)
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
         app.state.runs = RunManager(
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
@@ -125,6 +130,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            app.state.sse.shutdown()
+            restore_signals()
             for task in app.state.periodic:
                 task.cancel()
             await asyncio.gather(*app.state.periodic, return_exceptions=True)

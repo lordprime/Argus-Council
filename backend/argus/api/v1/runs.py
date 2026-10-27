@@ -15,6 +15,7 @@ from sqlalchemy import select
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
 from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunDetail, RunIn, RunOut
+from argus.api.sse import END, HEARTBEAT, SseHub
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
 from argus.runtime.events import TERMINAL_STATUSES, load_events
@@ -176,49 +177,86 @@ async def stream_ticket(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDe
     return {"ticket": ticket, "expires_at": (datetime.now(UTC) + timedelta(seconds=TICKET_TTL_S)).isoformat()}
 
 
+def _is_terminal(ev: dict) -> bool:
+    return ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES
+
+
+async def _run_finished(sessionmaker, run_id: uuid.UUID) -> bool:
+    async with sessionmaker() as s:
+        status = (await s.execute(select(Run.status).where(Run.id == run_id))).scalar_one_or_none()
+    return status is None or status in TERMINAL_STATUSES
+
+
 async def _sse(request: Request, run_id: uuid.UUID, after_seq: int) -> AsyncIterator[bytes]:
+    """Replay durable history after ``after_seq``, then follow the live feed.
+
+    Live durable events are delivered in ``seq`` order without gaps: anything the live feed
+    skipped is backfilled from the database. The stream ends on the run's terminal event, when
+    the run's row is already terminal (checked on every heartbeat), on server shutdown, or when
+    the client stalls so long that a durable event could not be buffered; in the last two cases
+    the client reconnects with ``Last-Event-ID``.
+    """
     broker = request.app.state.broker
     sessionmaker = request.app.state.db.sessionmaker
-    queue: asyncio.Queue[bytes] = asyncio.Queue()
+    hub: SseHub = request.app.state.sse
+    buf = hub.open()
     ready = asyncio.Event()
 
     async def pump() -> None:
-        async for payload in broker.subscribe(str(run_id), ready):
-            await queue.put(payload)
+        try:
+            async for payload in broker.subscribe(str(run_id), ready):
+                ev = orjson.loads(payload)
+                if not buf.offer((payload, ev), ephemeral=bool(ev.get("ephemeral"))):
+                    return
+        finally:
+            buf.close()  # a dead live feed ends the stream; the client resumes from its last id
 
     pump_task = asyncio.create_task(pump())
-    try:
-        await asyncio.wait_for(ready.wait(), 10)
-        last = after_seq
-        terminal = False
-        # Replay durable history first, then switch to live.
+    last = after_seq
+
+    async def history(before_seq: int | None = None) -> AsyncIterator[dict]:
+        nonlocal last
         while True:
-            batch = await load_events(sessionmaker, run_id, last, None, 1000)
+            batch = await load_events(sessionmaker, run_id, last, before_seq, 1000)
             for ev in batch:
                 last = ev["seq"]
-                terminal = terminal or (
-                    ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES
-                )
-                yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+                yield ev
             if len(batch) < 1000:
-                break
-        if terminal:
-            return
+                return
+
+    try:
+        await asyncio.wait_for(ready.wait(), 10)
+        # Replay durable history first, then switch to live.
+        async for ev in history():
+            yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+            if _is_terminal(ev):
+                return
         while not await request.is_disconnected():
-            try:
-                payload = await asyncio.wait_for(queue.get(), HEARTBEAT_S)
-            except TimeoutError:
+            item = await buf.get(HEARTBEAT_S)
+            if item is END:
+                return
+            if item is HEARTBEAT:
+                if await _run_finished(sessionmaker, run_id):
+                    async for ev in history():
+                        yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+                    return
                 yield b": keep-alive\n\n"
                 continue
-            ev = orjson.loads(payload)
+            payload, ev = item
             if not ev.get("ephemeral"):
                 if ev["seq"] <= last:
                     continue
+                if ev["seq"] > last + 1:
+                    async for missed in history(before_seq=ev["seq"]):
+                        yield _frame(missed["seq"], missed["type"], orjson.dumps(missed))
+                        if _is_terminal(missed):
+                            return
                 last = ev["seq"]
             yield _frame(ev["seq"], ev["type"], payload)
-            if ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES:
+            if _is_terminal(ev):
                 return
     finally:
+        hub.release(buf)
         pump_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pump_task

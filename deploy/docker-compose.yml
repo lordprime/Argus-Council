@@ -53,6 +53,8 @@ services:
     build:
       context: ../backend
     image: argus-council/api:${ARGUS_VERSION:-latest}
+    # Room for uvicorn's graceful shutdown (10 s) plus recording the final status of live runs.
+    stop_grace_period: 45s
     read_only: true
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     environment:
@@ -120,6 +122,7 @@ services:
     <<: *hardening
     image: argus-council/api:${ARGUS_VERSION:-latest}
     command: ["uvicorn", "argus.sandbox.server:app", "--host", "0.0.0.0", "--port", "8100", "--no-server-header"]
+    stop_grace_period: 30s
     read_only: true
     tmpfs:
       - "/work:size=512m,mode=1777"
