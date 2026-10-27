@@ -43,7 +43,8 @@ COPY --from=build --chown=root:root /opt/venv /opt/venv
 COPY --chown=root:root alembic.ini ./
 COPY --chown=root:root alembic ./alembic
 COPY --chown=root:root --chmod=0755 docker/entrypoint.sh /usr/local/bin/argus-entrypoint
-RUN mkdir -p /data && chown argus:argus /data
+# /run/argus-sandbox seeds the shared volume that carries the sandbox Unix socket (owned by argus).
+RUN mkdir -p /data /run/argus-sandbox && chown argus:argus /data /run/argus-sandbox
 
 USER 10001:10001
 EXPOSE 8000

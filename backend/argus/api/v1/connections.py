@@ -24,6 +24,7 @@ from argus.services.connections import (
     encode_mcp_risk,
     ledgered,
     mcp_settings,
+    outbound_client,
     public_card,
     set_agent_card,
 )
@@ -115,7 +116,7 @@ async def create_mcp(
     else:
         if not data.url:
             raise ArgusError("url is required for HTTP MCP servers")
-        url = validate_base_url(data.url, settings.provider_allow_private_urls)
+        url = validate_base_url(data.url, settings.connections_allow_private_urls, require_dns=False)
     box = SecretBox(settings)
     server = McpServer(
         owner_id=principal.id,
@@ -144,7 +145,9 @@ async def update_mcp(
         h = values.pop("headers")
         server.headers_enc = box.encrypt(json.dumps(h)) if h else None
     if values.get("url"):
-        values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+        values["url"] = validate_base_url(
+            values["url"], settings.connections_allow_private_urls, require_dns=False
+        )
     trust, require_approval, risk = mcp_settings(server)
     if {"risk", "trust", "require_approval"} & values.keys():
         new = {k: values.pop(k, None) for k in ("risk", "trust", "require_approval")}
@@ -201,7 +204,7 @@ async def create_agent(
         owner_id=principal.id,
         name=data.name,
         protocol=data.protocol,
-        url=validate_base_url(data.url, settings.provider_allow_private_urls),
+        url=validate_base_url(data.url, settings.connections_allow_private_urls, require_dns=False),
         agent_name=data.agent_name,
         token_enc=SecretBox(settings).encrypt(data.token) if data.token else None,
         description=data.description,
@@ -223,7 +226,9 @@ async def update_agent(
         t = values.pop("token")
         agent.token_enc = SecretBox(settings).encrypt(t) if t else None
     if values.get("url"):
-        values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+        values["url"] = validate_base_url(
+            values["url"], settings.connections_allow_private_urls, require_dns=False
+        )
     if "requires_approval" in values:
         set_agent_card(agent, requires_approval=bool(values.pop("requires_approval")))
     if "agent_name" in values:
@@ -257,7 +262,12 @@ async def refresh_agent(
     detail = {"agent": agent.name, "purpose": "refresh"}
     try:
         if agent.protocol == "a2a":
-            client = A2AClient(agent.url, token, timeout=settings.protocol_timeout_s)
+            client = A2AClient(
+                agent.url,
+                token,
+                timeout=settings.protocol_timeout_s,
+                client=outbound_client(settings, settings.protocol_timeout_s),
+            )
             try:
                 base = agent.url.rsplit("/", 1)[0] if agent.url.rstrip("/").endswith("/a2a") else agent.url
                 card = await ledgered(
@@ -273,7 +283,12 @@ async def refresh_agent(
             finally:
                 await client.aclose()
         else:
-            client2 = AcpClient(agent.url, token, timeout=settings.protocol_timeout_s)
+            client2 = AcpClient(
+                agent.url,
+                token,
+                timeout=settings.protocol_timeout_s,
+                client=outbound_client(settings, settings.protocol_timeout_s),
+            )
             try:
                 listing = await ledgered(
                     maker,

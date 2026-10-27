@@ -18,6 +18,7 @@ import httpx
 import orjson
 
 from argus import __version__
+from argus.core.netguard import guarded_client
 
 PROTOCOL_VERSION = "2025-06-18"
 MAX_RESULT_CHARS = 100_000
@@ -93,7 +94,7 @@ class HttpMcpClient(McpClient):
             **(headers or {}),
         }
         self.session_id: str | None = None
-        self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0))
+        self.client = client or guarded_client(timeout=httpx.Timeout(timeout, connect=10.0))
 
     def _hdrs(self) -> dict[str, str]:
         h = dict(self.headers)

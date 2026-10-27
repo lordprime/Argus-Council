@@ -32,7 +32,7 @@ export const useSession = create<SessionState>((set) => ({
     set({ user: await api.get<User>(`${V1}/auth/me`), status: "authenticated" });
   },
   logout: () => {
-    auth.clear();
+    auth.revoke();
     set({ user: null, status: "anonymous" });
   },
 }));

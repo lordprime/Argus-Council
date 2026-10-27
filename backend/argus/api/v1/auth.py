@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Request, Response, status
 from sqlalchemy import func, select
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SessionPrincipal, SettingsDep
@@ -29,6 +29,7 @@ from argus.core.security import (
     verify_password,
 )
 from argus.db.models import ApiKey, User
+from argus.services.sessions import revoke_session, revoke_user_sessions, session_revoked
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -47,10 +48,13 @@ class InvalidPassword(ArgusError):
 _DUMMY_HASH = hash_password("argus-timing-equaliser-password")
 
 
-def _tokens(settings, user: User) -> TokenOut:
+def _tokens(settings, user: User, sid: str | None = None) -> TokenOut:
+    # Access and refresh tokens of one sign-in share a session id, kept across refresh rotation,
+    # so logout or refresh-token reuse can end the whole session server-side.
+    sid = sid or uuid.uuid4().hex
     return TokenOut(
-        access_token=create_token(settings, str(user.id), "access"),
-        refresh_token=create_token(settings, str(user.id), "refresh"),
+        access_token=create_token(settings, str(user.id), "access", sid=sid),
+        refresh_token=create_token(settings, str(user.id), "refresh", sid=sid),
         expires_in=settings.access_token_ttl_minutes * 60,
     )
 
@@ -85,6 +89,9 @@ async def register(data: RegisterIn, request: Request, db: DbDep, settings: Sett
 @router.post("/login", response_model=TokenOut)
 async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDep, cache: CacheDep):
     await _throttle(cache, request, "login")
+    # Per-account limit as well: client IPs can be spread or spoofed, the target account cannot.
+    if await cache.hit_rate_limit(f"login-account:{cache.fingerprint(data.email.lower())[:32]}", 10):
+        raise RateLimited("Too many attempts for this account, try again in a minute")
     request.state.audit_detail = {"email": data.email.lower()}
     user = (await db.execute(select(User).where(User.email == data.email.lower()))).scalar_one_or_none()
     if user is None:
@@ -102,16 +109,33 @@ async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDe
 @router.post("/refresh", response_model=TokenOut)
 async def refresh(data: RefreshIn, db: DbDep, settings: SettingsDep, cache: CacheDep):
     payload = decode_token(settings, data.refresh_token, "refresh")
-    revoked_key = cache.key("revoked-jti", payload["jti"])
-    if await cache.get(revoked_key):
+    if await session_revoked(cache, payload):
+        raise Unauthorized("Session has been signed out")
+    # Rotate: each refresh token is single-use. The counter makes the check-and-mark atomic, so two
+    # concurrent uses of one token cannot both succeed.
+    remaining = max(int(payload["exp"] - datetime.now(UTC).timestamp()), 1)
+    uses = await cache.backend.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
+    if uses > 1:
+        # Reuse means the token leaked (or was replayed): end the whole session, both holders.
+        await revoke_session(cache, settings, payload.get("sid"))
         raise Unauthorized("Refresh token already used")
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:
         raise Unauthorized("Inactive user")
-    # Rotate: each refresh token is single-use.
+    return _tokens(settings, user, payload.get("sid"))
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(data: RefreshIn, settings: SettingsDep, cache: CacheDep) -> Response:
+    """End the session the refresh token belongs to (its access tokens stop working too)."""
+    try:
+        payload = decode_token(settings, data.refresh_token, "refresh")
+    except Unauthorized:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)  # already invalid: nothing to end
+    await revoke_session(cache, settings, payload.get("sid"))
     remaining = max(int(payload["exp"] - datetime.now(UTC).timestamp()), 1)
-    await cache.set(revoked_key, True, ttl=remaining)
-    return _tokens(settings, user)
+    await cache.backend.incr_window(cache.key("refresh-used", payload["jti"]), remaining)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/me", response_model=AccountOut)
@@ -120,7 +144,9 @@ async def me(principal: CurrentPrincipal):
 
 
 @router.patch("/me", response_model=AccountOut)
-async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrincipal, cache: CacheDep):
+async def update_me(
+    data: ProfilePatch, request: Request, principal: CurrentPrincipal, cache: CacheDep, settings: SettingsDep
+):
     user = principal.user
     if data.new_password is not None and principal.via != "jwt":
         raise Forbidden("API keys cannot change the account password")
@@ -134,6 +160,8 @@ async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrin
             # 400, not 401: the session is valid; only the confirmation is wrong.
             raise InvalidPassword("Current password is incorrect")
         user.password_hash = hash_password(data.new_password)
+        # Sign out every other session; the one that made the change stays signed in.
+        await revoke_user_sessions(cache, settings, user.id, keep_sid=principal.sid)
     return user
 
 

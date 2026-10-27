@@ -19,6 +19,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.logging import get_logger
+from argus.core.netguard import guarded_client
 from argus.db.models import McpServer, RemoteAgent
 from argus.protocols.mcp_client import HttpMcpClient, McpClient, StdioMcpClient
 from argus.services import ledger
@@ -147,7 +149,19 @@ def build_mcp_client(server: McpServer, settings: Settings, box: SecretBox) -> M
         )
     if not server.url:
         raise ValueError("HTTP MCP server needs a url")
-    return HttpMcpClient(server.url, headers=headers, timeout=settings.protocol_timeout_s)
+    return HttpMcpClient(
+        server.url,
+        headers=headers,
+        timeout=settings.protocol_timeout_s,
+        client=outbound_client(settings, settings.protocol_timeout_s),
+    )
+
+
+def outbound_client(settings: Settings, timeout: float) -> httpx.AsyncClient:
+    """SSRF-guarded client for user-configured peers (MCP servers, remote agents)."""
+    return guarded_client(
+        settings.connections_allow_private_urls, timeout=httpx.Timeout(timeout, connect=10.0)
+    )
 
 
 async def connect_mcp(
@@ -263,6 +277,7 @@ async def attach_connections(
                 "description": a.description,
                 "token": box.decrypt(a.token_enc) if a.token_enc else None,
                 "requires_approval": agent_requires_approval(a),
+                "allow_private": settings.connections_allow_private_urls,
             }
         registry.register(GatedRemoteAgentTool(table, timeout_s=settings.remote_agent_timeout_s))
     return closers

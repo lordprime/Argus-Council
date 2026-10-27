@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from argus.core.errors import ArgusError
+from argus.core.netguard import guarded_client
 
 
 class AcpClient:
@@ -22,7 +23,7 @@ class AcpClient:
         self.headers = {"Content-Type": "application/json"}
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
-        self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0))
+        self.client = client or guarded_client(timeout=httpx.Timeout(timeout, connect=10.0))
 
     async def _req(self, method: str, path: str, json: Any = None) -> Any:
         resp = await self.client.request(method, self.base + path, json=json, headers=self.headers)

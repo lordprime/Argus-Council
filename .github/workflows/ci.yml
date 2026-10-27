@@ -127,11 +127,13 @@ jobs:
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T api python - <<'PY'
           import asyncio, os
           from argus.sandbox.client import RemoteSandbox
-          sb = RemoteSandbox("http://sandbox:8100", os.environ["ARGUS_SANDBOX_TOKEN"])
+          sb = RemoteSandbox(os.environ["ARGUS_SANDBOX_URL"], os.environ["ARGUS_SANDBOX_TOKEN"])
           res = asyncio.run(sb.run({"t.py": "print(6*7)"}, "python3 t.py", 30))
           assert res["exit_code"] == 0 and res["stdout"].strip() == "42", res
           net = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\"", 30))
           assert net["exit_code"] != 0, "sandbox must not reach the internet"
+          api = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('http://api:8000/health/live', timeout=5)\"", 30))
+          assert api["exit_code"] != 0, "sandbox must not reach the API"
           print("sandbox: OK")
           PY
       - uses: actions/setup-node@v7
