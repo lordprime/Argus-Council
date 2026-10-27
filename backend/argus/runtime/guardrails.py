@@ -216,6 +216,8 @@ class GuardrailEngine:
         self.rails = rails
         self.clock = clock
         self.started = clock()
+        # Seconds spent paused by the user, excluded from the runtime limit (set by RunContext).
+        self.paused_s: Any = lambda: 0.0
         self.steps = 0
         self.usage = Usage()
         self.inflight = Usage()
@@ -249,7 +251,7 @@ class GuardrailEngine:
 
     @property
     def runtime_s(self) -> float:
-        return self.clock() - self.started
+        return self.clock() - self.started - self.paused_s()
 
     def _budget_violation(self, scope: str = "") -> Violation | None:
         b, used = self.rails.budget, self.total_usage

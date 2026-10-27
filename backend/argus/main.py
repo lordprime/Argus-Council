@@ -153,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sse = SseHub()
         restore_signals = chain_shutdown_signals(app.state.sse.shutdown)
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
+        app.state.webhooks.start()  # resumes deliveries left in the outbox by a previous process
         app.state.runs = RunManager(
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
         )
@@ -173,7 +174,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 task.cancel()
             await asyncio.gather(*app.state.periodic, return_exceptions=True)
             await app.state.runs.shutdown()
-            await app.state.webhooks.drain()
+            # Bounded: unfinished deliveries stay in the outbox for the next process.
+            await app.state.webhooks.shutdown(settings.webhook_shutdown_grace_s)
             if app.state.background:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
             await app.state.broker.close()

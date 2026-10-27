@@ -1,6 +1,6 @@
 // Connection mutations and extra reads (ui-spec §3.8). List hooks live in @/lib/queries.
 
-import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { api, ApiError, errorMessage, V1 } from "@/lib/api";
 import { keys } from "@/lib/queries";
@@ -299,15 +299,18 @@ export function entryPurpose(e: LedgerEntry): LedgerPurpose | null {
   return e.run_id ? "run" : null;
 }
 
-export const useLedgerPage = (protocol: string | undefined, limit: number, runId?: string) =>
+/** One page of the ledger, newest first. Every filter (purpose included) is applied by the server before `limit`. */
+export const useLedgerPage = (protocol: string | undefined, limit: number, runId?: string, purpose?: LedgerPurpose) =>
   useQuery({
-    queryKey: [...keys.ledger(protocol), limit, runId ?? ""],
+    queryKey: [...keys.ledger(protocol), limit, runId ?? "", purpose ?? ""],
     queryFn: () => {
       const qs = new URLSearchParams({ limit: String(limit) });
       if (protocol) qs.set("protocol", protocol);
       if (runId) qs.set("run_id", runId);
+      if (purpose) qs.set("purpose", purpose);
       return api.get<{ entries: LedgerEntry[] }>(`${V1}/ledger?${qs}`).then((r) => r.entries);
     },
+    placeholderData: keepPreviousData,
   });
 
 export type VerifyResult =

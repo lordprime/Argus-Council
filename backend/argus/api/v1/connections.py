@@ -323,18 +323,23 @@ async def list_ledger(
     db: DbDep,
     protocol: str | None = None,
     run_id: uuid.UUID | None = None,
+    purpose: ledger.Purpose | None = None,
     before_seq: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
+    """Newest first. Every filter is applied before ``limit``; page with ``next_before_seq``."""
     q = select(LedgerEntry).where(LedgerEntry.owner_id == principal.id)
     if protocol:
         q = q.where(LedgerEntry.protocol == protocol)
     if run_id:
         q = q.where(LedgerEntry.run_id == run_id)
+    if purpose:
+        q = q.where(ledger.purpose_is(purpose))
     if before_seq:
         q = q.where(LedgerEntry.seq < before_seq)
-    rows = await db.execute(q.order_by(LedgerEntry.seq.desc()).limit(limit))
+    entries = list((await db.execute(q.order_by(LedgerEntry.seq.desc()).limit(limit))).scalars())
     return {
+        "next_before_seq": entries[-1].seq if len(entries) == limit else None,
         "entries": [
             {
                 "seq": e.seq,
@@ -352,8 +357,8 @@ async def list_ledger(
                 "prev_hash": e.prev_hash,
                 "detail": e.detail,
             }
-            for e in rows.scalars()
-        ]
+            for e in entries
+        ],
     }
 
 

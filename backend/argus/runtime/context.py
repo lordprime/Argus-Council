@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import mimetypes
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -168,41 +169,49 @@ class Workspace:
         await self.sink.emit("artifact.deleted", {"artifact_id": str(art.id), "path": rel})
         return True
 
+    def _latest(self, *columns: Any) -> Any:
+        """SELECT ``columns`` of the newest version of every live path in this run, by path."""
+        latest = (
+            select(Artifact.path, func.max(Artifact.version).label("v"))
+            .where(Artifact.run_id == self.run_id)
+            .group_by(Artifact.path)
+            .subquery()
+        )
+        return (
+            select(*columns)
+            .join(latest, (Artifact.path == latest.c.path) & (Artifact.version == latest.c.v))
+            .where(Artifact.run_id == self.run_id, Artifact.deleted.is_(False))
+            .order_by(Artifact.path)
+        )
+
     async def text_files(self, limit_bytes: int = 32 * 1024 * 1024) -> dict[str, str]:
-        """Latest content of every live text file (used to materialise the workspace in the sandbox)."""
+        """Latest content of every live text file (used to materialise the workspace in the sandbox).
+
+        One query: called before every ``run_command`` and ``grep``.
+        """
         out: dict[str, str] = {}
         total = 0
-        for f in await self.list():
-            if f["kind"] == "export":
-                continue
-            art = await self.read(f["path"])
-            if art is None or art.content is None:
-                continue
-            total += len(art.content.encode())
+        q = self._latest(Artifact.path, Artifact.content).where(
+            Artifact.kind != "export", Artifact.content.is_not(None)
+        )
+        async with self.sessionmaker() as s:
+            rows = (await s.execute(q)).all()
+        for path, content in rows:
+            total += len(content.encode())
             if total > limit_bytes:
                 break
-            out[art.path] = art.content
+            out[path] = content
         return out
 
     async def list(self) -> list[dict[str, Any]]:
+        """Metadata of the latest version of every live file (content is not loaded)."""
+        q = self._latest(Artifact.path, Artifact.version, Artifact.size, Artifact.kind, Artifact.mime)
         async with self.sessionmaker() as s:
-            latest = (
-                select(Artifact.path, func.max(Artifact.version).label("v"))
-                .where(Artifact.run_id == self.run_id)
-                .group_by(Artifact.path)
-                .subquery()
-            )
-            rows = await s.execute(
-                select(Artifact)
-                .join(latest, (Artifact.path == latest.c.path) & (Artifact.version == latest.c.v))
-                .where(Artifact.run_id == self.run_id)
-                .order_by(Artifact.path)
-            )
-            return [
-                {"path": a.path, "version": a.version, "size": a.size, "kind": a.kind, "mime": a.mime}
-                for a in rows.scalars()
-                if not a.deleted
-            ]
+            rows = (await s.execute(q)).all()
+        return [
+            {"path": path, "version": version, "size": size, "kind": kind, "mime": mime}
+            for path, version, size, kind, mime in rows
+        ]
 
 
 def _diff_stats(old: str | None, new: str) -> tuple[int, int]:
@@ -236,11 +245,37 @@ class Correction:
     intercept_id: str | None = None
 
 
+class PauseGate(asyncio.Event):
+    """The run's resume event (set = running, cleared = paused) that also times the pauses."""
+
+    def __init__(self, clock: Any = time.monotonic) -> None:
+        super().__init__()
+        self._clock = clock
+        self._paused_at: float | None = None
+        self._paused_total = 0.0
+
+    def clear(self) -> None:
+        if self.is_set() and self._paused_at is None:
+            self._paused_at = self._clock()
+        super().clear()
+
+    def set(self) -> None:
+        if self._paused_at is not None:
+            self._paused_total += self._clock() - self._paused_at
+            self._paused_at = None
+        super().set()
+
+    def paused_s(self) -> float:
+        ongoing = self._clock() - self._paused_at if self._paused_at is not None else 0.0
+        return self._paused_total + ongoing
+
+
 @dataclass
 class Controls:
     """Mutable run controls driven by user commands."""
 
-    resume: asyncio.Event = field(default_factory=asyncio.Event)
+    clock: Any = time.monotonic
+    resume: PauseGate = field(init=False)
     cancelled: bool = False
     held_members: set[str] = field(default_factory=set)
     # Corrections waiting to be applied to a member's next thought.
@@ -250,7 +285,11 @@ class Controls:
     user_messages: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.resume = PauseGate(self.clock)
         self.resume.set()
+
+    def paused_s(self) -> float:
+        return self.resume.paused_s()
 
 
 class RunContext:
@@ -286,6 +325,8 @@ class RunContext:
         self.notes: list[dict[str, Any]] = []
         self.sources: dict[str, dict[str, Any]] = {}
         self.controls = Controls()
+        # Paused time does not count toward max_runtime_minutes.
+        engine.paused_s = self.controls.paused_s
         self.approvals: dict[str, Approval] = {}
         self.approval_timeout_s = approval_timeout_s
         self.depth = depth

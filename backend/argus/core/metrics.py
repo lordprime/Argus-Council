@@ -124,7 +124,7 @@ OVERSIGHT_FAILURES = Counter(
 # Delivery, persistence and streaming.
 WEBHOOK_DELIVERIES = Counter(
     "argus_webhook_deliveries_total",
-    "Webhook deliveries after all retries (result: ok, failed, error)",
+    "Webhook delivery attempts (result: ok, failed, error)",
     ["result"],
     registry=REGISTRY,
 )

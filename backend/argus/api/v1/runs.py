@@ -10,7 +10,8 @@ from datetime import UTC, datetime, timedelta
 import orjson
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import load_only
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
@@ -62,10 +63,21 @@ async def list_runs(
     mode: str | None = None,
     council_id: uuid.UUID | None = None,
     before: datetime | None = Query(default=None, description="Cursor: return runs created before this time"),
+    before_id: uuid.UUID | None = Query(
+        default=None, description="Cursor tie-breaker: with `before`, the id of the last run already seen"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    q = select(Run).where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
-    if before:
+    # Only the RunOut columns: never the result text or the council snapshot (polled every 10 s).
+    q = (
+        select(Run)
+        .options(load_only(*(getattr(Run, f) for f in RunOut.model_fields)))
+        .where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
+    )
+    if before and before_id:
+        # Keyset on (created_at, id) so runs sharing a timestamp are not skipped at a page boundary.
+        q = q.where(or_(Run.created_at < before, and_(Run.created_at == before, Run.id < before_id)))
+    elif before:
         q = q.where(Run.created_at < before)
     if status_:
         q = q.where(Run.status == status_)
@@ -73,7 +85,7 @@ async def list_runs(
         q = q.where(Run.mode == mode)
     if council_id:
         q = q.where(Run.council_id == council_id)
-    rows = await db.execute(q.order_by(Run.created_at.desc()).limit(limit))
+    rows = await db.execute(q.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit))
     return list(rows.scalars())
 
 

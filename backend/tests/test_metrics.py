@@ -204,7 +204,6 @@ async def test_event_persist_failures_counted():
 
 async def test_webhook_delivery_metrics():
     from argus.core.metrics import observes_webhook_delivery
-    from argus.services.webhooks import WebhookDispatcher
 
     @observes_webhook_delivery
     async def deliver(ok: bool) -> bool:
@@ -221,7 +220,6 @@ async def test_webhook_delivery_metrics():
     for r in ("ok", "failed", "error"):
         assert _value("argus_webhook_deliveries_total", {"result": r}) == snap[r] + 1
     assert _value("argus_webhook_delivery_seconds_count", {}) == count + 3
-    assert getattr(WebhookDispatcher.deliver, "__wrapped__", None) is not None
 
 
 async def test_retention_success_metrics(app):

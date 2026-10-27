@@ -63,7 +63,7 @@ export function UploadZone({ kbId }: { kbId: string }) {
         <input ref={inputRef} type="file" multiple accept={ACCEPT} className="sr-only" tabIndex={-1} aria-hidden
           data-testid="file-input" onChange={(e) => start(e.target.files)} />
         <Button size="sm" icon={FileUp} aria-describedby={hintId} onClick={() => inputRef.current?.click()}>Choose files</Button>
-        <p id={hintId} className="text-xs text-fg-subtle">Markdown, plain text or HTML · up to 5 MB each · PDF not supported yet</p>
+        <p id={hintId} className="text-xs text-fg-subtle">Markdown, plain text, HTML or PDF · up to 5 MB each</p>
       </div>
       {items.length > 0 && (
         <ul aria-label="Uploads" className="space-y-1.5">

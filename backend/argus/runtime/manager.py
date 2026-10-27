@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,7 +93,10 @@ class RunManager:
             )
         )
         self.live: dict[uuid.UUID, LiveRun] = {}
-        self._offline_locks: dict[uuid.UUID, asyncio.Lock] = {}
+        # Weak values: a lock exists only while an offline export of that run is in progress.
+        self._offline_locks: weakref.WeakValueDictionary[uuid.UUID, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self.blob_root = Path(settings.data_dir) / "artifacts"
 
     def _notifier(self, owner: uuid.UUID, depth: int) -> Callable[[str, dict[str, Any]], None]:
@@ -407,7 +411,10 @@ class RunManager:
         live = self.live.get(run_id)
         if live is not None:
             return await export_markdown(live.ctx.workspace, run.result, fmt, title=run.topic, run_meta=meta)
-        async with self._offline_locks.setdefault(run_id, asyncio.Lock()):
+        lock = self._offline_locks.get(run_id)
+        if lock is None:
+            lock = self._offline_locks[run_id] = asyncio.Lock()
+        async with lock:
             async with self.sessionmaker() as s:
                 run = await s.get(Run, run_id)
             sink = EventSink(run.id, run.council_id, self.sessionmaker, self.broker, start_seq=run.last_seq)
