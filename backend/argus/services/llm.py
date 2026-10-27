@@ -10,7 +10,6 @@ Resolution order for a provider name:
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import os
 import socket
 import time
@@ -28,6 +27,7 @@ from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.errors import ArgusError, NotFound
 from argus.core.logging import get_logger
+from argus.core.netguard import ip_blocked
 from argus.db.models import ProviderConfig
 from argus.providers.base import Provider, ProviderError, with_retries
 from argus.providers.catalog import KINDS, build_provider
@@ -46,21 +46,30 @@ class InvalidProviderURL(ArgusError):
     code = "invalid_provider_url"
 
 
-def validate_base_url(url: str, allow_private: bool) -> str:
+def validate_base_url(url: str, allow_private: bool, *, require_dns: bool = True) -> str:
+    """Check a user-supplied base URL. Link-local (cloud metadata) targets are always refused.
+
+    With ``require_dns=False`` an unresolvable host is accepted: callers that connect through
+    :func:`argus.core.netguard.guarded_client` re-check every address at connect time anyway.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise InvalidProviderURL("base_url must be an absolute http(s) URL")
     if parsed.username or parsed.password:
         raise InvalidProviderURL("base_url must not embed credentials")
-    if not allow_private:
-        try:
-            infos = socket.getaddrinfo(parsed.hostname, None)
-        except socket.gaierror as exc:
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except (socket.gaierror, UnicodeError) as exc:
+        if require_dns and not allow_private:
             raise InvalidProviderURL("base_url host does not resolve") from exc
-        for info in infos:
-            ip = ipaddress.ip_address(info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-                raise InvalidProviderURL("base_url resolves to a private address, which is disabled")
+        infos = []
+    for info in infos:
+        if ip_blocked(info[4][0], allow_private):
+            raise InvalidProviderURL(
+                "base_url resolves to a link-local or metadata address, which is never allowed"
+                if allow_private
+                else "base_url resolves to a private address, which is disabled"
+            )
     return url.rstrip("/")
 
 

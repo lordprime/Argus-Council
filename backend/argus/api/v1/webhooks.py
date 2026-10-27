@@ -22,7 +22,7 @@ def _check(url: str, events: list[str], settings) -> str:  # type: ignore[no-unt
     unknown = sorted(set(events) - set(EVENTS) - {"*"})
     if unknown:
         raise ArgusError(f"Unknown events: {', '.join(unknown)}", details={"allowed": list(EVENTS)})
-    clean = validate_base_url(url, settings.provider_allow_private_urls)
+    clean = validate_base_url(url, settings.connections_allow_private_urls, require_dns=False)
     if settings.is_production and not clean.startswith("https://"):
         raise ArgusError("Webhook URLs must use https in production")
     return clean

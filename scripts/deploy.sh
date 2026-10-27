@@ -9,6 +9,7 @@
 # On first run it copies deploy/.env.example to deploy/.env and generates any empty secret
 # (ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN). Add provider keys there.
 
+# shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 build=1 smoke=0 build_args=()
@@ -33,7 +34,7 @@ if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT/deploy/.env.example" "$ENV_FILE"
 fi
 chmod 600 "$ENV_FILE"
-for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN; do
+for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN ARGUS_RUNNER_TOKEN; do
   if [ -z "$(envval "$key" "")" ]; then
     log "generating $key"
     if grep -qE "^$key=" "$ENV_FILE"; then

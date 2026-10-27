@@ -2,14 +2,16 @@
 // every exchange, light pulses for live traffic. Usable first: keyboard-focusable nodes, filters,
 // pause/live, zoom/pan, a details panel and a throttled screen-reader summary.
 
-import { Link2, Pause, Radio, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Link2, Pause, Radio, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Badge, Button, IconButton } from "@/components/ui";
 import { buildGraph } from "@/features/viz/model";
 import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
 import { cn } from "@/lib/cn";
-import type { RunState } from "@/stores/run";
+import { isTerminal, type RunState } from "@/stores/run";
+
+import { RunStateBadge, VizPane, VizToolbar, ZoomControls } from "../VizToolbar";
 
 import { MAX_PULSES, usePulses, useReducedMotion, useThrottledAnnouncement } from "./hooks";
 import { boxWithCards, computeLayout, iso, layoutKey, placeCards, pointAt, polyline, route, toPath, type Polyline } from "./layout";
@@ -29,6 +31,7 @@ interface View {
 
 const MIN_K = 0.5;
 const MAX_K = 4;
+const ZOOM_STEP = 1.25;
 const RECENT = 30;
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`);
@@ -49,9 +52,13 @@ function time(ts: string) {
 
 export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   const reduced = useReducedMotion();
-  const [live, setLive] = useState(true);
+  const titleId = `cm-title-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  // A finished run has no more traffic: there is nothing to follow or pause, so "Live" is not offered.
+  const ended = isTerminal(run.status);
+  const [following, setLive] = useState(true);
+  const live = following && !ended;
   const [frozen, setFrozen] = useState<RunState | null>(null);
-  const view = live || !frozen ? run : frozen;
+  const view = live || ended || !frozen ? run : frozen;
   const [hidden, setHidden] = useState<ReadonlySet<GroupId>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
@@ -141,7 +148,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   );
 
   // Paused: count traffic that arrived since freezing.
-  const pendingNew = !live && frozen ? Math.max(0, commsOf(run).length - commsOf(frozen).length) : 0;
+  const pendingNew = !live && !ended && frozen ? Math.max(0, commsOf(run).length - commsOf(frozen).length) : 0;
   const toggleLive = () => {
     if (live) {
       setFrozen(run);
@@ -236,7 +243,12 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
     },
     [bx, by, bw, bh],
   );
-  const reset = () => setZoom({ k: 1, x: 0, y: 0 });
+  // k = 1 with no pan is "fit": the viewBox is the bounding box of every platform and card.
+  const fit = () => {
+    lastInteract.current = Date.now();
+    setZoom({ k: 1, x: 0, y: 0 });
+  };
+  const fitted = Math.abs(zoom.k - 1) < 1e-3 && Math.abs(zoom.x) < 0.5 && Math.abs(zoom.y) < 0.5;
 
   const toBox = (clientX: number, clientY: number): [number, number] | undefined => {
     const svg = svgRef.current;
@@ -305,20 +317,28 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   const sel = selected ? nodeById.get(selected) : undefined;
 
   return (
-    <section aria-label="Council map" className="relative flex min-w-0 flex-col gap-2">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant={live ? "primary" : "secondary"}
-          icon={live ? Radio : Pause}
-          aria-pressed={live}
-          onClick={toggleLive}
-          title={live ? "Pause: freeze the map" : "Resume live updates"}
-        >
-          {live ? "Live" : "Paused"}
-          {pendingNew > 0 && <span className="rounded-full bg-accent-subtle px-1.5 text-2xs text-accent">+{pendingNew}</span>}
-        </Button>
+    <VizPane labelledBy={titleId} className="relative">
+      <VizToolbar titleId={titleId} title="Council map"
+        meta={<>
+          {ended && <RunStateBadge status={run.status} />}
+          <Badge>{graph.nodes.length} participant{graph.nodes.length === 1 ? "" : "s"}</Badge>
+          <Badge>{conduits.length} link{conduits.length === 1 ? "" : "s"}</Badge>
+        </>}
+        zoom={<ZoomControls value={zoom.k} min={MIN_K} max={MAX_K} onZoomOut={() => zoomAt(1 / ZOOM_STEP)} onZoomIn={() => zoomAt(ZOOM_STEP)}
+          onFit={fit} fitted={fitted} />}>
+        {!ended && (
+          <Button
+            size="sm"
+            variant={live ? "primary" : "secondary"}
+            icon={live ? Radio : Pause}
+            aria-pressed={live}
+            onClick={toggleLive}
+            title={live ? "Pause: freeze the map" : "Resume live updates"}
+          >
+            {live ? "Live" : "Paused"}
+            {pendingNew > 0 && <span className="rounded-full bg-accent-subtle px-1.5 text-2xs text-accent">+{pendingNew}</span>}
+          </Button>
+        )}
         <div role="group" aria-label="Filter exchanges by kind" className="flex min-w-0 flex-1 flex-wrap gap-1">
           {GROUPS.map((g) => {
             const on = !hidden.has(g.id);
@@ -349,13 +369,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
             );
           })}
         </div>
-        <div className="ml-auto flex items-center gap-0.5" role="group" aria-label="Zoom">
-          <IconButton label="Zoom in" icon={ZoomIn} onClick={() => zoomAt(1.25)} disabled={zoom.k >= MAX_K} />
-          <IconButton label="Zoom out" icon={ZoomOut} onClick={() => zoomAt(0.8)} disabled={zoom.k <= MIN_K} />
-          <IconButton label="Reset view" icon={RotateCcw} onClick={reset} />
-          <span className="w-10 text-right text-xs tabular-nums text-fg-subtle" aria-hidden>{Math.round(zoom.k * 100)}%</span>
-        </div>
-      </div>
+      </VizToolbar>
 
       {/* Map */}
       <div className="relative h-[clamp(320px,62vh,680px)] overflow-hidden rounded-xl border border-border bg-canvas">
@@ -483,7 +497,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
 
       <Legend />
       <p className="sr-only" aria-live="polite" aria-atomic="true">{announce}</p>
-    </section>
+    </VizPane>
   );
 }
 

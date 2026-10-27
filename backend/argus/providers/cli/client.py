@@ -43,13 +43,28 @@ def _body(spec: InvokeSpec) -> dict[str, Any]:
 
 
 class RemoteRunner:
+    """``url`` is ``http(s)://host:port`` or ``unix:/path/to/socket``.
+
+    The compose deployment uses a Unix socket on a shared volume (like the sandbox), so the API has
+    no network route to the runner and the runner exposes no port.
+    """
+
     def __init__(self, url: str, token: str, client: httpx.AsyncClient | None = None) -> None:
+        self.uds: str | None = None
+        if url.startswith("unix:"):
+            self.uds = url[len("unix:") :]
+            url = "http://runner"
         self.url = url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"}
         self.client = client
 
     def _client(self, timeout: float) -> httpx.AsyncClient:
-        return self.client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0))
+        if self.client is not None:
+            return self.client
+        limits = httpx.Timeout(timeout, connect=5.0)
+        if self.uds:
+            return httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=self.uds), timeout=limits)
+        return httpx.AsyncClient(timeout=limits)
 
     async def invoke(self, spec: InvokeSpec) -> AsyncIterator[dict[str, Any]]:
         client = self._client(spec.timeout_s + 30)

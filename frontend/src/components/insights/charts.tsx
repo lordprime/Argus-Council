@@ -7,7 +7,7 @@
 
 import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
-import { Button, Card } from "@/components/ui";
+import { Button, Card, CardTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 export type Tone = "accent" | "info" | "success" | "warning" | "danger" | "neutral";
@@ -95,7 +95,7 @@ export function ChartCard({ title, summary, table, actions, children, className 
     <Card className={cn("p-4 flex flex-col gap-3 min-w-0", className)} aria-labelledby={`${id}-t`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <h2 id={`${id}-t`} className="text-md font-semibold">{title}</h2>
+          <CardTitle as="h2" id={`${id}-t`}>{title}</CardTitle>
           <p className="text-xs text-fg-subtle">{summary}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

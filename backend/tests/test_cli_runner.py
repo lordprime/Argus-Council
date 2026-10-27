@@ -51,11 +51,6 @@ import time
 time.sleep(60)
 """
 
-FAKE_VERSION = """
-import sys
-print("9.9.9 (fake)")
-"""
-
 
 def _exe(path: Path, body: str) -> str:
     path.write_text(f"#!{sys.executable}\n{body}")
@@ -229,3 +224,26 @@ async def test_runner_invoke_streams_ndjson_and_never_echoes_bad_bodies(runner_a
         assert bad.status_code == 422
         assert "TOPSECRETPROMPT" not in bad.text and "leakme" not in bad.text
         assert (await c.get("/v1/users/not-a-uuid/sessions/claude", headers=auth)).status_code == 422
+
+
+async def test_remote_runner_client_against_the_server(runner_app):
+    """The API's client and the runner's server agree on the protocol, key included."""
+    from argus.providers.cli.client import RemoteRunner, RunnerUnavailable
+
+    assert RemoteRunner("unix:/run/argus-runner/runner.sock", "t").uds == "/run/argus-runner/runner.sock"
+    async with await _client(runner_app) as http:
+        client = RemoteRunner("http://runner", "runner-token-for-tests", client=http)
+        sid = str(uuid.uuid4())
+        spec = InvokeSpec(
+            user_id=USER_A, cli="claude", prompt="hi", session_id=sid, api_key="sk-ant-api03-zzzzzzzz"
+        )
+        events = [e async for e in client.invoke(spec)]
+        assert (
+            events[0]["argv"][-2:] == ["--session-id", sid] and "ANTHROPIC_API_KEY" in events[0]["env_keys"]
+        )
+        assert events[-1]["type"] == "argus.exit" and events[-1]["ok"]
+        assert await client.has_session(USER_A, "claude", sid)
+        assert not await client.has_session(USER_B, "claude", sid)
+        wrong = RemoteRunner("http://runner", "wrong-token", client=http)
+        with pytest.raises(RunnerUnavailable):
+            [e async for e in wrong.invoke(spec)]

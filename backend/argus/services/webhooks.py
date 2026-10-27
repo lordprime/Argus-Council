@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.logging import get_logger
+from argus.core.netguard import guarded_client
 from argus.db.models import Webhook, WebhookDelivery
 
 log = get_logger(__name__)
@@ -64,7 +65,9 @@ class WebhookDispatcher:
         self.sessionmaker = sessionmaker
         self.box = SecretBox(settings)
         self.client_factory = client_factory or (
-            lambda: httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+            lambda: guarded_client(
+                settings.connections_allow_private_urls, timeout=httpx.Timeout(10.0, connect=5.0)
+            )
         )
         self.sleep = sleep
         self.tasks: set[asyncio.Task[None]] = set()

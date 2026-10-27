@@ -151,7 +151,7 @@ export default function Webhooks() {
       ) : hooks.length === 0 ? (
         <Card as="div">
           <EmptyState icon={WebhookIcon} title="No webhooks yet"
-            body="Add an endpoint to notify Slack, CI or your own service when councils finish." action={add} />
+            body="Add an endpoint to notify Slack, CI or your own service when councils finish." />
         </Card>
       ) : (
         <section aria-labelledby="hooks-h">

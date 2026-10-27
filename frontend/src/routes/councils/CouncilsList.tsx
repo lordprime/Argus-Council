@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
 import { AvatarStrip, ConfirmDeleteDialog, isOverseer, ModeBadge } from "@/components/councils/parts";
-import { Card, EmptyState, ErrorState, IconButton, PageHeader, Skeleton } from "@/components/ui";
+import { ButtonLink, Card, CardTitle, EmptyState, ErrorState, IconButton, Page, PageHeader, Skeleton } from "@/components/ui";
 import { useDeleteCouncil } from "@/features/councils/queries";
 import { errorMessage } from "@/lib/api";
 import { relTime } from "@/lib/format";
@@ -11,14 +11,8 @@ import { useCouncils, useRoles, useRunsList } from "@/lib/queries";
 import type { Council } from "@/lib/types";
 import { toast } from "@/stores/toast";
 
-function NewCouncilLink({ label = "New council" }: { label?: string }) {
-  return (
-    <Link to="/councils/new"
-      className="inline-flex items-center justify-center gap-2 h-9 px-3 rounded-md text-base font-medium bg-accent text-accent-fg hover:bg-accent-hover shadow-1 whitespace-nowrap">
-      <Plus className="size-4" aria-hidden />
-      {label}
-    </Link>
-  );
+function NewCouncilLink({ label = "New council", variant = "primary" }: { label?: string; variant?: "primary" | "secondary" }) {
+  return <ButtonLink to="/councils/new" variant={variant} icon={Plus}>{label}</ButtonLink>;
 }
 
 function CouncilCard({ council, lastRun, onDelete }: { council: Council; lastRun?: string; onDelete: () => void }) {
@@ -30,12 +24,12 @@ function CouncilCard({ council, lastRun, onDelete }: { council: Council; lastRun
       aria-labelledby={`council-${council.id}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id={`council-${council.id}`} className="text-base font-semibold truncate">
+          <CardTitle as="h2" id={`council-${council.id}`} className="truncate">
             {/* Stretched link: the whole card is the click target, actions sit above it. */}
             <Link to={`/councils/${council.id}`} className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-[rgb(var(--focus-ring))]">
               {council.name}
             </Link>
-          </h2>
+          </CardTitle>
           <div className="mt-1"><ModeBadge mode={council.mode} /></div>
         </div>
         <IconButton label={`Delete ${council.name}`} icon={Trash2} variant="danger-ghost" className="relative z-[1] -mr-1 -mt-1"
@@ -97,10 +91,11 @@ export default function CouncilsList() {
 
   const list = councils.data ?? [];
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <Page>
+      {/* The header action always stays (C-23); the empty state offers it again only as a secondary CTA. */}
       <PageHeader title="Councils"
         description="Reusable teams of agents: seats, roles, models and the guardrails they work inside."
-        actions={list.length > 0 ? <NewCouncilLink /> : undefined} />
+        actions={<NewCouncilLink />} />
 
       {councils.isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading councils">
@@ -120,7 +115,7 @@ export default function CouncilsList() {
         <Card as="div">
           <EmptyState icon={Users} title="No councils yet"
             body="A council is a saved team: who sits on it, which models they use and what they may do. Runs can also build one on the fly from a mode."
-            action={<NewCouncilLink label="Create your first council" />} />
+            action={<NewCouncilLink label="Create your first council" variant="secondary" />} />
         </Card>
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Councils">
@@ -137,7 +132,7 @@ export default function CouncilsList() {
       <ConfirmDeleteDialog open={target != null} onOpenChange={(o) => !o && setTarget(null)}
         kind="council" name={target?.name ?? ""} pending={del.isPending} onConfirm={() => void confirmDelete()}
         body={target && <>Its {target.members.length} seats and guardrails are removed. Past runs keep their own snapshot.</>} />
-    </div>
+    </Page>
   );
 }
 

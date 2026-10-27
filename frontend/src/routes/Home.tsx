@@ -2,13 +2,16 @@ import { ChevronDown, ChevronRight, History, Play } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
-import { Stepper } from "@/components/councils/fields";
+import { RoleChip } from "@/components/councils/parts";
 import { RunRowList } from "@/components/run/RunRow";
-import { Button, Callout, Card, EmptyState, ErrorState, Kbd, Segmented, SelectField, Skeleton, TextArea, TextField, Toggle } from "@/components/ui";
-import { RoleAvatar } from "@/components/ui/role";
+import {
+  Button, Callout, Card, Chip, EmptyState, ErrorState, FormActions, Kbd, Page, PageHeader, SectionTitle, Segmented, SelectField, Skeleton,
+  Stepper, TextArea, TextField, Toggle,
+} from "@/components/ui";
 import { MODES } from "@/features/councils/logic";
 import { SaveTemplateButton, TemplatePicker } from "@/features/templates/components";
 import { errorMessage } from "@/lib/api";
+import { providerKindLabel } from "@/lib/providers";
 import { useCouncils, useCreateRun, useProviderKinds, useProviders, useRoles, useRunsList } from "@/lib/queries";
 import type { Mode, OutputFormat } from "@/lib/types";
 
@@ -96,7 +99,7 @@ function Composer() {
     for (const sys of kinds.data?.system_providers ?? []) {
       const kind = kinds.data?.kinds.find((k) => k.key === sys);
       for (const m of kind?.suggested_models.length ? kind.suggested_models : sys === "mock" ? ["mock-1"] : [])
-        out.push({ value: `${sys}::${m}`, label: `${sys === "mock" ? "Offline demo (mock)" : sys} · ${m}` });
+        out.push({ value: `${sys}::${m}`, label: `${sys === "mock" ? providerKindLabel(sys) : sys} · ${m}` });
     }
     return out;
   }, [providers.data, kinds.data]);
@@ -162,12 +165,7 @@ function Composer() {
             <Stepper label="Council size" value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
               hint={`Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
             <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
-              {roster.map((r, i) => (
-                <li key={`${r}-${i}`} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 pl-1 pr-2.5 h-7 text-sm">
-                  <RoleAvatar role={r} overseer={overseers.has(r)} size={20} />
-                  {roles.data?.roles.find((x) => x.key === r)?.title ?? r}
-                </li>
-              ))}
+              {roster.map((r, i) => <RoleChip key={`${r}-${i}`} role={r} roles={roles.data?.roles} overseer={overseers.has(r)} />)}
             </ul>
           </div>
         )}
@@ -178,11 +176,10 @@ function Composer() {
             {FORMATS.map((f) => {
               const on = outputs.includes(f.value);
               return (
-                <button key={f.value} type="button" aria-pressed={on}
-                  onClick={() => setOutputs((o) => (on ? o.filter((x) => x !== f.value) : [...o, f.value]))}
-                  className={`h-8 px-3 rounded-full border text-sm ${on ? "bg-accent-subtle border-accent text-accent font-medium" : "border-border-strong text-fg-muted"}`}>
+                <Chip key={f.value} pressed={on}
+                  onPressedChange={(next) => setOutputs((o) => (next ? [...o, f.value] : o.filter((x) => x !== f.value)))}>
                   {f.label}
-                </button>
+                </Chip>
               );
             })}
           </div>
@@ -228,18 +225,16 @@ function Composer() {
             Councils will use a deterministic mock model until you connect Anthropic, OpenAI, Gemini, Ollama or another provider.
           </Callout>
         )}
-        <div className="flex items-center gap-3">
+        <FormActions
+          meta={topic.trim()
+            ? <span className="[@media(pointer:coarse)]:hidden"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> to start</span>
+            : <span id="start-hint">Add a topic to start.</span>}>
           <Button type="submit" variant="primary" size="lg" icon={Play} loading={create.isPending} disabled={!topic.trim()}
             aria-describedby={!topic.trim() ? "start-hint" : undefined}>
             Start run
           </Button>
-          {topic.trim() ? (
-            <span className="text-xs text-fg-subtle [@media(pointer:coarse)]:hidden"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> to start</span>
-          ) : (
-            <span id="start-hint" className="text-xs text-fg-subtle">Add a topic to start.</span>
-          )}
-          <span className="ml-auto"><SaveTemplateButton getConfig={buildConfig} disabled={!topic.trim()} /></span>
-        </div>
+          <SaveTemplateButton getConfig={buildConfig} disabled={!topic.trim()} />
+        </FormActions>
       </form>
     </Card>
   );
@@ -249,47 +244,44 @@ export default function Home() {
   const active = useRunsList({ status: "running", limit: 10 });
   const recent = useRunsList({ limit: 10 });
   return (
-    <div className="max-w-[880px] mx-auto p-4 md:p-6 flex flex-col gap-8">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl">New run</h1>
-          <p className="text-sm text-fg-muted mt-1">Give the council a topic. It plans, works and checks itself, and you can step in at any point.</p>
-        </div>
-        <TemplatePicker />
-      </div>
-      <Composer />
-      {active.data && active.data.length > 0 && (
-        <section aria-labelledby="active-h">
-          <h2 id="active-h" className="text-lg mb-2">Active</h2>
-          <Card as="div"><RunRowList runs={active.data} /></Card>
-        </section>
-      )}
-      <section aria-labelledby="recent-h">
-        <div className="flex items-baseline justify-between mb-2">
-          <h2 id="recent-h" className="text-lg">Recent</h2>
-          <Link to="/runs" className="text-sm text-accent underline">All runs</Link>
-        </div>
-        {recent.isLoading ? (
-          <div className="space-y-2"><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
-        ) : recent.error ? (
-          <ErrorState error={recent.error} onRetry={() => void recent.refetch()} />
-        ) : recent.data?.length ? (
-          <Card as="div"><RunRowList runs={recent.data} /></Card>
-        ) : (
-          <Card as="div">
-            <EmptyState icon={History} title="No runs yet" body="Try one of these:"
-              action={
-                <div className="flex flex-wrap justify-center gap-2">
-                  {EXAMPLES.map((ex) => (
-                    <Button key={ex.topic} size="sm" onClick={() => window.dispatchEvent(new CustomEvent("argus:prefill", { detail: ex }))}>
-                      {ex.topic}
-                    </Button>
-                  ))}
-                </div>
-              } />
-          </Card>
+    <Page width="form">
+      <PageHeader title="New run"
+        description="Give the council a topic. It plans, works and checks itself, and you can step in at any point."
+        actions={<TemplatePicker />} />
+      <div className="flex flex-col gap-8">
+        <Composer />
+        {active.data && active.data.length > 0 && (
+          <section aria-labelledby="active-h">
+            <SectionTitle id="active-h" count={active.data.length}>Active</SectionTitle>
+            <Card as="div"><RunRowList runs={active.data} /></Card>
+          </section>
         )}
-      </section>
-    </div>
+        <section aria-labelledby="recent-h">
+          <SectionTitle id="recent-h" actions={<Link to="/runs" className="text-sm text-accent underline min-h-6 inline-flex items-center">All runs</Link>}>
+            Recent
+          </SectionTitle>
+          {recent.isLoading ? (
+            <div className="space-y-2"><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
+          ) : recent.error ? (
+            <Card as="div"><ErrorState error={recent.error} onRetry={() => void recent.refetch()} /></Card>
+          ) : recent.data?.length ? (
+            <Card as="div"><RunRowList runs={recent.data} /></Card>
+          ) : (
+            <Card as="div">
+              <EmptyState titleAs="h3" icon={History} title="No runs yet" body="Try one of these:"
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {EXAMPLES.map((ex) => (
+                      <Button key={ex.topic} size="sm" onClick={() => window.dispatchEvent(new CustomEvent("argus:prefill", { detail: ex }))}>
+                        {ex.topic}
+                      </Button>
+                    ))}
+                  </div>
+                } />
+            </Card>
+          )}
+        </section>
+      </div>
+    </Page>
   );
 }

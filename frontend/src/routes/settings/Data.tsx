@@ -209,7 +209,7 @@ function DeleteAccountSection() {
 export default function DataSettings() {
   const admin = useIsAdmin();
   return (
-    <SettingsLayout title="Data & privacy" description="Export or delete your data, and manage how long the server keeps it.">
+    <SettingsLayout form title="Data & privacy" description="Export or delete your data, and manage how long the server keeps it.">
       <ExportSection />
       {admin && <RetentionSection />}
       <DeleteAccountSection />

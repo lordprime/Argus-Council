@@ -127,7 +127,7 @@ export default function ApiKeys() {
         <Card as="div">
           <EmptyState icon={KeyRound} title="No API keys yet"
             body="Create a key to connect Claude Code over MCP or to call the REST API from your own tools."
-            action={<Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Create your first key</Button>} />
+            action={<Button icon={Plus} onClick={() => setCreating(true)}>Create your first key</Button>} />
         </Card>
       ) : (
         <>
@@ -136,7 +136,7 @@ export default function ApiKeys() {
             {live.length ? (
               <Card as="div"><ul className="divide-y divide-border">{live.map((k) => <KeyRow key={k.id} k={k} onRevoke={setRevoking} />)}</ul></Card>
             ) : (
-              <Card as="div"><EmptyState icon={KeyRound} title="No active keys" body="Every key you created has been revoked or has expired." /></Card>
+              <Card as="div"><EmptyState titleAs="h3" icon={KeyRound} title="No active keys" body="Every key you created has been revoked or has expired." /></Card>
             )}
           </section>
           {dead.length > 0 && (

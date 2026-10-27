@@ -47,8 +47,9 @@ ENV PATH="/opt/clis/node_modules/.bin:/opt/venv/bin:$PATH" \
 
 RUN groupadd --system --gid 10002 runner \
  && useradd --system --uid 10002 --gid runner --home-dir /home/runner --shell /usr/sbin/nologin runner \
- && mkdir -p /home/runner/users /etc/gemini-cli/policies \
- && chown runner:runner /home/runner /home/runner/users && chmod 0700 /home/runner/users \
+ && mkdir -p /home/runner/users /etc/gemini-cli/policies /run/argus-runner \
+ && chown runner:runner /home/runner /home/runner/users /run/argus-runner && chmod 0700 /home/runner/users \
+ && chmod 1777 /run/argus-runner \
  && chmod 0755 /etc/gemini-cli /etc/gemini-cli/policies
 
 COPY --from=clis /usr/local/bin/node /usr/local/bin/node
@@ -59,8 +60,8 @@ COPY --chown=root:root --chmod=0644 docker/runner/gemini-deny-all.toml /etc/gemi
 
 USER 10002:10002
 WORKDIR /home/runner
-EXPOSE 8200
+# The control API listens on a Unix socket in a volume shared with the API (no TCP port).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/health', timeout=4).status == 200 else 1)"]
+  CMD ["python", "-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect('/run/argus-runner/runner.sock'); s.sendall(b'GET /health HTTP/1.0\\r\\nHost: runner\\r\\n\\r\\n'); sys.exit(0 if b' 200 ' in s.recv(64) else 1)"]
 
-CMD ["uvicorn", "argus.runner.server:app", "--host", "0.0.0.0", "--port", "8200", "--no-server-header"]
+CMD ["uvicorn", "argus.runner.server:app", "--uds", "/run/argus-runner/runner.sock", "--no-server-header"]

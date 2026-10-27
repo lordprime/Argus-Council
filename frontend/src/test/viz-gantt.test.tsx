@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import RunGantt, { ganttColumns } from "@/components/viz/gantt/RunGantt";
-import { buildGantt, fmtDur, tickStep } from "@/components/viz/gantt/model";
+import RunGantt, { BAR_HIT_MIN, ganttColumns } from "@/components/viz/gantt/RunGantt";
+import {
+  buildGantt, CHART_GUTTER, effectiveScale, fitScale, FIT_MIN_SPAN, fmtDur, fmtOffset, fmtTick, stepScale, tickStep, ZOOM_MAX, ZOOM_MIN,
+} from "@/components/viz/gantt/model";
 import type { Member } from "@/lib/types";
 import { emptyRun, type RunState } from "@/stores/run";
 
@@ -56,6 +58,143 @@ describe("gantt model", () => {
   });
 });
 
+describe("gantt zoom", () => {
+  it("fits a run of any length into the pane", () => {
+    for (const [dur, pane] of [[1_000, 800], [1_400, 1200], [90_000, 500], [3_600_000, 1400]] as const) {
+      const k = fitScale(dur, pane);
+      expect(dur * k + CHART_GUTTER).toBeCloseTo(pane, 6);
+    }
+    // Very short runs stretch over FIT_MIN_SPAN, not a fixed 10s window.
+    expect(fitScale(40, 1024)).toBeCloseTo((1024 - CHART_GUTTER) / FIT_MIN_SPAN);
+    expect(fitScale(1_200, 1024) * 1_200 + CHART_GUTTER).toBeCloseTo(1024);
+    expect(fitScale(Number.NaN, 400)).toBeCloseTo((400 - CHART_GUTTER) / FIT_MIN_SPAN);
+  });
+
+  it("follows fit until zoomed by hand and clamps manual zoom relative to fit", () => {
+    const fit = fitScale(10_000, 1000);
+    expect(effectiveScale(null, fit)).toBe(fit);
+    expect(effectiveScale(fit * 2, fit)).toBe(fit * 2);
+    expect(effectiveScale(fit * 1000, fit)).toBe(fit * ZOOM_MAX);
+    expect(effectiveScale(fit / 1000, fit)).toBe(fit * ZOOM_MIN);
+    expect(stepScale(fit, fit, 1)).toBeCloseTo(fit * 1.5);
+    expect(stepScale(fit, fit, -1)).toBeCloseTo(fit / 1.5);
+    // A manual scale survives a resize: only its clamp moves with the new fit.
+    const wider = fitScale(10_000, 2000);
+    expect(effectiveScale(fit * 2, wider)).toBe(fit * 2);
+  });
+
+  it("labels sub-second ticks and offsets so short runs read", () => {
+    expect(tickStep(0.8)).toBe(100);
+    expect(tickStep(0.2)).toBe(500);
+    expect(fmtTick(250, 250)).toBe("+0.25s");
+    expect(fmtTick(500, 100)).toBe("+0.5s");
+    expect(fmtTick(65_000, 5_000)).toBe("+1:05");
+    expect(fmtTick(10_000, 5_000)).toBe("+10s");
+    expect(fmtOffset(420)).toBe("+0.4s");
+    expect(fmtOffset(12_300)).toBe("+12s");
+    expect(fmtOffset(3_725_000)).toBe("+1:02:05");
+  });
+});
+
+/** A finished run lasting exactly one second (what the offline mock provider produces). */
+function shortRun(): RunState {
+  const run = emptyRun("run_s", [member("m1", "Ada", "researcher", 0)]);
+  run.status = "completed";
+  const add = (it: RunState["items"][string]) => { run.items[it.id] = it; run.order.push(it.id); };
+  const ada = { kind: "agent", member_id: "m1", role: "researcher", name: "Ada" } as const;
+  add({ kind: "thought", id: "s_th", seq: 1, ts: new Date(T0).toISOString(), actor: ada, text: "", streaming: false, latencyMs: 600, intercepts: [] });
+  add({ kind: "tool", id: "s_tc", seq: 2, ts: new Date(T0 + 600).toISOString(), actor: ada, tool: "web_search", source: "builtin", args: {},
+    status: "ok", output: "", durationMs: 400 });
+  add({ kind: "tool", id: "s_tiny", seq: 3, ts: new Date(T0 + 990).toISOString(), actor: ada, tool: "read_file", source: "builtin", args: {},
+    status: "ok", output: "", durationMs: 10 });
+  return run;
+}
+
+describe("RunGantt zoom and hit areas", () => {
+  let width = 1400;
+  let observers: (() => void)[] = [];
+  const resizeTo = (w: number) => act(() => { width = w; for (const fire of observers) fire(); });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    observers = [];
+    width = 1400;
+  });
+
+  function setup() {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(cb: () => void) { observers.push(() => cb()); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    render(<RunGantt run={shortRun()} />);
+  }
+  const chartW = () => parseFloat(screen.getByTestId("gantt-timeline").style.width);
+  const barEnd = (name: RegExp) => {
+    const btn = screen.getByRole("button", { name });
+    const vis = btn.querySelector<HTMLElement>("[data-bar-visual]")!;
+    return parseFloat(btn.style.left) + parseFloat(vis.style.left) + parseFloat(vis.style.width);
+  };
+  const visWidth = (name: RegExp) =>
+    parseFloat(screen.getByRole("button", { name }).querySelector<HTMLElement>("[data-bar-visual]")!.style.width);
+
+  it("fits a one-second run to the pane on first render", () => {
+    setup();
+    const pane = width - ganttColumns(width).tableW;
+    expect(chartW()).toBe(pane); // no horizontal scroll
+    expect(barEnd(/^Tool · web_search/)).toBeCloseTo(pane - CHART_GUTTER, 0);
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("100%");
+    expect(screen.getByRole("button", { name: "Fit run to width" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("re-fits on resize until the user zooms, then keeps their scale", async () => {
+    setup();
+    resizeTo(1000);
+    let pane = 1000 - ganttColumns(1000).tableW;
+    expect(chartW()).toBe(pane);
+    expect(barEnd(/^Tool · web_search/)).toBeCloseTo(pane - CHART_GUTTER, 0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("150%");
+    expect(screen.getByRole("button", { name: "Fit run to width" })).toHaveAttribute("aria-pressed", "false");
+    const zoomed = visWidth(/^Tool · web_search/);
+    expect(zoomed).toBeCloseTo((400 * (pane - CHART_GUTTER) / 1000) * 1.5, 3);
+
+    resizeTo(1600);
+    expect(visWidth(/^Tool · web_search/)).toBeCloseTo(zoomed, 6); // scale kept
+
+    await userEvent.click(screen.getByRole("button", { name: "Fit run to width" }));
+    pane = 1600 - ganttColumns(1600).tableW;
+    expect(chartW()).toBe(pane);
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("100%");
+  });
+
+  it("gives every bar a hit area at least 24px wide, centred on the bar", () => {
+    setup();
+    const bars = document.querySelectorAll<HTMLElement>("[data-bar]");
+    expect(bars.length).toBeGreaterThan(0);
+    for (const b of bars) expect(parseFloat(b.style.width)).toBeGreaterThanOrEqual(BAR_HIT_MIN);
+    // The 10ms call is drawn a few px wide, but its hit area is 24px and centred on it.
+    const tiny = screen.getByRole("button", { name: /^Tool · read_file/ });
+    const vis = tiny.querySelector<HTMLElement>("[data-bar-visual]")!;
+    const w = parseFloat(vis.style.width);
+    expect(w).toBeLessThan(BAR_HIT_MIN);
+    expect(parseFloat(tiny.style.width)).toBe(BAR_HIT_MIN);
+    expect(parseFloat(vis.style.left)).toBeCloseTo((BAR_HIT_MIN - w) / 2, 6);
+  });
+
+  it("stops zooming out at the minimum", () => {
+    setup();
+    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent(`${ZOOM_MIN * 100}%`);
+    for (const b of document.querySelectorAll<HTMLElement>("[data-bar]")) expect(parseFloat(b.style.width)).toBeGreaterThanOrEqual(BAR_HIT_MIN);
+  });
+});
+
 describe("RunGantt", () => {
   it("renders step, agent and sub-council rows with a live now line", () => {
     vi.spyOn(Date, "now").mockReturnValue(T0 + 12_000);
@@ -95,7 +234,7 @@ describe("RunGantt", () => {
     render(<RunGantt run={synthetic()} />);
     await userEvent.click(screen.getByRole("button", { name: "Collapse sub-council Verify claims" }));
     expect(screen.queryByRole("rowheader", { name: /Checker/ })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "steps" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Steps" }));
     expect(screen.queryByRole("rowheader", { name: /Ada/ })).toBeNull();
     expect(screen.getByRole("rowheader", { name: /Draft report/ })).toBeInTheDocument();
   });

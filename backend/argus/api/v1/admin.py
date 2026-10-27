@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 
-from argus.api.deps import AdminPrincipal, DbDep
+from argus.api.deps import AdminPrincipal, AdminWriter, DbDep
 from argus.core.errors import Conflict, NotFound
 from argus.db.models import Run, User
 
@@ -69,7 +69,7 @@ async def list_users(_: AdminPrincipal, db: DbDep) -> list[AdminUserOut]:
 
 @router.patch("/users/{user_id}", response_model=AdminUserOut)
 async def update_user(
-    user_id: uuid.UUID, data: AdminUserPatch, request: Request, principal: AdminPrincipal, db: DbDep
+    user_id: uuid.UUID, data: AdminUserPatch, request: Request, principal: AdminWriter, db: DbDep
 ) -> AdminUserOut:
     user = await db.get(User, user_id)
     if user is None:

@@ -1,9 +1,11 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, Plus, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import { VersionHistory } from "@/components/skills/VersionHistory";
-import { Button, Callout, Card, ErrorState, IconButton, PageHeader, Segmented, Skeleton, TextArea, TextField } from "@/components/ui";
+import {
+  Button, Callout, Card, Chip, ErrorState, FormActions, IconButton, Page, PageHeader, Segmented, Skeleton, TextArea, TextField,
+} from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { useOptionalSkill, useSaveSkill, useValidateSkill, type ValidateResult } from "@/features/skills/queries";
 import {
@@ -179,11 +181,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
             {KNOWN_TOOLS.map((t) => {
               const on = known.includes(t);
               return (
-                <button key={t} type="button" aria-pressed={on} onClick={() => toggleTool(t)}
-                  className={cn("h-7 px-2.5 rounded-full border font-mono text-xs",
-                    on ? "bg-accent-subtle border-accent text-accent font-medium" : "border-border-strong text-fg-muted hover:text-fg")}>
-                  {t}
-                </button>
+                <Chip key={t} mono pressed={on} onPressedChange={() => toggleTool(t)}>{t}</Chip>
               );
             })}
           </div>
@@ -268,16 +266,13 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
         ))}
       </div>
 
-      <div className="sticky bottom-[calc(3.5rem+1px)] md:bottom-0 -mx-4 md:mx-0 px-4 md:px-0 py-3 bg-canvas/95 border-t border-border flex flex-wrap items-center gap-2 z-sticky">
+      <FormActions sticky cancel={{ to: mode === "new" ? "/skills" : `/skills/${encodeURIComponent(sourceName ?? "")}` }}
+        meta={serverResult?.valid && <span className="inline-flex items-center gap-1 text-success"><CheckCircle2 className="size-4" aria-hidden />Last validation passed</span>}>
         <Button type="submit" variant="primary" icon={Save} loading={save.isPending}>
           {mode === "edit" ? "Save changes" : mode === "customize" ? "Create my copy" : "Create skill"}
         </Button>
         <Button type="button" icon={ShieldCheck} loading={validate.isPending} onClick={runValidate}>Test with validate</Button>
-        {serverResult?.valid && <CheckCircle2 className="size-4 text-success" aria-label="Last validation passed" />}
-        <div className="flex-1" />
-        <Link to={mode === "new" ? "/skills" : `/skills/${encodeURIComponent(sourceName ?? "")}`}
-          className="text-sm text-fg-muted hover:text-fg underline underline-offset-2">Cancel</Link>
-      </div>
+      </FormActions>
     </form>
   );
 }
@@ -292,12 +287,6 @@ export default function SkillEditor() {
   const [rev, setRev] = useState(0); // bumps after a restore so the form re-initialises from the restored content
   const mode: "new" | "edit" | "customize" = editName ? "edit" : fromName ? "customize" : "new";
   const title = mode === "edit" ? `Edit ${editName}` : mode === "customize" ? `Customize ${fromName}` : "New skill";
-
-  const back = (
-    <Link to={source ? `/skills/${encodeURIComponent(source)}` : "/skills"} className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-3 min-h-6">
-      <ArrowLeft className="size-4" aria-hidden />{source ? source : "All skills"}
-    </Link>
-  );
 
   let content;
   if (source && q.isLoading) {
@@ -328,13 +317,12 @@ export default function SkillEditor() {
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      {back}
+    <Page>
       <PageHeader title={title}
         description={mode === "customize"
           ? "Your copy starts from the built-in. Saving it under the same name overrides the built-in for your councils."
           : "A skill is a SKILL.md (frontmatter plus instructions) and optional text files."} />
       {content}
-    </div>
+    </Page>
   );
 }

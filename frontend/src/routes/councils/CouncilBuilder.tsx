@@ -1,13 +1,13 @@
 import { ChevronDown, Users } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 
-import { NumberField, Stepper } from "@/components/councils/fields";
+import { NumberField } from "@/components/councils/fields";
 import { GuardrailsEditor, GuardrailsSummary } from "@/components/councils/GuardrailsEditor";
 import { ModelPicker } from "@/components/councils/ModelPicker";
 import { RoleChip } from "@/components/councils/parts";
 import { draftKey, SeatDraftList, type SeatDraft } from "@/components/councils/SeatDraftList";
-import { Button, Callout, Card, ErrorState, PageHeader, Segmented, Skeleton, TextArea, TextField } from "@/components/ui";
+import { Button, Callout, Card, ErrorState, FormActions, Page, PageHeader, Segmented, Skeleton, Stepper, TextArea, TextField } from "@/components/ui";
 import {
   clamp, DEFAULT_SIZE, fieldErrorsFrom, MODES, rosterFor, roleTitle, validateBounds, validateName,
   type Dict, type FieldErrors,
@@ -137,7 +137,7 @@ export default function CouncilBuilder() {
   };
 
   return (
-    <div className="max-w-[880px] mx-auto p-4 md:p-6">
+    <Page width="form">
       <PageHeader title="New council"
         description="Choose a mode, who sits on the council and the limits it works within. You can change all of this later." />
 
@@ -243,14 +243,11 @@ export default function CouncilBuilder() {
           </div>
         </Card>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <FormActions size="lg" cancel={{ to: "/councils" }}
+          meta={<>{seatMode === "roster" ? rosterSize : seats.length} seats · {route.provider}/{route.model || "?"}</>}>
           <Button type="submit" variant="primary" size="lg" icon={Users} loading={create.isPending}>Create council</Button>
-          <Link to="/councils" className="inline-flex items-center h-10 px-4 rounded-md text-fg-muted hover:bg-surface-2 hover:text-fg">Cancel</Link>
-          <span className="text-xs text-fg-subtle ml-auto">
-            {seatMode === "roster" ? rosterSize : seats.length} seats · {route.provider}/{route.model || "?"}
-          </span>
-        </div>
+        </FormActions>
       </form>
-    </div>
+    </Page>
   );
 }
