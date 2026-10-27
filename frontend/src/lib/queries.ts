@@ -76,7 +76,8 @@ export const useArtifacts = (runId: string, enabled = true) =>
 export const useProviderKinds = () =>
   useQuery({
     queryKey: keys.providerKinds,
-    queryFn: () => api.get<{ kinds: ProviderKind[]; system_providers: string[] }>(`${V1}/providers/kinds`),
+    // cli_providers: account-authenticated CLI agents enabled on this instance ("claude-cli", ...).
+    queryFn: () => api.get<{ kinds: ProviderKind[]; system_providers: string[]; cli_providers?: string[] }>(`${V1}/providers/kinds`),
     staleTime: 60_000,
   });
 export const useProviders = () => useQuery({ queryKey: keys.providers, queryFn: () => api.get<ProviderConfig[]>(`${V1}/providers`) });

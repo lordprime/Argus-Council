@@ -1,10 +1,11 @@
-import { Bot, Cpu, ScrollText, Server } from "lucide-react";
+import { Bot, Cpu, ScrollText, Server, Terminal } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Page, PageHeader, SectionNav, type SectionLink } from "@/components/ui";
 
 const TABS: SectionLink[] = [
   { to: "/connections/providers", label: "Providers", icon: Cpu },
+  { to: "/connections/cli-agents", label: "CLI agents", icon: Terminal },
   { to: "/connections/mcp", label: "MCP servers", icon: Server },
   { to: "/connections/agents", label: "Remote agents", icon: Bot },
   { to: "/connections/ledger", label: "Ledger", icon: ScrollText },

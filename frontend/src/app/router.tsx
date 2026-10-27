@@ -46,6 +46,7 @@ export const router = createBrowserRouter([
       { path: "templates", element: page(() => import("@/routes/templates/Templates")) },
       { path: "connections", element: <Navigate to="/connections/providers" replace /> },
       { path: "connections/providers", element: page(() => import("@/routes/connections/Providers")) },
+      { path: "connections/cli-agents", element: page(() => import("@/routes/connections/CliAgents")) },
       { path: "connections/mcp", element: page(() => import("@/routes/connections/McpServers")) },
       { path: "connections/agents", element: page(() => import("@/routes/connections/RemoteAgents")) },
       { path: "connections/ledger", element: page(() => import("@/routes/connections/Ledger")) },

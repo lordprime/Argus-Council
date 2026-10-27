@@ -3,15 +3,47 @@
 import { ArrowDown, ArrowUp, Eye, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 
+import { FallbackChain, type Route } from "@/components/councils/FallbackChain";
 import { MiniSwitch, NumberField, TagInput } from "@/components/councils/fields";
-import { ModelPicker } from "@/components/councils/ModelPicker";
+import { AuthBadge, ModelPicker } from "@/components/councils/ModelPicker";
 import { isOverseer, RoleChip } from "@/components/councils/parts";
 import { Badge, Button, CardTitle, Dialog, IconButton, SelectField, Stepper, TextArea, TextField } from "@/components/ui";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
+import { CLI_PROVIDERS, isCliProvider, useCliSessions } from "@/features/connections/cliAgents";
 import { deepEqual, roleTitle, validateName, type ResizePreview } from "@/features/councils/logic";
 import type { MemberInput, MemberPatch } from "@/features/councils/queries";
 import { cn } from "@/lib/cn";
 import type { Member, RoleInfo } from "@/lib/types";
+
+/** The seat's fallback routes from its config (ignores malformed entries). */
+export function seatFallbacks(config: Member["config"] | undefined): Route[] {
+  const raw = config?.fallbacks;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((f: unknown) => {
+    if (!f || typeof f !== "object") return [];
+    const r = f as { provider?: unknown; model?: unknown };
+    return typeof r.provider === "string" ? [{ provider: r.provider, model: typeof r.model === "string" ? r.model : "" }] : [];
+  });
+}
+
+/** Pick an existing CLI session of yours to resume on this seat (validated server-side at run time). */
+function CliSessionPicker({ provider, value, onChange }: { provider: string; value: string; onChange: (v: string) => void }) {
+  const cli = CLI_PROVIDERS[provider];
+  const q = useCliSessions(cli, Boolean(cli));
+  const rows = q.data ?? [];
+  return (
+    <SelectField label="CLI session" value={value} disabled={q.isLoading} onChange={(e) => onChange(e.target.value)}
+      hint="Default: a fresh vendor session per run, kept across this seat's turns. Or continue one of your earlier sessions.">
+      <option value="">New session for each run</option>
+      {value && !rows.some((r) => r.session_id === value) && <option value={value}>{value}</option>}
+      {rows.map((r) => (
+        <option key={r.id} value={r.session_id}>
+          {r.label ? `${r.label} · ` : ""}{r.session_id.slice(0, 8)}… ({new Date(r.last_used_at).toLocaleDateString()})
+        </option>
+      ))}
+    </SelectField>
+  );
+}
 
 // ------------------------------------------------------------------ Seat card
 export function SeatCard({ member, index, count, roles, canRemove, removeReason, pendingRemoval, busy, onToggle, onMove, onEdit, onRemove }: {
@@ -30,6 +62,7 @@ export function SeatCard({ member, index, count, roles, canRemove, removeReason,
 }) {
   const overseer = isOverseer(member);
   const tools = member.config?.tools ?? [];
+  const fallbacks = seatFallbacks(member.config);
   const s = roleStyle(member.role);
   return (
     <li className={cn("flex flex-wrap md:flex-nowrap items-center gap-x-3 gap-y-2 rounded-lg border border-border border-l-[3px] bg-surface shadow-1 py-3 pl-3 pr-2",
@@ -43,6 +76,7 @@ export function SeatCard({ member, index, count, roles, canRemove, removeReason,
           <CardTitle as="span" className={cn("truncate", !member.enabled && "text-fg-muted")}>{member.name}</CardTitle>
           {member.name !== roleTitle(roles, member.role) && <span className={cn("text-sm", s.fg)}>{roleTitle(roles, member.role)}</span>}
           {overseer && <Badge tone="warning"><Eye className="size-3" aria-hidden />Overseer</Badge>}
+          {isCliProvider(member.provider) && <AuthBadge auth="account" />}
           {!member.enabled && <Badge>Disabled</Badge>}
           {pendingRemoval && <Badge tone="danger">Will be removed</Badge>}
         </p>
@@ -50,6 +84,7 @@ export function SeatCard({ member, index, count, roles, canRemove, removeReason,
           <span className="font-mono truncate max-w-full">{member.provider}/{member.model}</span>
           <span className="tabular">temp {member.temperature ?? "—"}</span>
           <span>{tools.length ? `${tools.length} tool${tools.length === 1 ? "" : "s"}` : "no tools"}</span>
+          {fallbacks.length > 0 && <span>then {fallbacks.map((f) => f.provider).join(" → ")}</span>}
         </p>
       </div>
       <div className="flex items-center gap-0.5 ml-auto">
@@ -105,11 +140,14 @@ function SeatForm({ member, roles, defaults, onSave, onCancel, pending, error }:
   const [temperature, setTemperature] = useState<number>(member?.temperature ?? 0.3);
   const [prompt, setPrompt] = useState(member?.system_prompt ?? "");
   const [tools, setTools] = useState<string[]>(member?.config?.tools ?? roleInfo(initialRole)?.default_tools ?? []);
+  const [fallbacks, setFallbacks] = useState<Route[]>(seatFallbacks(member?.config));
+  const [cliSession, setCliSession] = useState<string>(typeof member?.config?.cli_session === "string" ? member.config.cli_session : "");
   const [tempValid, setTempValid] = useState(true);
   const [tried, setTried] = useState(false);
 
   const nameErr = validateName(name);
   const modelErr = route.model.trim() ? undefined : "Enter a model id.";
+  const fallbackErr = fallbacks.some((f) => !f.model.trim()) ? "Every fallback needs a model id." : undefined;
   const roleDefaults = roleInfo(role)?.default_tools ?? [];
 
   const changeRole = (next: string) => {
@@ -121,8 +159,12 @@ function SeatForm({ member, roles, defaults, onSave, onCancel, pending, error }:
 
   const submit = () => {
     setTried(true);
-    if (nameErr || modelErr || !tempValid) return;
-    const config = { ...(member?.config ?? {}), tools, overseer: roleInfo(role)?.overseer ?? false };
+    if (nameErr || modelErr || fallbackErr || !tempValid) return;
+    const config: Member["config"] = { ...(member?.config ?? {}), tools, overseer: roleInfo(role)?.overseer ?? false };
+    delete config.fallbacks;
+    delete config.cli_session;
+    if (fallbacks.length) config.fallbacks = fallbacks.map((f) => ({ provider: f.provider, model: f.model.trim() }));
+    if (isCliProvider(route.provider) && cliSession) config.cli_session = cliSession;
     if (!member) {
       onSave({ name: name.trim(), role, provider: route.provider, model: route.model.trim(), system_prompt: prompt,
         temperature, enabled: true, config } satisfies MemberInput);
@@ -150,6 +192,9 @@ function SeatForm({ member, roles, defaults, onSave, onCancel, pending, error }:
         </SelectField>
       </div>
       <ModelPicker provider={route.provider} model={route.model} onChange={setRoute} errors={{ model: tried ? modelErr : undefined }} />
+      {isCliProvider(route.provider) && <CliSessionPicker provider={route.provider} value={cliSession} onChange={setCliSession} />}
+      <FallbackChain value={fallbacks} onChange={setFallbacks} primary={route.provider} />
+      {tried && fallbackErr && <p role="alert" className="text-sm text-danger -mt-3">{fallbackErr}</p>}
       <div className="grid gap-4 sm:grid-cols-[1fr_8rem] items-end">
         <div className="flex flex-col gap-1">
           <label htmlFor="seat-temp-range" className="text-sm font-medium">Temperature</label>
