@@ -21,5 +21,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // axe accessibility checks take several seconds each; the 5s default flakes on loaded machines.
+    testTimeout: 20_000,
   },
 });

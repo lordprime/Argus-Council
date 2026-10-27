@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
-import { api, ApiError, V1 } from "@/lib/api";
+import { api, ApiError, errorMessage, V1 } from "@/lib/api";
 import { keys } from "@/lib/queries";
 import type { LedgerEntry, McpServerInfo, ProviderConfig, RemoteAgentInfo } from "@/lib/types";
 
@@ -114,6 +114,12 @@ export function useTestProvider() {
 }
 
 // ---------------------------------------------------------------- MCP servers
+/** trusted: tools run without extra approval · ask: every call needs approval · blocked: never attached to runs. */
+export type McpTrust = "trusted" | "ask" | "blocked";
+/** Server fields added with trust levels; optional so older servers still render ("ask" is the backend default). */
+export type McpServer = McpServerInfo & { trust?: McpTrust; require_approval?: string[] };
+export const trustOf = (s: McpServer): McpTrust => s.trust ?? "ask";
+
 export interface McpCreate {
   name: string;
   transport: "http" | "stdio";
@@ -122,6 +128,8 @@ export interface McpCreate {
   headers?: Record<string, string>;
   tool_allow: string[];
   risk: string[];
+  trust: McpTrust;
+  require_approval: string[];
   enabled: boolean;
 }
 /** `headers`: omit to keep, `{}` to clear, a dict to replace (values are write-only). */
@@ -130,16 +138,60 @@ export interface McpPatch {
   headers?: Record<string, string>;
   tool_allow?: string[];
   risk?: string[];
+  trust?: McpTrust;
+  require_approval?: string[];
   enabled?: boolean;
 }
 
-export const useCreateMcp = () => useInvalidating(keys.mcp, (body: McpCreate) => api.post<McpServerInfo>(`${V1}/mcp-servers`, body));
+export const useCreateMcp = () => useInvalidating(keys.mcp, (body: McpCreate) => api.post<McpServer>(`${V1}/mcp-servers`, body));
 export const useUpdateMcp = () =>
-  useInvalidating(keys.mcp, ({ id, patch }: { id: string; patch: McpPatch }) => api.patch<McpServerInfo>(`${V1}/mcp-servers/${enc(id)}`, patch));
+  useInvalidating(keys.mcp, ({ id, patch }: { id: string; patch: McpPatch }) => api.patch<McpServer>(`${V1}/mcp-servers/${enc(id)}`, patch));
 export const useDeleteMcp = () => useInvalidating(keys.mcp, (id: string) => api.del(`${V1}/mcp-servers/${enc(id)}`));
-export const useDiscoverMcp = () =>
-  useInvalidating(keys.mcp, (id: string) =>
-    api.post<McpServerInfo & { server_info?: { name?: string; version?: string } }>(`${V1}/mcp-servers/${enc(id)}/discover`));
+
+export type DiscoverResponse = McpServer & { server_info?: { name?: string; version?: string } };
+export interface ConnectionTestResult {
+  ok: boolean;
+  latencyMs: number;
+  /** Tools the server offered that pass tool_allow (discovery stores only those). */
+  tools: McpServer["tools"];
+  server?: DiscoverResponse;
+  serverName?: string;
+  error?: string;
+}
+
+/**
+ * "Test connection": runs discovery (initialize + tools/list, both ledgered with purpose "discover") and resolves with
+ * a summary whether it succeeds or not, so callers render one result shape.
+ */
+export function useMcpConnectionTest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string): Promise<ConnectionTestResult> => {
+      const t0 = performance.now();
+      try {
+        const r = await api.post<DiscoverResponse>(`${V1}/mcp-servers/${enc(id)}/discover`);
+        const info = r.server_info;
+        return {
+          ok: true, latencyMs: Math.round(performance.now() - t0), tools: r.tools ?? [], server: r,
+          serverName: info?.name ? `${info.name}${info.version ? ` ${info.version}` : ""}` : undefined,
+        };
+      } catch (err) {
+        return { ok: false, latencyMs: Math.round(performance.now() - t0), tools: [], error: errorMessage(err).slice(0, 300) };
+      }
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.mcp }),
+  });
+}
+
+/** fnmatch-style match for tool_allow patterns ("*", "search_*"). */
+export function toolAllowed(tool: string, patterns: string[]): boolean {
+  return patterns.some((p) => new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(tool));
+}
+
+/** Risk tags a tool carries in a run, mirroring the backend: "ask" (or an always-ask tool) adds the approval tag. */
+export function effectiveToolRisk(s: { risk: string[]; trust: McpTrust; require_approval: string[] }, tool: string): string[] {
+  return (s.trust === "ask" || s.require_approval.includes(tool)) && !s.risk.includes("approval") ? [...s.risk, "approval"] : s.risk;
+}
 
 // ---------------------------------------------------------------- remote agents
 export interface AgentCreate {
@@ -150,6 +202,7 @@ export interface AgentCreate {
   token?: string | null;
   description: string;
   enabled: boolean;
+  requires_approval: boolean;
 }
 /** `token`: omit to keep, `null` to clear, a string to replace. */
 export interface AgentPatch {
@@ -157,7 +210,13 @@ export interface AgentPatch {
   token?: string | null;
   description?: string;
   enabled?: boolean;
+  requires_approval?: boolean;
+  /** ACP only (the backend answers 400 for A2A). Changing it clears the cached card. */
+  agent_name?: string;
 }
+
+/** Agent fields added with approval gating; optional so older servers still render (backend default true). */
+export type RemoteAgent = RemoteAgentInfo & { requires_approval?: boolean };
 
 export const useCreateAgent = () =>
   useInvalidating(keys.agents, (body: AgentCreate) => api.post<RemoteAgentInfo>(`${V1}/remote-agents`, body));
@@ -165,16 +224,88 @@ export const useUpdateAgent = () =>
   useInvalidating(keys.agents, ({ id, patch }: { id: string; patch: AgentPatch }) =>
     api.patch<RemoteAgentInfo>(`${V1}/remote-agents/${enc(id)}`, patch));
 export const useDeleteAgent = () => useInvalidating(keys.agents, (id: string) => api.del(`${V1}/remote-agents/${enc(id)}`));
-export const useRefreshAgent = () =>
-  useInvalidating(keys.agents, (id: string) => api.post<RemoteAgentInfo>(`${V1}/remote-agents/${enc(id)}/refresh`));
+
+export interface RefreshResult {
+  ok: boolean;
+  latencyMs: number;
+  agent?: RemoteAgent;
+  error?: string;
+}
+/** Refresh the A2A card (`agent-card`) or confirm the ACP agent (`agents:list`); resolves with a summary either way. */
+export function useRefreshAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string): Promise<RefreshResult> => {
+      const t0 = performance.now();
+      try {
+        const agent = await api.post<RemoteAgent>(`${V1}/remote-agents/${enc(id)}/refresh`);
+        return { ok: true, latencyMs: Math.round(performance.now() - t0), agent };
+      } catch (err) {
+        return { ok: false, latencyMs: Math.round(performance.now() - t0), error: errorMessage(err).slice(0, 300) };
+      }
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.agents }),
+  });
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+
+export interface CardSummary {
+  name: string;
+  version: string;
+  description: string;
+  skills: { id: string; name: string; description: string }[];
+  /** Declared capabilities that are on (A2A `capabilities`, ACP `metadata.capabilities`). */
+  capabilities: string[];
+  inputModes: string[];
+  outputModes: string[];
+}
+
+/** Normalizes an A2A agent card or an ACP agent manifest. Remote data is untrusted: strings only, never markup. */
+export function summarizeCard(card: Record<string, unknown> | undefined): CardSummary | null {
+  if (!card || !Object.keys(card).length) return null;
+  const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+  const strs = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
+  const meta = obj(card.metadata);
+  const skills = (Array.isArray(card.skills) ? card.skills : []).map((x, i) => {
+    const s = obj(x);
+    return { id: str(s.id) || String(i), name: str(s.name) || str(s.id), description: str(s.description) };
+  });
+  const capObj = obj(card.capabilities);
+  const capabilities = [
+    ...Object.entries(capObj).filter(([, v]) => v === true).map(([k]) => k),
+    ...(Array.isArray(meta.capabilities)
+      ? meta.capabilities.map((c) => str(obj(c).name) || str(c)).filter(Boolean)
+      : []),
+  ];
+  return {
+    name: str(card.name),
+    version: str(card.version),
+    description: str(card.description),
+    skills,
+    capabilities,
+    inputModes: [...strs(card.defaultInputModes), ...strs(card.input_content_types)],
+    outputModes: [...strs(card.defaultOutputModes), ...strs(card.output_content_types)],
+  };
+}
 
 // ---------------------------------------------------------------- ledger
-export const useLedgerPage = (protocol: string | undefined, limit: number) =>
+export type LedgerPurpose = "run" | "discover" | "refresh";
+
+/** Why a ledger entry was made: detail.purpose when recorded, else "run" for entries tied to a run. */
+export function entryPurpose(e: LedgerEntry): LedgerPurpose | null {
+  const p = e.detail?.purpose;
+  if (p === "run" || p === "discover" || p === "refresh") return p;
+  return e.run_id ? "run" : null;
+}
+
+export const useLedgerPage = (protocol: string | undefined, limit: number, runId?: string) =>
   useQuery({
-    queryKey: [...keys.ledger(protocol), limit],
+    queryKey: [...keys.ledger(protocol), limit, runId ?? ""],
     queryFn: () => {
       const qs = new URLSearchParams({ limit: String(limit) });
       if (protocol) qs.set("protocol", protocol);
+      if (runId) qs.set("run_id", runId);
       return api.get<{ entries: LedgerEntry[] }>(`${V1}/ledger?${qs}`).then((r) => r.entries);
     },
   });

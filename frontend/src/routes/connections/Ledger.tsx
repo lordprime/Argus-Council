@@ -1,15 +1,21 @@
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ScrollText, ShieldCheck, ShieldQuestion } from "lucide-react";
-import { Fragment, useState } from "react";
-import { Link } from "react-router";
+import { Fragment, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
 import { Badge, Button, Callout, Card, EmptyState, ErrorState, IconButton, PageHeader, Segmented, SelectField, Skeleton } from "@/components/ui";
-import { useLedgerPage, useVerifyLedger } from "@/features/connections/queries";
+import { entryPurpose, useLedgerPage, useVerifyLedger, type LedgerPurpose } from "@/features/connections/queries";
 import { errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { LedgerEntry } from "@/lib/types";
 
 type ProtocolFilter = "all" | "mcp" | "a2a" | "acp";
+type PurposeFilter = "all" | LedgerPurpose;
+const PURPOSE: Record<LedgerPurpose, { label: string; tone: "info" | "accent" | "neutral"; hint: string }> = {
+  run: { label: "Run", tone: "info", hint: "Calls made while a council run was working" },
+  discover: { label: "Discover", tone: "accent", hint: "Connection tests and tool discovery (initialize, tools/list)" },
+  refresh: { label: "Refresh", tone: "neutral", hint: "Agent card and ACP agent list refreshes" },
+};
 const LIMITS = [50, 100, 200, 500];
 
 const short = (h: string, n = 10) => (h ? `${h.slice(0, n)}…` : "—");
@@ -65,6 +71,7 @@ function Row({ e }: { e: LedgerEntry }) {
   const inbound = e.direction === "inbound";
   const DirIcon = inbound ? ArrowDownLeft : ArrowUpRight;
   const detailId = `ledger-${e.seq}`;
+  const purpose = entryPurpose(e);
   return (
     <Fragment>
       <tr className={cn("hover:bg-surface-2", open && "bg-surface-2")}>
@@ -77,7 +84,12 @@ function Row({ e }: { e: LedgerEntry }) {
           </span>
         </td>
         <td className="px-3 py-2 max-w-48 truncate font-mono text-xs" title={e.peer}>{e.peer}</td>
-        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{e.method}</td>
+        <td className="px-3 py-2 whitespace-nowrap">
+          <span className="inline-flex items-center h-6 rounded-sm border border-border bg-surface-2 px-1.5 font-mono text-xs">{e.method}</span>
+        </td>
+        <td className="px-3 py-2 whitespace-nowrap">
+          {purpose ? <Badge tone={PURPOSE[purpose].tone}>{PURPOSE[purpose].label}</Badge> : <span className="text-fg-subtle">—</span>}
+        </td>
         <td className="px-3 py-2"><Badge tone={statusTone(e.status)}>{e.status}</Badge></td>
         <td className="px-3 py-2 tabular text-right whitespace-nowrap">{e.latency_ms} ms</td>
         <td className="px-3 py-2 whitespace-nowrap">
@@ -91,7 +103,7 @@ function Row({ e }: { e: LedgerEntry }) {
       </tr>
       {open && (
         <tr id={detailId} className="bg-surface-2">
-          <td colSpan={11} className="px-3 pb-3 pt-1">
+          <td colSpan={12} className="px-3 pb-3 pt-1">
             <dl className="grid gap-x-6 gap-y-2 md:grid-cols-2 text-xs">
               {([["Entry hash", e.hash], ["Previous hash", e.prev_hash], ["Request SHA-256", e.request_sha256], ["Response SHA-256", e.response_sha256]] as const).map(([k, v]) => (
                 <div key={k}>
@@ -119,8 +131,15 @@ function Row({ e }: { e: LedgerEntry }) {
 
 export default function Ledger() {
   const [protocol, setProtocol] = useState<ProtocolFilter>("all");
+  const [purpose, setPurpose] = useState<PurposeFilter>("all");
   const [limit, setLimit] = useState(100);
-  const q = useLedgerPage(protocol === "all" ? undefined : protocol, limit);
+  const [params, setParams] = useSearchParams();
+  const runId = params.get("run") ?? "";
+  const setRun = (id: string) => setParams((p) => { const n = new URLSearchParams(p); if (id) n.set("run", id); else n.delete("run"); return n; }, { replace: true });
+  const q = useLedgerPage(protocol === "all" ? undefined : protocol, limit, runId || undefined);
+  const runs = useMemo(() => [...new Set([runId, ...(q.data ?? []).map((e) => e.run_id ?? "")].filter(Boolean))], [q.data, runId]);
+  const rows = useMemo(() => (q.data ?? []).filter((e) => purpose === "all" || entryPurpose(e) === purpose), [q.data, purpose]);
+  const filtered = protocol !== "all" || purpose !== "all" || Boolean(runId);
 
   return (
     <ConnectionsPage>
@@ -128,14 +147,30 @@ export default function Ledger() {
         description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus." />
       <div className="flex flex-col gap-4">
         <VerifyPanel />
-        <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-3">
           <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
             { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" }, { value: "acp", label: "ACP" },
           ]} />
-          <SelectField label="Show" value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))} className="w-36">
-            {LIMITS.map((n) => <option key={n} value={n}>Latest {n}</option>)}
-          </SelectField>
+          <Segmented label="Purpose" value={purpose} onChange={setPurpose} options={[
+            { value: "all", label: "All" },
+            ...(Object.keys(PURPOSE) as LedgerPurpose[]).map((k) => ({ value: k, label: PURPOSE[k].label, hint: PURPOSE[k].hint })),
+          ]} />
+          <div className="flex flex-wrap items-end gap-3 sm:ml-auto">
+            <SelectField label="Run" value={runId} onChange={(e) => setRun(e.target.value)} className="w-44 max-w-full">
+              <option value="">All runs</option>
+              {runs.map((r) => <option key={r} value={r}>{r.slice(0, 8)}</option>)}
+            </SelectField>
+            <SelectField label="Show" value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))} className="w-36">
+              {LIMITS.map((n) => <option key={n} value={n}>Latest {n}</option>)}
+            </SelectField>
+          </div>
         </div>
+        {runId && (
+          <p className="text-sm text-fg-muted flex flex-wrap items-center gap-2">
+            Showing calls for run <Link to={`/runs/${runId}`} className="text-accent underline underline-offset-2 font-mono text-xs break-all">{runId}</Link>
+            <Button size="sm" variant="ghost" onClick={() => setRun("")}>Clear run filter</Button>
+          </p>
+        )}
 
         {q.isLoading ? (
           <Card as="div" className="p-3 space-y-2" aria-hidden>
@@ -143,10 +178,13 @@ export default function Ledger() {
           </Card>
         ) : q.error ? (
           <Card><ErrorState error={q.error} onRetry={() => void q.refetch()} /></Card>
-        ) : !q.data?.length ? (
+        ) : !rows.length ? (
           <Card as="div">
-            <EmptyState icon={ScrollText} title={protocol === "all" ? "No protocol calls recorded yet" : `No ${protocol.toUpperCase()} calls recorded`}
-              body="Calls to MCP servers and remote agents, and calls other systems make to Argus, are appended here with their hashes." />
+            <EmptyState icon={ScrollText}
+              title={!filtered ? "No protocol calls recorded yet" : "No calls match these filters"}
+              body={!filtered
+                ? "Calls to MCP servers and remote agents, and calls other systems make to Argus, are appended here with their hashes."
+                : `Nothing${protocol === "all" ? "" : ` over ${protocol.toUpperCase()}`}${purpose === "all" ? "" : ` for ${PURPOSE[purpose].label.toLowerCase()}`}${runId ? " in this run" : ""} among the latest ${limit} entries.`} />
           </Card>
         ) : (
           <Card as="div" className="overflow-hidden">
@@ -155,18 +193,18 @@ export default function Ledger() {
                 <caption className="sr-only">Ledger entries, newest first. Use the expand button on a row to see full hashes.</caption>
                 <thead className="bg-surface-2 text-left text-xs text-fg-subtle">
                   <tr>
-                    {["#", "Time", "Protocol", "Direction", "Peer", "Method", "Status", "Latency", "Run", "Hash"].map((h) => (
+                    {["#", "Time", "Protocol", "Direction", "Peer", "Method", "Purpose", "Status", "Latency", "Run", "Hash"].map((h) => (
                       <th key={h} scope="col" className={cn("px-3 py-2 font-medium whitespace-nowrap", h === "Latency" && "text-right")}>{h}</th>
                     ))}
                     <th scope="col" className="px-1 py-2"><span className="sr-only">Details</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {q.data.map((e) => <Row key={e.seq} e={e} />)}
+                  {rows.map((e) => <Row key={e.seq} e={e} />)}
                 </tbody>
               </table>
             </div>
-            {q.data.length >= limit && (
+            {(q.data?.length ?? 0) >= limit && (
               <p className="px-3 py-2 text-xs text-fg-subtle border-t border-border">Showing the latest {limit} entries. Choose a larger page to see more.</p>
             )}
           </Card>

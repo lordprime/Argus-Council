@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
 import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
 import { CopyBlock } from "@/components/connections/CopyBlock";
-import { CardSkeletons, Meta, SectionTitle, Switch } from "@/components/connections/parts";
+import { CardSkeletons, Chips, Meta, SectionTitle, Switch } from "@/components/connections/parts";
 import { SecretField, secretPatch, type SecretAction } from "@/components/connections/SecretField";
 import {
   Badge,
@@ -21,10 +21,18 @@ import {
   TextField,
   Toggle,
 } from "@/components/ui";
-import { useCreateAgent, useDeleteAgent, useRefreshAgent, useUpdateAgent, type AgentPatch } from "@/features/connections/queries";
+import {
+  summarizeCard,
+  useCreateAgent,
+  useDeleteAgent,
+  useRefreshAgent,
+  useUpdateAgent,
+  type AgentPatch,
+  type RefreshResult,
+  type RemoteAgent,
+} from "@/features/connections/queries";
 import { errorMessage } from "@/lib/api";
 import { useRemoteAgents } from "@/lib/queries";
-import type { RemoteAgentInfo } from "@/lib/types";
 import { toast } from "@/stores/toast";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
@@ -36,7 +44,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "n
 function AgentDialog({ open, onOpenChange, existing, takenNames }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
-  existing?: RemoteAgentInfo;
+  existing?: RemoteAgent;
   takenNames: string[];
 }) {
   const create = useCreateAgent();
@@ -48,6 +56,7 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
   const [agentName, setAgentName] = useState(existing?.agent_name ?? "");
   const [description, setDescription] = useState(existing?.description ?? "");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [requiresApproval, setRequiresApproval] = useState(existing?.requires_approval ?? true);
   const [token, setToken] = useState<SecretAction>(existing ? { kind: "keep" } : { kind: "replace", value: "" });
   const [touched, setTouched] = useState(false);
 
@@ -55,8 +64,8 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
   if (!existing) {
     if (!NAME_RE.test(name)) errors.name = "Lowercase letters, digits, '-' or '_' (max 40)";
     else if (takenNames.includes(name)) errors.name = `An agent named ${name} already exists`;
-    if (protocol === "acp" && !agentName.trim()) errors.agentName = "ACP needs the agent's name on that server";
   }
+  if (protocol === "acp" && !agentName.trim()) errors.agentName = "ACP needs the agent's name on that server";
   if (!/^https?:\/\/\S+$/i.test(url.trim())) errors.url = "Enter an http(s) URL";
   const invalid = Object.keys(errors).length > 0;
   const show = (k: string) => (touched ? errors[k] : undefined);
@@ -68,12 +77,13 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
     try {
       if (existing) {
         const t = secretPatch(token);
-        const patch: AgentPatch = { url: url.trim(), description, enabled, ...(t !== undefined ? { token: t } : {}) };
+        const patch: AgentPatch = { url: url.trim(), description, enabled, requires_approval: requiresApproval, ...(t !== undefined ? { token: t } : {}) };
+        if (existing.protocol === "acp" && agentName.trim() !== (existing.agent_name ?? "")) patch.agent_name = agentName.trim();
         await update.mutateAsync({ id: existing.id, patch });
         toast({ tone: "success", title: `Saved ${existing.name}` });
       } else {
         await create.mutateAsync({
-          name, protocol, url: url.trim(), description, enabled,
+          name, protocol, url: url.trim(), description, enabled, requires_approval: requiresApproval,
           agent_name: protocol === "acp" ? agentName.trim() : null,
           token: secretPatch(token) ?? null,
         });
@@ -104,13 +114,18 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
           onChange={(e) => setUrl(e.target.value)} spellCheck={false} error={show("url")}
           placeholder={protocol === "a2a" ? "https://agent.example.com/a2a" : "https://agents.example.com/acp"}
           hint={protocol === "a2a" ? "The JSON-RPC endpoint. The agent card is read from /.well-known/agent-card.json on the same host." : "Argus calls /agents and /runs under this URL."} />
-        {protocol === "acp" && !existing && (
-          <TextField label="Agent name" value={agentName} onChange={(e) => setAgentName(e.target.value)} spellCheck={false}
-            hint="The agent's name on the ACP server" error={show("agentName")} />
+        {protocol === "acp" && (
+          <TextField label="Agent name" value={agentName} onChange={(e) => setAgentName(e.target.value)} spellCheck={false} maxLength={120}
+            hint={existing ? "The agent's name on the ACP server. Changing it clears the cached card; refresh afterwards." : "The agent's name on the ACP server"}
+            error={show("agentName")} />
         )}
         <SecretField label="Bearer token (optional)" stored={Boolean(existing?.has_token)} action={token} onChange={setToken} />
         <TextArea label="Description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} rows={3}
           hint="Shown to the council chair when it decides whom to delegate to. Filled from the agent card if left blank." />
+        <Toggle label="Require approval before delegating" checked={requiresApproval} onChange={setRequiresApproval}
+          hint={requiresApproval
+            ? "Each time a council hands work to this agent, the run pauses until you approve it."
+            : "Councils can delegate to this agent without asking. Only turn this off for agents you control."} />
         <Toggle label="Enabled" checked={enabled} onChange={setEnabled} />
         {mutation.error && <Callout tone="danger" title="Could not save">{errorMessage(mutation.error)}</Callout>}
         <div className="flex justify-end gap-2">
@@ -125,8 +140,9 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
 // ------------------------------------------------------------------ card
 /** Renders a fetched agent card. Remote data is untrusted: plain text only, never HTML or Markdown. */
 function AgentCardView({ card, label }: { card: Record<string, unknown>; label: string }) {
-  if (!Object.keys(card).length) return <p className="text-sm text-fg-subtle">No card fetched yet. Use Refresh card.</p>;
-  const skills = Array.isArray(card.skills) ? (card.skills as Record<string, unknown>[]) : [];
+  const summary = summarizeCard(card);
+  if (!summary) return <p className="text-sm text-fg-subtle">No card fetched yet. Use Refresh card.</p>;
+  const { skills, capabilities, inputModes, outputModes } = summary;
   const schemes = card.securitySchemes && typeof card.securitySchemes === "object" ? Object.keys(card.securitySchemes) : [];
   return (
     <div className="flex flex-col gap-2 rounded-md bg-surface-2 p-3">
@@ -136,6 +152,11 @@ function AgentCardView({ card, label }: { card: Record<string, unknown>; label: 
       </div>
       {str(card.description) && <p className="text-sm text-fg-muted">{str(card.description)}</p>}
       <dl className="grid gap-2 sm:grid-cols-2">
+        <Meta label="Skills">{skills.length ? `${skills.length} ${skills.length === 1 ? "skill" : "skills"}` : "None declared"}</Meta>
+        <Meta label="Capabilities"><Chips items={capabilities} label={`${label} capabilities`} empty="None declared" /></Meta>
+        {(inputModes.length > 0 || outputModes.length > 0) && (
+          <Meta label="Content types" mono>{[...new Set([...inputModes, ...outputModes])].join(", ")}</Meta>
+        )}
         {str(card.url) && <Meta label="Endpoint" mono>{str(card.url)}</Meta>}
         <Meta label="Auth">{schemes.length ? schemes.join(", ") : "None declared"}</Meta>
       </dl>
@@ -143,13 +164,14 @@ function AgentCardView({ card, label }: { card: Record<string, unknown>; label: 
         <div>
           <p className="text-xs text-fg-subtle mb-1">Skills</p>
           <ul aria-label={`${label} skills`} className="flex flex-col gap-1">
-            {skills.slice(0, 12).map((s, i) => (
-              <li key={str(s.id) || i} className="text-sm">
-                <span className="font-medium">{str(s.name) || str(s.id)}</span>
-                {str(s.description) && <span className="text-fg-muted"> · {str(s.description)}</span>}
+            {skills.slice(0, 12).map((s) => (
+              <li key={s.id} className="text-sm break-words">
+                <span className="font-medium">{s.name}</span>
+                {s.description && <span className="text-fg-muted"> · {s.description}</span>}
               </li>
             ))}
           </ul>
+          {skills.length > 12 && <p className="text-xs text-fg-subtle mt-1">and {skills.length - 12} more</p>}
         </div>
       )}
       <details className="text-xs">
@@ -162,41 +184,65 @@ function AgentCardView({ card, label }: { card: Record<string, unknown>; label: 
   );
 }
 
-function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgentInfo; onEdit: () => void; onDelete: () => void }) {
+function RefreshSummary({ r }: { r: RefreshResult }) {
+  if (!r.ok) return <Callout tone="danger" title={`Could not reach the agent · ${r.latencyMs} ms`}>{r.error}</Callout>;
+  const sum = summarizeCard(r.agent?.card);
+  const n = sum?.skills.length ?? 0;
+  return (
+    <Callout tone="success" title={`Refreshed · ${r.latencyMs} ms`}>
+      {r.agent?.protocol === "acp" ? "The ACP server lists this agent." : "Fetched the agent card."}
+      {sum && ` ${n} ${n === 1 ? "skill" : "skills"}${sum.capabilities.length ? `, capabilities: ${sum.capabilities.join(", ")}` : ""}.`}
+    </Callout>
+  );
+}
+
+const PROTOCOL: Record<Protocol, { label: string; tone: "info" | "accent"; title: string }> = {
+  a2a: { label: "A2A", tone: "info", title: "Agent2Agent (JSON-RPC with an agent card)" },
+  acp: { label: "ACP", tone: "accent", title: "Agent Communication Protocol (REST)" },
+};
+
+function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgent; onEdit: () => void; onDelete: () => void }) {
   const refresh = useRefreshAgent();
   const update = useUpdateAgent();
   const headingId = `agent-${a.id}`;
+  const needsApproval = a.requires_approval ?? true;
   const toggle = (enabled: boolean) =>
     update.mutate({ id: a.id, patch: { enabled } }, {
       onError: (e) => toast({ tone: "danger", title: `Could not update ${a.name}`, body: errorMessage(e) }),
     });
   return (
     <Card as="article" aria-labelledby={headingId} className="p-4 flex flex-col gap-3">
-      <div className="flex items-start gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         <span className="grid place-items-center size-9 rounded-md border border-dashed border-border-strong text-fg-muted shrink-0">
           <Globe className="size-5" aria-hidden />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-40">
           <h3 id={headingId} className="font-semibold truncate">{a.name}</h3>
           <p className="text-xs text-fg-subtle font-mono truncate">{a.url}</p>
         </div>
-        <Badge tone="accent">{a.protocol.toUpperCase()}</Badge>
-        {!a.enabled && <Badge>Disabled</Badge>}
+        <div className="flex flex-wrap gap-1">
+          <span title={PROTOCOL[a.protocol].title}>
+            <Badge tone={PROTOCOL[a.protocol].tone}><span className="sr-only">Protocol: </span>{PROTOCOL[a.protocol].label}</Badge>
+          </span>
+          {needsApproval ? <Badge tone="warning">Needs approval</Badge> : <Badge tone="neutral">No approval</Badge>}
+          {!a.enabled && <Badge>Disabled</Badge>}
+        </div>
       </div>
       {a.description && <p className="text-sm text-fg-muted">{a.description}</p>}
       <dl className="grid gap-3 sm:grid-cols-2">
         {a.protocol === "acp" && <Meta label="Agent name" mono>{a.agent_name ?? "—"}</Meta>}
+        <Meta label="Delegation">{needsApproval ? "Each delegation needs your approval" : "Runs without asking"}</Meta>
         <Meta label="Token">
           {a.has_token ? <span className="inline-flex items-center gap-1"><KeyRound className="size-3.5" aria-hidden />Stored · write-only</span> : "None"}
         </Meta>
       </dl>
-      {refresh.error && <Callout tone="danger" title="Could not reach the agent">{errorMessage(refresh.error)}</Callout>}
+      {refresh.data && <RefreshSummary r={refresh.data} />}
       <AgentCardView card={a.card ?? {}} label={a.name} />
       <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-border">
         <Switch object={a.name} checked={a.enabled} onChange={toggle} disabled={update.isPending} />
         <div className="flex-1" />
         <Button size="sm" icon={RefreshCw} loading={refresh.isPending}
-          onClick={() => refresh.mutate(a.id, { onSuccess: () => toast({ tone: "success", title: `Refreshed ${a.name}` }) })}>
+          aria-label={`Refresh card for ${a.name}`} onClick={() => refresh.mutate(a.id)}>
           Refresh card
         </Button>
         <IconButton label={`Edit ${a.name}`} icon={Pencil} onClick={onEdit} />
@@ -210,9 +256,9 @@ function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgentInfo; onEdit: () => 
 export default function RemoteAgents() {
   const q = useRemoteAgents();
   const del = useDeleteAgent();
-  const [dialog, setDialog] = useState<{ edit?: RemoteAgentInfo } | null>(null);
-  const [deleting, setDeleting] = useState<RemoteAgentInfo | null>(null);
-  const agents = q.data ?? [];
+  const [dialog, setDialog] = useState<{ edit?: RemoteAgent } | null>(null);
+  const [deleting, setDeleting] = useState<RemoteAgent | null>(null);
+  const agents: RemoteAgent[] = q.data ?? [];
   const origin = window.location.origin;
 
   return (
