@@ -19,6 +19,7 @@ def settings(tmp_path) -> Settings:
         redis_url=os.environ.get("ARGUS_TEST_REDIS_URL"),
         secret_key="test-secret-key-that-is-long-enough-1234567890",
         rate_limit_per_minute=10_000,
+        data_dir=str(tmp_path / "data"),
     )
 
 

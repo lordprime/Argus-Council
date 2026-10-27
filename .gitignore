@@ -15,3 +15,6 @@ node_modules/
 dist/
 .DS_Store
 /data/
+
+# Runtime data (artifact blobs) written by local runs and tests
+data/
