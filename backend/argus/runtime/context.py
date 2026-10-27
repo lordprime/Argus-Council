@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import mimetypes
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -244,11 +245,37 @@ class Correction:
     intercept_id: str | None = None
 
 
+class PauseGate(asyncio.Event):
+    """The run's resume event (set = running, cleared = paused) that also times the pauses."""
+
+    def __init__(self, clock: Any = time.monotonic) -> None:
+        super().__init__()
+        self._clock = clock
+        self._paused_at: float | None = None
+        self._paused_total = 0.0
+
+    def clear(self) -> None:
+        if self.is_set() and self._paused_at is None:
+            self._paused_at = self._clock()
+        super().clear()
+
+    def set(self) -> None:
+        if self._paused_at is not None:
+            self._paused_total += self._clock() - self._paused_at
+            self._paused_at = None
+        super().set()
+
+    def paused_s(self) -> float:
+        ongoing = self._clock() - self._paused_at if self._paused_at is not None else 0.0
+        return self._paused_total + ongoing
+
+
 @dataclass
 class Controls:
     """Mutable run controls driven by user commands."""
 
-    resume: asyncio.Event = field(default_factory=asyncio.Event)
+    clock: Any = time.monotonic
+    resume: PauseGate = field(init=False)
     cancelled: bool = False
     held_members: set[str] = field(default_factory=set)
     # Corrections waiting to be applied to a member's next thought.
@@ -258,7 +285,11 @@ class Controls:
     user_messages: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.resume = PauseGate(self.clock)
         self.resume.set()
+
+    def paused_s(self) -> float:
+        return self.resume.paused_s()
 
 
 class RunContext:
@@ -294,6 +325,8 @@ class RunContext:
         self.notes: list[dict[str, Any]] = []
         self.sources: dict[str, dict[str, Any]] = {}
         self.controls = Controls()
+        # Paused time does not count toward max_runtime_minutes.
+        engine.paused_s = self.controls.paused_s
         self.approvals: dict[str, Approval] = {}
         self.approval_timeout_s = approval_timeout_s
         self.depth = depth

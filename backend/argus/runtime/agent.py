@@ -31,6 +31,7 @@ from argus.providers.types import CompletionRequest, CompletionResponse, Message
 from argus.runtime.context import Correction, RunContext
 from argus.runtime.events import Actor
 from argus.runtime.guardrails import GuardrailBreach
+from argus.runtime.history import compact_history
 from argus.runtime.oversight import Thought, ThoughtBus
 from argus.services.llm import Route
 from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
@@ -389,6 +390,7 @@ class AgentRunner:
                     {"correction_id": c.id, "outcome": "applied"},
                     actor=self.member.actor,
                 )
+            compact_history(messages)  # bound what each turn re-sends (see runtime/history.py)
             thought_id, event_id, resp = await self._think(messages, step_id, phase)
             last_text = resp.content or last_text
             thought = Thought(
