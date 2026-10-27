@@ -367,6 +367,19 @@ async def test_cli_failure_raises_fallback_worthy_error():
     assert err.value.category == "quota" and err.value.fallback and not err.value.retryable
 
 
+async def test_cli_error_text_is_redacted_before_it_reaches_events_or_logs():
+    key = "sk-proj-userkey1234567890"
+    failed = [
+        {"type": "thread.started", "thread_id": str(uuid.uuid4())},
+        {"type": "turn.failed", "error": {"message": f"401 Unauthorized: Incorrect API key provided: {key}"}},
+        {"type": "argus.exit", "ok": False},
+    ]
+    provider = CLIProvider("codex", uuid.UUID(USER), FakeBackend(FakeTransport([failed]), key=key))
+    with pytest.raises(CLIError) as err:
+        await provider.complete(request([Message.user("hi")]))
+    assert err.value.category == "auth" and key not in str(err.value) and "userkey" not in str(err.value)
+
+
 async def test_pinned_session_must_belong_to_the_user():
     other = str(uuid.uuid4())
     transport = FakeTransport([])

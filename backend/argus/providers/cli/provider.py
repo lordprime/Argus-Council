@@ -30,6 +30,7 @@ from argus.providers.cli.toolproto import (
 )
 from argus.providers.pricing import estimate_cost
 from argus.providers.types import CompletionRequest, CompletionResponse, Message, StreamEvent, Usage
+from argus.runner.process import redact
 from argus.runner.specs import UUID_RE, InvokeSpec
 
 log = get_logger(__name__)
@@ -200,7 +201,9 @@ class CLIProvider(Provider):
             if seat is not None and result.failure.category == "session" and not seat.pinned:
                 seat.session_id, seat.sent = None, []  # start over next time
             raise CLIError(
-                f"{self.cli} CLI: {result.failure.message}",
+                # CLIs echo key fragments in errors ("Incorrect API key provided: sk-..."); these
+                # messages reach logs, run events and health, so redact them like the runner does.
+                f"{self.cli} CLI: {redact(result.failure.message, [api_key] if api_key else [])}",
                 provider=self.name,
                 category=result.failure.category,
             )
