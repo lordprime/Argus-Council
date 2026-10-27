@@ -88,6 +88,13 @@ async def with_retries[T](
         except ProviderError as exc:
             if not exc.retryable or attempt == attempts:
                 raise
-            delay = exc.retry_after or min(max_delay, base_delay * 2 ** (attempt - 1))
-            await sleep(delay + random.uniform(0, delay / 4))  # noqa: S311
+            await sleep(retry_delay(attempt, exc, base_delay=base_delay, max_delay=max_delay))
     raise AssertionError("unreachable")
+
+
+def retry_delay(
+    attempt: int, exc: ProviderError, *, base_delay: float = 0.5, max_delay: float = 20.0
+) -> float:
+    """Backoff before retry ``attempt + 1``: ``Retry-After`` if given, else exponential; plus jitter."""
+    delay = exc.retry_after or min(max_delay, base_delay * 2 ** (attempt - 1))
+    return delay + random.uniform(0, delay / 4)  # noqa: S311
