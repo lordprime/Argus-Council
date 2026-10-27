@@ -4,18 +4,57 @@
 import {
   Fingerprint, Flag, MapPin, PenLine, ShieldCheck, Tent, TriangleAlert, Users, Vote, type LucideIcon,
 } from "lucide-react";
-import { useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 
+import { Badge } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { RunState } from "@/stores/run";
 
 import { fmtClock } from "../heatmap/model";
+import { RunStateBadge, VizPane, VizToolbar } from "../VizToolbar";
 import { buildRoute, type Milestone, type MilestoneKind, type Tone } from "./model";
 
 export interface RunRouteProps { run: RunState; onSelect?: (ref: { itemId?: string; nodeId?: string }) => void }
 
 const VW = 360;
 const VH = 440;
+/** Side margins in the viewBox so step labels beside pins near the edge are not clipped. */
+const PADX = 56;
+const VB_X = -PADX;
+const VB_W = VW + PADX * 2;
+/** Labels render at no less than this many CSS px, whatever the SVG's scale (the 11px text floor). */
+export const LABEL_MIN_PX = 11;
+/** Pins are hit-tested on a circle at least this radius in CSS px (a 24px target, WCAG 2.5.8). */
+export const PIN_HIT_MIN_PX = 12;
+/** Average glyph advance of the UI face as a share of the font size, for fitting labels to the space left. */
+const GLYPH = 0.56;
+
+/** CSS px per viewBox unit for the rendered SVG (1 until measured). */
+function useSvgScale(ref: RefObject<SVGSVGElement | null>): number {
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      // preserveAspectRatio "meet": the smaller ratio wins.
+      const k = r.width > 0 && r.height > 0 ? Math.min(r.width / VB_W, r.height / VH) : 0;
+      if (k > 0) setScale(k);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return scale;
+}
+
+/** Truncate a label to the space between its pin and the viewBox edge. */
+export function fitLabel(text: string, availUnits: number, fontUnits: number): string {
+  const max = Math.max(4, Math.floor(availUnits / (fontUnits * GLYPH)));
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
 
 const ICONS: Record<MilestoneKind, LucideIcon> = {
   start: MapPin, step: Tent, intercept: TriangleAlert, approval: ShieldCheck, vote: Vote,
@@ -73,8 +112,6 @@ function contour(k: number): string {
   return `${parts.join(" ")} Z`;
 }
 
-const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
 function pinLabel(m: Milestone): string {
   const bits = [`${KIND_LABEL[m.kind]}: ${m.title}`];
   if (TONE_TEXT[m.tone] && m.kind !== "start") bits.push(TONE_TEXT[m.tone]);
@@ -90,6 +127,11 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hot, setHot] = useState<string | null>(null);
   const logRef = useRef<HTMLOListElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const scale = useSvgScale(svgRef);
+  // Sizes in viewBox units that come out at least LABEL_MIN_PX / PIN_HIT_MIN_PX on screen.
+  const labelUnits = Math.max(LABEL_MIN_PX, LABEL_MIN_PX / scale);
+  const hitUnits = Math.max(PIN_HIT_MIN_PX, PIN_HIT_MIN_PX / scale);
 
   const total = model.steps + 1;
   const sCur = Math.min(1, model.current / total);
@@ -111,7 +153,7 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
       const ny = (q.x - p.x) / len;
       const side = k % 2 ? -1 : 1;
       const d = 24 + Math.floor(k / 2) * 18;
-      const x = Math.min(VW - 12, Math.max(12, p.x + nx * d * side));
+      const x = Math.min(VW + PADX - 12, Math.max(VB_X + 12, p.x + nx * d * side));
       const y = Math.min(VH - 12, Math.max(12, p.y + ny * d * side));
       return { m, x, y, ax: p.x, ay: p.y };
     });
@@ -132,24 +174,25 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
   const pct = model.steps ? Math.round((Math.min(model.done, model.steps) / model.steps) * 100) : model.reached ? 100 : 0;
   const events = model.milestones.filter((m) => m.kind !== "start" && m.kind !== "step" && m.kind !== "summit").length;
 
+  const titleId = `${uid}-title`;
   return (
-    <section aria-labelledby={`${uid}-title`} className="rounded-xl border border-border bg-surface text-fg shadow-1 min-w-0">
-      <header className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-2">
-        <h2 id={`${uid}-title`} className="text-md font-semibold mr-auto">Route covered</h2>
-        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-0.5 text-xs text-fg-muted" data-testid="route-progress">
-          {model.done} of {model.steps} step{model.steps === 1 ? "" : "s"} · {pct}%
-        </span>
-        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-0.5 text-xs text-fg-muted">
-          {events} event{events === 1 ? "" : "s"}
-        </span>
-      </header>
+    <VizPane labelledBy={titleId}>
+      <VizToolbar titleId={titleId} title="Route covered"
+        meta={<>
+          <RunStateBadge status={run.status} />
+          <span data-testid="route-progress" className="inline-flex">
+            <Badge>{model.done} of {model.steps} step{model.steps === 1 ? "" : "s"} · {pct}%</Badge>
+          </span>
+          <Badge>{events} event{events === 1 ? "" : "s"}</Badge>
+        </>} />
 
-      <div className="grid gap-4 px-4 pb-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <figure className="m-0 min-w-0 rounded-lg border border-border bg-surface-2">
           <svg
+            ref={svgRef}
             role="group"
             aria-label={`Route map: ${model.steps} plan steps from start to deliverable, ${pct}% covered`}
-            viewBox={`0 0 ${VW} ${VH}`}
+            viewBox={`${VB_X} 0 ${VB_W} ${VH}`}
             className="block h-auto w-full max-h-[32rem]"
           >
             <g aria-hidden className="fill-none">
@@ -177,6 +220,7 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
               const isSel = selected === m.id;
               const showText = m.kind === "step" || big;
               const right = x >= VW / 2;
+              const avail = right ? VW + PADX - (x + r + 6) - 4 : x - r - 6 - VB_X - 4;
               return (
                 <g
                   key={m.id}
@@ -193,17 +237,22 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
                   onFocus={() => setHot(m.id)}
                   onBlur={() => setHot(null)}
                 >
+                  {/* Transparent hit circle: the pin is easy to point at even when drawn small. */}
+                  <circle cx={x} cy={y} r={Math.max(r + 4, hitUnits)} fill="transparent" data-hit="" />
                   <circle cx={x} cy={y} r={r + 4} className={cn("fill-none stroke-focus-ring", isSel ? "opacity-100" : "opacity-0 group-hover:opacity-60 group-focus-visible:opacity-100")} strokeWidth={2} />
                   <circle cx={x} cy={y} r={r} className={cn(PIN_FILL[m.tone], m.tone !== "pending" && "stroke-surface")} strokeWidth={1.5} />
                   <Icon aria-hidden x={x - r * 0.55} y={y - r * 0.55} width={r * 1.1} height={r * 1.1} className={PIN_ICON[m.tone]} strokeWidth={2.25} />
                   {showText && (
                     <text
                       x={right ? x + r + 6 : x - r - 6}
-                      y={y + 3.5}
+                      y={y}
                       textAnchor={right ? "start" : "end"}
-                      className={cn("text-[10px] font-medium", m.tone === "pending" ? "fill-fg-muted" : "fill-fg")}
+                      fontSize={labelUnits}
+                      dominantBaseline="central"
+                      data-testid="pin-label"
+                      className={cn("font-medium", m.tone === "pending" ? "fill-fg-muted" : "fill-fg")}
                     >
-                      {short(m.title, 16)}
+                      {fitLabel(m.title, avail, labelUnits)}
                     </text>
                   )}
                 </g>
@@ -262,6 +311,6 @@ export default function RunRoute({ run, onSelect }: RunRouteProps) {
           </ol>
         </div>
       </div>
-    </section>
+    </VizPane>
   );
 }

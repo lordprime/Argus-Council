@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import CommsHeatmap from "@/components/viz/heatmap/CommsHeatmap";
 import { buildHeat, legendRanges, level, pickBin } from "@/components/viz/heatmap/model";
-import RunRoute from "@/components/viz/route/RunRoute";
+import RunRoute, { fitLabel, LABEL_MIN_PX, PIN_HIT_MIN_PX } from "@/components/viz/route/RunRoute";
 import { buildRoute } from "@/components/viz/route/model";
 import type { Actor, Member } from "@/lib/types";
 import { emptyRun, type RunState } from "@/stores/run";
@@ -116,8 +116,9 @@ describe("CommsHeatmap", () => {
     render(<CommsHeatmap run={makeRun()} onSelect={onSelect} />);
     const cells = () => screen.getAllByRole("gridcell");
     expect(cells().filter((c) => c.getAttribute("tabindex") === "0")).toHaveLength(1);
-    await userEvent.tab(); // metric buttons come first
-    for (let i = 0; i < 4; i++) await userEvent.tab();
+    await userEvent.tab(); // the metric control is one radiogroup, so one tab stop
+    expect(screen.getByRole("radio", { name: "Messages" })).toHaveFocus();
+    await userEvent.tab();
     expect(document.activeElement?.getAttribute("data-cell")).toBe("0-0");
     expect(screen.getByRole("tooltip")).toHaveTextContent("Chair");
     await userEvent.keyboard("{ArrowRight}");
@@ -129,8 +130,22 @@ describe("CommsHeatmap", () => {
     expect(document.activeElement?.getAttribute("data-cell")).toMatch(/^1-\d+$/);
     await userEvent.keyboard("{Enter}");
     expect(onSelect).toHaveBeenCalledWith({ nodeId: "m2" });
-    await userEvent.click(screen.getByRole("button", { name: "Errors" }));
-    expect(screen.getByRole("button", { name: "Errors" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("radio", { name: "Errors" }));
+    expect(screen.getByRole("radio", { name: "Errors" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("grid")).toHaveAccessibleName(/metric errors/);
+  });
+
+  it("draws 11px axis labels with room so the first and last are not clipped", () => {
+    const { container } = render(<CommsHeatmap run={makeRun()} />);
+    const ticks = Array.from(container.querySelectorAll<SVGTextElement>('[data-testid="heatmap-tick"]'));
+    expect(ticks.length).toBeGreaterThan(1);
+    const svgW = Number(screen.getByRole("grid").getAttribute("width"));
+    const half = (8 * 11 * 0.62) / 2; // widest label, "12:38:30" in the mono face
+    for (const t of ticks) {
+      expect(t.getAttribute("font-size")).toBe("11");
+      expect(Number(t.getAttribute("x")) - half).toBeGreaterThanOrEqual(0);
+      expect(Number(t.getAttribute("x")) + half).toBeLessThanOrEqual(svgW);
+    }
   });
 });
 
@@ -161,6 +176,30 @@ describe("RunRoute", () => {
     await userEvent.click(within(log).getByRole("button", { name: /Vote/ }));
     expect(onSelect).toHaveBeenLastCalledWith({ itemId: "v1", nodeId: undefined });
     expect(within(log).getByRole("button", { name: /Vote/ })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("gives every pin a hit circle of at least 12 and labels of at least 11px", () => {
+    const { container } = render(<RunRoute run={makeRun()} />);
+    const pins = container.querySelectorAll("[data-pin]");
+    expect(pins.length).toBeGreaterThan(5);
+    for (const pin of pins) {
+      const hit = pin.querySelector("[data-hit]");
+      expect(hit?.getAttribute("fill")).toBe("transparent");
+      expect(Number(hit?.getAttribute("r"))).toBeGreaterThanOrEqual(PIN_HIT_MIN_PX);
+    }
+    const labels = Array.from(container.querySelectorAll('[data-testid="pin-label"]'));
+    expect(labels.length).toBeGreaterThan(0);
+    for (const l of labels) expect(Number(l.getAttribute("font-size"))).toBeGreaterThanOrEqual(LABEL_MIN_PX);
+    // The viewBox has side margins for labels beside edge pins.
+    expect(screen.getByRole("group", { name: /^Route map/ }).getAttribute("viewBox")).toMatch(/^-\d+ 0 /);
+  });
+
+  it("truncates labels to the space beside the pin", () => {
+    expect(fitLabel("Research the problem", 200, 11)).toBe("Research the problem");
+    const cut = fitLabel("Research the problem", 70, 11);
+    expect(cut.endsWith("…")).toBe(true);
+    expect(cut.length).toBeLessThanOrEqual(Math.floor(70 / (11 * 0.56)));
+    expect(fitLabel("Scope the question", 0, 11)).toBe("Sco…");
   });
 
   it("plants the flag when the run completes", () => {
