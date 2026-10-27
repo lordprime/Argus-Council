@@ -21,6 +21,7 @@
   --warning: 180 83 9;
   --warning-subtle: 254 243 226;
   --danger: 185 28 28;
+  --danger-fg: 255 255 255;
   --danger-subtle: 253 236 236;
   --info: 3 105 161;
   --info-subtle: 230 243 250;
@@ -57,6 +58,8 @@
   --warning: 251 191 36;
   --warning-subtle: 46 36 16;
   --danger: 248 113 113;
+  /* Dark text on the light dark-mode red: white on #F87171 is only ~2.8:1. */
+  --danger-fg: 11 13 18;
   --danger-subtle: 58 21 23;
   --info: 56 189 248;
   --info-subtle: 14 36 51;

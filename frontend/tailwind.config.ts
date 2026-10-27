@@ -15,7 +15,7 @@ export default {
         accent: { DEFAULT: token("accent"), hover: token("accent-hover"), fg: token("accent-fg"), subtle: token("accent-subtle") },
         success: { DEFAULT: token("success"), subtle: token("success-subtle") },
         warning: { DEFAULT: token("warning"), subtle: token("warning-subtle") },
-        danger: { DEFAULT: token("danger"), subtle: token("danger-subtle") },
+        danger: { DEFAULT: token("danger"), fg: token("danger-fg"), subtle: token("danger-subtle") },
         info: { DEFAULT: token("info"), subtle: token("info-subtle") },
         neutral: { DEFAULT: token("neutral"), subtle: token("neutral-subtle") },
       },

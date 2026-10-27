@@ -4,16 +4,16 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const api = process.env.ARGUS_API_URL ?? "http://localhost:8000";
+const proxy = Object.fromEntries(
+  ["/api", "/health", "/mcp", "/a2a", "/acp", "/.well-known"].map((p) => [p, { target: api, changeOrigin: true }]),
+);
 
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  server: {
-    port: 5173,
-    proxy: Object.fromEntries(
-      ["/api", "/health", "/mcp", "/a2a", "/acp", "/.well-known"].map((p) => [p, { target: api, changeOrigin: true }]),
-    ),
-  },
+  server: { port: 5173, proxy },
+  // `vite preview` serves the production build with the same proxy (used for local e2e runs).
+  preview: { port: 4173, proxy },
   // No inlined data: assets, so the strict CSP (font-src 'self') holds.
   build: { sourcemap: false, chunkSizeWarningLimit: 600, assetsInlineLimit: 0 },
   test: {

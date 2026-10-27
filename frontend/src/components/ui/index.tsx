@@ -28,7 +28,7 @@ const variants: Record<Variant, string> = {
   primary: "bg-accent text-accent-fg hover:bg-accent-hover shadow-1",
   secondary: "bg-surface text-fg border border-border-strong hover:bg-surface-2",
   ghost: "text-fg-muted hover:bg-surface-2 hover:text-fg",
-  danger: "bg-danger text-white hover:opacity-90",
+  danger: "bg-danger text-danger-fg hover:opacity-90",
   "danger-ghost": "text-danger hover:bg-danger-subtle",
 };
 const sizes: Record<Size, string> = { sm: "h-8 px-2.5 text-sm gap-1.5", md: "h-9 px-3 text-base gap-2", lg: "h-10 px-4 text-base gap-2" };
@@ -129,20 +129,34 @@ export function SelectField({ label, hint, error, className, children, ...rest }
   );
 }
 
-export function Toggle({ label, checked, onChange, hint }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string }) {
+/**
+ * The one switch visual every switch in the app uses. The knob contrasts with the track in both states
+ * (muted knob on a neutral track when off, accent-fg knob on accent when on), so state never relies on
+ * a pale-on-pale knob.
+ */
+export function SwitchTrack({ checked }: { checked: boolean }) {
+  return (
+    <span aria-hidden className={cn("relative inline-block h-5 w-9 shrink-0 rounded-full border transition-colors duration-fast",
+      checked ? "bg-accent border-accent" : "bg-surface-3 border-border-strong")}>
+      <span className={cn("absolute left-0 top-0.5 size-3.5 rounded-full shadow-1 transition-transform duration-fast",
+        checked ? "translate-x-[1.125rem] bg-accent-fg" : "translate-x-0.5 bg-fg-muted")} />
+    </span>
+  );
+}
+
+export function Toggle({ label, checked, onChange, hint, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string; disabled?: boolean }) {
   const id = useId();
   return (
     <div className="flex items-start gap-3">
-      <button id={id} type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-        className={cn("mt-0.5 h-5 w-9 shrink-0 rounded-full border border-border-strong transition-colors duration-fast relative",
-          checked ? "bg-accent" : "bg-surface-3")}>
-        <span className={cn("absolute top-0.5 size-3.5 rounded-full bg-surface shadow-1 transition-transform duration-fast",
-          checked ? "translate-x-4" : "translate-x-0.5")} />
+      <button id={id} type="button" role="switch" aria-checked={checked} disabled={disabled}
+        aria-describedby={hint ? `${id}-hint` : undefined} onClick={() => onChange(!checked)}
+        className="mt-0.5 inline-flex rounded-full disabled:opacity-50 disabled:cursor-not-allowed">
+        <SwitchTrack checked={checked} />
       </button>
-      <label htmlFor={id} className="text-sm cursor-pointer">
-        <span className="font-medium">{label}</span>
-        {hint && <span className="block text-xs text-fg-subtle">{hint}</span>}
-      </label>
+      <div className="text-sm">
+        <label htmlFor={id} className="font-medium cursor-pointer">{label}</label>
+        {hint && <p id={`${id}-hint`} className="text-xs text-fg-subtle">{hint}</p>}
+      </div>
     </div>
   );
 }

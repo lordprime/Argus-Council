@@ -248,9 +248,10 @@ is read-only. Creating or revoking keys and changing the password need a signed-
 - [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
 - [x] M4 Protocols: MCP (server + client), A2A, ACP, hash-chained protocol ledger
 - [x] M5 Modes: coding sandbox, research tools with citations, chat; exporters (txt, md, html, LaTeX, PDF, DOCX, JSON)
-- [~] M6 Web UI: shell, auth, run composer, live run workspace (timeline, intercept/correct, approvals, votes,
-  budget meter, inspector, deliverable and exports), command palette; councils, skills, connections and
-  settings pages in progress
+- [x] M6 Web UI: shell, auth, run composer, live run workspace (timeline, intercept/correct, approvals, votes,
+  budget meter, inspector, deliverable and exports), command palette, runs list, council builder and detail
+  (resize, seats, guardrails), skills library and editor, connections (providers, MCP servers, remote agents,
+  ledger), settings (profile, appearance, API keys)
 - [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
 
 ## License

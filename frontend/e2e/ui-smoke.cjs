@@ -4,8 +4,13 @@ const { chromium } = require('playwright');
 const BASE = process.env.E2E_BASE ?? 'http://127.0.0.1:8080';
 const SHOTS = process.env.E2E_SHOTS;
 const stamp = Date.now();
+const PAGES = [
+  '/runs', '/councils', '/councils/new', '/skills', '/skills/new', '/connections/providers', '/connections/mcp',
+  '/connections/agents', '/connections/ledger', '/settings/profile', '/settings/api-keys',
+];
 (async () => {
-  const browser = await chromium.launch();
+  // E2E_CHROMIUM points at a preinstalled browser when the local Playwright's own download is absent.
+  const browser = await chromium.launch(process.env.E2E_CHROMIUM ? { executablePath: process.env.E2E_CHROMIUM } : {});
   const errors = [];
   for (const theme of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: theme });
@@ -36,7 +41,14 @@ const stamp = Date.now();
     await page.keyboard.press('Control+k');
     await page.getByPlaceholder('Search pages, runs, actions…').waitFor();
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/palette-${theme}.png` });
-    console.log(theme, 'ok, timeline items:', feedCount);
+    await page.keyboard.press('Escape');
+    // Every top-level page renders its heading without errors (console errors and CSP violations are collected).
+    for (const path of PAGES) {
+      await page.goto(`${BASE}${path}`);
+      await page.getByRole('heading', { level: 1 }).first().waitFor({ timeout: 10000 });
+      if (SHOTS) await page.screenshot({ path: `${SHOTS}/${path.slice(1).replaceAll('/', '-')}-${theme}.png`, fullPage: true });
+    }
+    console.log(theme, 'ok, timeline items:', feedCount, 'pages:', PAGES.length);
     await ctx.close();
   }
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -47,9 +59,16 @@ const stamp = Date.now();
   await mp.getByRole('button', { name: 'Sign in' }).click();
   await mp.waitForURL(`${BASE}/`);
   if (SHOTS) await mp.screenshot({ path: `${SHOTS}/home-mobile.png`, fullPage: true });
-  const overflow = await mp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  console.log('mobile horizontal overflow:', overflow);
-  if (overflow) throw new Error('horizontal overflow on mobile');
+  const overflowing = [];
+  for (const path of ['/', ...PAGES]) {
+    if (path !== '/') {
+      await mp.goto(`${BASE}${path}`);
+      await mp.getByRole('heading', { level: 1 }).first().waitFor({ timeout: 10000 });
+    }
+    if (await mp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) overflowing.push(path);
+  }
+  console.log('mobile horizontal overflow:', overflowing.length ? overflowing : 'none');
+  if (overflowing.length) throw new Error('horizontal overflow on mobile: ' + overflowing.join(', '));
   if (errors.length) throw new Error('browser errors: ' + JSON.stringify(errors));
   await browser.close();
 })().catch((e) => { console.error('E2E FAILED', e); process.exit(1); });
