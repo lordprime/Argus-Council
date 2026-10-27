@@ -58,6 +58,20 @@ uv run ruff check . && uv run ruff format --check .
 
 API docs are served at `http://localhost:8000/docs` outside production.
 
+## Providers
+
+Every agent seat names a provider and a model. Providers come from three places:
+
+1. **Your own connections** (`POST /api/v1/providers`): API keys are encrypted at rest and never returned.
+2. **System providers** from the environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+   `MISTRAL_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, or `ARGUS_<KIND>_BASE_URL` for self-hosted servers
+   (`ARGUS_OLLAMA_BASE_URL=http://ollama:11434/v1`, `ARGUS_VLLM_BASE_URL`, `ARGUS_LMSTUDIO_BASE_URL`).
+3. **`mock`**: an offline deterministic provider, so everything works without keys.
+
+The router adds retries with backoff, fallback chains, response caching for deterministic calls, and
+token and cost accounting. Claude uses the official `anthropic` SDK with adaptive thinking and server-side
+refusal fallback on the models that support it; OpenAI-compatible servers and Gemini use plain HTTP.
+
 ## Councils
 
 A council is a resizable group of agent seats. Each seat has a role, a provider/model and a persona.
@@ -77,7 +91,7 @@ curl -X POST localhost:8000/api/v1/councils/$ID/resize -H "Authorization: Bearer
 ## Roadmap
 
 - [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI
-- [ ] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, Ollama, vLLM, LM Studio)
+- [x] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp)
 - [ ] M3 Council runtime: thought bus, interception and correction, guardrails, live streaming
 - [ ] M4 Protocols: MCP (server + client), A2A, ACP
 - [ ] M5 Modes: coding sandbox, research pipeline, chat; exporters (txt, md, LaTeX, PDF, HTML)

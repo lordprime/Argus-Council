@@ -80,3 +80,19 @@ class CouncilMember(IdMixin, TimestampMixin, Base):
     config: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
     council: Mapped[Council] = relationship(back_populates="members")
+
+
+class ProviderConfig(IdMixin, TimestampMixin, Base):
+    """A user's named connection to an LLM backend. API keys are encrypted at rest."""
+
+    __tablename__ = "provider_configs"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(40))
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    options: Mapped[dict[str, Any]] = mapped_column(default=dict)

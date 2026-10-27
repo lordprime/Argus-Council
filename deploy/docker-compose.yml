@@ -64,6 +64,17 @@ services:
       ARGUS_ALLOW_REGISTRATION: ${ARGUS_ALLOW_REGISTRATION:-true}
       ARGUS_BOOTSTRAP_ADMIN_EMAIL: ${ARGUS_BOOTSTRAP_ADMIN_EMAIL:-}
       ARGUS_BOOTSTRAP_ADMIN_PASSWORD: ${ARGUS_BOOTSTRAP_ADMIN_PASSWORD:-}
+      ARGUS_ENCRYPTION_KEY: ${ARGUS_ENCRYPTION_KEY:-}
+      # System-wide LLM providers (users can also add their own in the UI)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
+      ARGUS_VLLM_BASE_URL: ${ARGUS_VLLM_BASE_URL:-}
+      ARGUS_LMSTUDIO_BASE_URL: ${ARGUS_LMSTUDIO_BASE_URL:-}
     volumes: ["argusdata:/data"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -81,5 +92,5 @@ volumes:
 
 networks:
   backend:
-    internal: true
+    internal: true # no egress: database and cache only
   frontend:

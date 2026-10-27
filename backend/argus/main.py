@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, councils, health
+from argus.api.v1 import auth, councils, health, providers
 from argus.cache.store import build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
@@ -21,6 +21,7 @@ from argus.core.logging import configure_logging, get_logger
 from argus.core.security import hash_password
 from argus.db.models import User
 from argus.db.session import Database
+from argus.services.llm import LLMRouter
 
 log = get_logger(__name__)
 
@@ -65,6 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.db = Database(settings)
         app.state.cache = await build_cache(settings.redis_url, settings.cache_default_ttl)
+        if not hasattr(app.state, "llm"):
+            app.state.llm = LLMRouter(settings, app.state.cache)
         if not settings.is_production:
             # Production schemas are managed by Alembic migrations.
             await app.state.db.create_all()
@@ -73,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await app.state.llm.aclose()
             await app.state.cache.close()
             await app.state.db.dispose()
 
@@ -126,4 +130,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api = "/api/v1"
     app.include_router(auth.router, prefix=api)
     app.include_router(councils.router, prefix=api)
+    app.include_router(providers.router, prefix=api)
     return app

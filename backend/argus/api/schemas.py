@@ -163,3 +163,51 @@ class CouncilOut(ORM):
     @classmethod
     def _sorted(cls, v: Any) -> Any:
         return sorted(v, key=lambda m: m.position) if isinstance(v, list) else v
+
+
+# ---------------------------------------------------------------- providers
+class ProviderConfigIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_\-]*$")
+    kind: str = Field(max_length=40)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=4000)
+    default_model: str | None = Field(default=None, max_length=120)
+    enabled: bool = True
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderConfigPatch(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=4000)
+    default_model: str | None = Field(default=None, max_length=120)
+    enabled: bool | None = None
+    options: dict[str, Any] | None = None
+
+
+class ProviderConfigOut(ORM):
+    id: uuid.UUID
+    name: str
+    kind: str
+    base_url: str | None
+    default_model: str | None
+    enabled: bool
+    options: dict[str, Any]
+    has_api_key: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessageIn(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(max_length=200_000)
+
+
+class CompleteIn(BaseModel):
+    provider: str = Field(default="mock", max_length=64)
+    model: str = Field(default="mock-1", max_length=120)
+    messages: list[ChatMessageIn] = Field(min_length=1, max_length=200)
+    max_tokens: int = Field(default=4096, ge=1, le=128_000)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    cache: bool | None = None
+    fallbacks: list[dict[str, str]] = Field(default_factory=list, max_length=5)

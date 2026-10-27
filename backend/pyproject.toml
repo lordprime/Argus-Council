@@ -20,6 +20,8 @@ dependencies = [
     "argon2-cffi>=23.1",
     "structlog>=24.4",
     "orjson>=3.10",
+    "anthropic>=1.0",
+    "cryptography>=43",
 ]
 
 [dependency-groups]

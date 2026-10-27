@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str | None = None
     bootstrap_admin_password: SecretStr | None = None
 
+    encryption_key: SecretStr | None = None  # defaults to a key derived from secret_key
+
+    # LLM layer
+    llm_cache_ttl: int = 3600
+    llm_max_retries: int = 3
+    provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
+    model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
 
