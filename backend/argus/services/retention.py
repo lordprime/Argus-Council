@@ -7,6 +7,8 @@ Policy (all ``ARGUS_RETENTION_*`` settings, 0 = keep forever):
 * ``EVENT_DAYS``   the event log of finished runs older than N days is dropped; the run row, its
                    result and its artifacts are kept, so the deliverable stays available.
 * ``AUDIT_DAYS``   audit rows older than N days are deleted (default 365).
+* ``WEBHOOK_DELIVERY_DAYS``  webhook delivery log rows older than N days (default 30).
+* ``NOTIFICATION_DAYS``      in-app notifications older than N days, read or not (default 90).
 * ``LEDGER_DAYS``  the hash-chained protocol ledger is never pruned by default. Every entry hashes
                    its predecessor and ``/connections/ledger/verify`` replays the chain from the
                    genesis hash at seq 1, so deleting any prefix makes verification report a
@@ -35,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.logging import get_logger
-from argus.db.models import AuditEvent, LedgerEntry, Run, RunEvent
+from argus.db.models import AuditEvent, LedgerEntry, Notification, Run, RunEvent, WebhookDelivery
 from argus.runtime.events import TERMINAL_STATUSES
 
 log = get_logger(__name__)
@@ -54,6 +56,8 @@ class RetentionStats:
     run_events: int = 0
     audit_events: int = 0
     ledger_entries: int = 0
+    webhook_deliveries: int = 0
+    notifications: int = 0
     blob_dirs: int = 0
     blob_bytes: int = 0
     error: str | None = None
@@ -68,6 +72,8 @@ class RetentionPolicy:
     event_days: int
     audit_days: int
     ledger_days: int
+    webhook_delivery_days: int
+    notification_days: int
     batch_size: int
     interval_s: int
     notes: list[str] = field(default_factory=list)
@@ -92,6 +98,8 @@ class RetentionPolicy:
             event_days=max(settings.retention_event_days, 0),
             audit_days=max(settings.retention_audit_days, 0),
             ledger_days=max(settings.retention_ledger_days, 0),
+            webhook_delivery_days=max(settings.retention_webhook_delivery_days, 0),
+            notification_days=max(settings.retention_notification_days, 0),
             batch_size=max(settings.retention_batch_size, 1),
             interval_s=max(settings.retention_interval_s, 60),
             notes=notes,
@@ -202,6 +210,8 @@ async def apply_retention(
     event_cut = _cutoff(policy.event_days, now)
     audit_cut = _cutoff(policy.audit_days, now)
     ledger_cut = _cutoff(policy.ledger_days, now)
+    delivery_cut = _cutoff(policy.webhook_delivery_days, now)
+    notification_cut = _cutoff(policy.notification_days, now)
 
     doomed: set[uuid.UUID] = set()
     async with sessionmaker() as s:
@@ -276,7 +286,17 @@ async def apply_retention(
                 s, LedgerEntry, LedgerEntry.ts < ledger_cut, batch, dry_run
             )
 
-        # 5. Blob directories left behind by runs deleted elsewhere.
+        # 5. Webhook delivery log and in-app notifications (both grow with every run).
+        if delivery_cut is not None:
+            stats.webhook_deliveries = await _prune_by_id(
+                s, WebhookDelivery, WebhookDelivery.ts < delivery_cut, batch, dry_run
+            )
+        if notification_cut is not None:
+            stats.notifications = await _prune_by_id(
+                s, Notification, Notification.created_at < notification_cut, batch, dry_run
+            )
+
+        # 6. Blob directories left behind by runs deleted elsewhere.
         orphans = await _orphan_blob_dirs(s, root)
         if orphans:
             d, b = await asyncio.to_thread(remove_blob_dirs, root, orphans, dry_run=dry_run)

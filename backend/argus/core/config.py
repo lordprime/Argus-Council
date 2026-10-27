@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     retention_audit_days: int = Field(default=365, ge=0)
     # The hash-chained ledger is never pruned by default: verification replays it from genesis.
     retention_ledger_days: int = Field(default=0, ge=0)
+    retention_webhook_delivery_days: int = Field(default=30, ge=0)  # webhook delivery log
+    retention_notification_days: int = Field(default=90, ge=0)  # in-app notifications, read or not
     retention_batch_size: int = Field(default=500, ge=1, le=10_000)
     retention_interval_s: int = Field(default=3600, ge=60)
     retention_enabled: bool = True  # run the periodic retention task in this process
