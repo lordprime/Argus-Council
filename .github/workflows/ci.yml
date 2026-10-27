@@ -88,9 +88,6 @@ jobs:
         if: failure()
         run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: argus-council/api:ci
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.0 \
+            image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --no-progress argus-council/api:ci
