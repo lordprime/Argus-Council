@@ -9,6 +9,7 @@
 # Options: --version TAG, --ca FILE (or ARGUS_EXTRA_CA), --no-cache, --pull, and the services to
 # build (api, web; default both).
 
+# shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 version="" ca="${ARGUS_EXTRA_CA:-}" services=() opts=()
@@ -25,6 +26,13 @@ done
 [ ${#services[@]} -gt 0 ] || services=(api web)
 version="${version:-$(git_version)}"
 require_docker
+# Rebuilding an existing tag moves it to the new images. update.sh tags the running images
+# rollback-<time> first, so its rollback target survives; a manual rebuild has no such copy.
+for svc in "${services[@]}"; do
+  if image_exists "argus-council/$svc:$version"; then
+    warn "argus-council/$svc:$version exists and will point at the new build"
+  fi
+done
 
 if [ -n "$ca" ]; then
   [ -f "$ca" ] || die "CA file not found: $ca"
