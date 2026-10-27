@@ -58,6 +58,7 @@ async def list_runs(
     db: DbDep,
     status_: str | None = Query(default=None, alias="status"),
     mode: str | None = None,
+    council_id: uuid.UUID | None = None,
     before: datetime | None = Query(default=None, description="Cursor: return runs created before this time"),
     limit: int = Query(default=50, ge=1, le=200),
 ):
@@ -68,6 +69,8 @@ async def list_runs(
         q = q.where(Run.status == status_)
     if mode:
         q = q.where(Run.mode == mode)
+    if council_id:
+        q = q.where(Run.council_id == council_id)
     rows = await db.execute(q.order_by(Run.created_at.desc()).limit(limit))
     return list(rows.scalars())
 

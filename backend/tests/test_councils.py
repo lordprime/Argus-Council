@@ -119,3 +119,48 @@ async def test_delete_council(client, auth):
     c = (await client.post(API, json={"name": "del"}, headers=auth)).json()
     assert (await client.delete(f"{API}/{c['id']}", headers=auth)).status_code == 204
     assert (await client.get(f"{API}/{c['id']}", headers=auth)).status_code == 404
+
+
+async def test_hand_added_seat_inherits_role_defaults(client, auth, app):
+    from argus.agents.roles import ROLES
+    from argus.runtime.agent import MemberSpec
+
+    roles = (await client.get("/api/v1/roles", headers=auth)).json()["roles"]
+    critic = next(r for r in roles if r["key"] == "critic")
+    assert critic["default_system_prompt"] == ROLES["critic"].system_prompt
+    spec = MemberSpec.from_snapshot(
+        {"id": "x", "name": "Critic", "role": "critic", "system_prompt": "", "config": {}}
+    )
+    assert spec.system_prompt == ROLES["critic"].system_prompt
+    assert spec.overseer is ROLES["critic"].overseer
+    assert spec.tools == list(ROLES["critic"].default_tools)
+    # Explicit values still win, including an empty tool list.
+    spec = MemberSpec.from_snapshot(
+        {"id": "x", "name": "C", "role": "critic", "system_prompt": "Be brief.", "config": {"tools": []}}
+    )
+    assert spec.system_prompt == "Be brief." and spec.tools == []
+
+
+async def test_council_guardrails_validated_on_save(client, auth):
+    body = {"name": "g", "size": 2, "guardrails": {"max_stepz": 3}}
+    r = await client.post("/api/v1/councils", headers=auth, json=body)
+    assert r.status_code == 422 and "max_stepz" in r.text
+    body["guardrails"] = {"max_steps": 3}
+    r = await client.post("/api/v1/councils", headers=auth, json=body)
+    assert r.status_code == 201, r.text
+    r = await client.patch(
+        f"/api/v1/councils/{r.json()['id']}", headers=auth, json={"guardrails": {"budget": {"usd": -1}}}
+    )
+    assert r.status_code == 422
+
+
+async def test_runs_filter_by_council(client, auth):
+    council = (
+        await client.post("/api/v1/councils", headers=auth, json={"name": "f", "size": 2, "mode": "chat"})
+    ).json()
+    await client.post(
+        "/api/v1/runs", headers=auth, json={"topic": "a", "mode": "chat", "council_id": council["id"]}
+    )
+    await client.post("/api/v1/runs", headers=auth, json={"topic": "b", "mode": "chat", "size": 2})
+    runs = (await client.get("/api/v1/runs", headers=auth, params={"council_id": council["id"]})).json()
+    assert [r["topic"] for r in runs] == ["a"]

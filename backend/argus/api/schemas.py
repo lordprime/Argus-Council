@@ -131,6 +131,23 @@ class MemberOut(ORM):
     config: dict[str, Any]
 
 
+def _valid_guardrails(v: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Reject unknown keys or bad values when a council or run is saved, not when it later starts."""
+    if v:
+        from pydantic import ValidationError
+
+        from argus.runtime.guardrails import Guardrails
+
+        try:
+            Guardrails.resolve(v)
+        except ValidationError as exc:
+            problems = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc']) or 'guardrails'}: {e['msg']}" for e in exc.errors()[:5]
+            )
+            raise ValueError(f"Invalid guardrails: {problems}") from None
+    return v
+
+
 class CouncilIn(BaseModel):
     name: str = _NAME
     description: str = Field(default="", max_length=4000)
@@ -154,6 +171,8 @@ class CouncilIn(BaseModel):
             raise ValueError(f"council size {n} outside [{self.min_size}, {self.max_size}]")
         return self
 
+    _guardrails = field_validator("guardrails")(_valid_guardrails)
+
 
 class CouncilPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[\w .\-]+$")
@@ -162,6 +181,8 @@ class CouncilPatch(BaseModel):
     min_size: int | None = Field(default=None, ge=1, le=64)
     max_size: int | None = Field(default=None, ge=1, le=64)
     guardrails: dict[str, Any] | None = None
+
+    _guardrails = field_validator("guardrails")(_valid_guardrails)
 
 
 class ResizeIn(BaseModel):
@@ -251,6 +272,8 @@ class RunIn(BaseModel):
     model: str = Field(default="mock-1", max_length=120)
     outputs: list[OutputFormat] = Field(default_factory=lambda: ["md"], max_length=7)
     guardrails: dict[str, Any] = Field(default_factory=dict)
+
+    _guardrails = field_validator("guardrails")(_valid_guardrails)
 
 
 class RunOut(ORM):

@@ -97,7 +97,7 @@ async def test_run_with_saved_council_and_guardrail_layers(client, auth):
 
 async def test_invalid_guardrails_rejected(client, auth):
     r = await client.post(API, headers=auth, json={"topic": "x", "guardrails": {"max_stepz": 1}})
-    assert r.status_code == 400 and r.json()["error"]["message"] == "Invalid guardrails"
+    assert r.status_code == 422 and "max_stepz" in r.text  # rejected at validation, before any run exists
 
 
 async def test_overseer_hold_forces_correction(client, auth, app):

@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from argus.agents.roles import ROLES
 from argus.core.logging import get_logger
 from argus.core.metrics import (
     LLM_CALLS,
@@ -61,15 +62,24 @@ class MemberSpec:
     @classmethod
     def from_snapshot(cls, m: dict[str, Any]) -> MemberSpec:
         cfg = m.get("config") or {}
+        # Seats added by hand may omit prompt, tools or the overseer flag: fall back to the role's
+        # defaults. Explicit values (including an empty tool list) always win.
+        role = ROLES.get(m["role"])
+        tools = cfg.get("tools")
+        if tools is None:
+            tools = list(role.default_tools) if role else []
+        overseer = cfg.get("overseer")
+        if overseer is None:
+            overseer = role.overseer if role else False
         return cls(
             id=str(m["id"]),
             name=m["name"],
             role=m["role"],
             provider=m.get("provider") or "mock",
             model=m.get("model") or "mock-1",
-            system_prompt=m.get("system_prompt") or "",
-            overseer=bool(cfg.get("overseer")),
-            tools=list(cfg.get("tools") or []),
+            system_prompt=(m.get("system_prompt") or "").strip() or (role.system_prompt if role else ""),
+            overseer=bool(overseer),
+            tools=list(tools),
             fallbacks=[
                 Route(f["provider"], f["model"]) for f in cfg.get("fallbacks") or [] if "provider" in f
             ],

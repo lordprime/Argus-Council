@@ -22,6 +22,8 @@ async def list_roles(_: CurrentPrincipal) -> dict:
                 "description": r.description,
                 "overseer": r.overseer,
                 "default_tools": list(r.default_tools),
+                # Used when a seat's own prompt is left blank.
+                "default_system_prompt": r.system_prompt,
             }
             for r in ROLES.values()
         ],
