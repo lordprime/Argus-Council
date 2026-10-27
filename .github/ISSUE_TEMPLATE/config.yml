@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/morpheuslord/Argus-Council/security/advisories/new
+    about: Report vulnerabilities privately, as described in SECURITY.md. Please do not open a public issue.
+  - name: Documentation
+    url: https://morpheuslord.github.io/Argus-Council/
+    about: Getting started, configuration, concepts and the API reference.
