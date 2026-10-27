@@ -1,21 +1,17 @@
-import { Code2, FileText, MessageCircle, Sparkles, Wand2 } from "lucide-react";
+import { ChevronDown, ChevronRight, History, Play } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 
-import { RunRow } from "@/components/run/RunRow";
-import { Button, Callout, Card, EmptyState, ErrorState, Segmented, SelectField, Skeleton, TextArea, TextField, Toggle } from "@/components/ui";
+import { Stepper } from "@/components/councils/fields";
+import { RunRowList } from "@/components/run/RunRow";
+import { Button, Callout, Card, EmptyState, ErrorState, Kbd, Segmented, SelectField, Skeleton, TextArea, TextField, Toggle } from "@/components/ui";
 import { RoleAvatar } from "@/components/ui/role";
+import { MODES } from "@/features/councils/logic";
 import { SaveTemplateButton, TemplatePicker } from "@/features/templates/components";
 import { errorMessage } from "@/lib/api";
 import { useCouncils, useCreateRun, useProviderKinds, useProviders, useRoles, useRunsList } from "@/lib/queries";
 import type { Mode, OutputFormat } from "@/lib/types";
 
-const MODES: { value: Mode; label: string; hint: string; icon: typeof Sparkles }[] = [
-  { value: "research", label: "Research", hint: "Gather, analyze, cite, write.", icon: FileText },
-  { value: "coding", label: "Coding", hint: "Design, implement, test in a sandbox.", icon: Code2 },
-  { value: "chat", label: "Chat", hint: "Conversational with oversight.", icon: MessageCircle },
-  { value: "general", label: "General", hint: "Anything else.", icon: Wand2 },
-];
 const DEFAULT_SIZE: Record<Mode, number> = { research: 5, coding: 6, chat: 2, general: 4 };
 const FORMATS: { value: OutputFormat; label: string }[] = [
   { value: "md", label: "Markdown" }, { value: "pdf", label: "PDF" }, { value: "latex", label: "LaTeX" },
@@ -47,16 +43,23 @@ export function rosterFor(rosters: Record<string, string[]> | undefined, oversee
   return [...base, ...Array.from({ length: size - base.length }, (_, i) => pool[i % pool.length]!)];
 }
 
+/** Router state a "Start a follow-up run" link passes to prefill the composer. */
+export interface ComposerPrefill { topic: string; mode: Mode; description?: string }
+const MIN_SEATS = 1;
+const MAX_SEATS = 12;
+
 function Composer() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const prefill = (location.state as { prefill?: ComposerPrefill } | null)?.prefill;
   const roles = useRoles();
   const councils = useCouncils();
   const kinds = useProviderKinds();
   const providers = useProviders();
   const create = useCreateRun();
-  const [topic, setTopic] = useState("");
-  const [description, setDescription] = useState("");
-  const [mode, setMode] = useState<Mode>("research");
+  const [topic, setTopic] = useState(prefill?.topic ?? "");
+  const [description, setDescription] = useState(prefill?.description ?? "");
+  const [mode, setMode] = useState<Mode>(prefill?.mode ?? "research");
   const [councilId, setCouncilId] = useState("");
   const [size, setSize] = useState(DEFAULT_SIZE.research);
   const [outputs, setOutputs] = useState<OutputFormat[]>(["md"]);
@@ -156,14 +159,8 @@ function Composer() {
 
         {!councilId && (
           <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium" id="size-label">Council size</span>
-              <div className="inline-flex items-center rounded-md border border-border-strong" role="group" aria-labelledby="size-label">
-                <button type="button" aria-label="Fewer seats" className="h-8 w-8" onClick={() => setSize((s) => Math.max(1, s - 1))}>−</button>
-                <span className="w-8 text-center tabular" aria-live="polite">{size}</span>
-                <button type="button" aria-label="More seats" className="h-8 w-8" onClick={() => setSize((s) => Math.min(12, s + 1))}>+</button>
-              </div>
-            </div>
+            <Stepper label="Council size" value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
+              hint={`Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
             <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
               {roster.map((r, i) => (
                 <li key={`${r}-${i}`} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 pl-1 pr-2.5 h-7 text-sm">
@@ -191,21 +188,20 @@ function Composer() {
           </div>
         </fieldset>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
           <SelectField label="Guardrails" value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof PRESETS)}
-            hint="Budget, step limits and how strongly overseers intervene.">
+            hint="Budget, step limits and how strongly overseers intervene." className="sm:max-w-[calc(50%-0.5rem)]">
             <option value="strict">Strict</option>
             <option value="balanced">Balanced (default)</option>
             <option value="permissive">Permissive</option>
           </SelectField>
-          <div className="flex items-end">
-            <Button type="button" variant="ghost" onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced}>
-              {advanced ? "Hide advanced" : "Advanced guardrails"}
-            </Button>
-          </div>
+          <Button type="button" variant="ghost" size="sm" className="self-start -ml-2.5" icon={advanced ? ChevronDown : ChevronRight}
+            onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced} aria-controls="advanced-guardrails">
+            {advanced ? "Hide advanced guardrails" : "Advanced guardrails"}
+          </Button>
         </div>
         {advanced && (
-          <div className="grid gap-4 sm:grid-cols-3 rounded-lg bg-surface-2 p-4">
+          <div id="advanced-guardrails" className="grid gap-4 sm:grid-cols-3 rounded-lg bg-surface-2 p-4">
             <TextField label="Budget (USD)" type="number" min="0" step="0.5" value={budget} onChange={(e) => setBudget(e.target.value)} />
             <TextField label="Max steps" type="number" min="1" value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} />
             <SelectField label="Overseer intercepts" value={interceptMode} onChange={(e) => setInterceptMode(e.target.value)}>
@@ -233,10 +229,15 @@ function Composer() {
           </Callout>
         )}
         <div className="flex items-center gap-3">
-          <Button type="submit" variant="primary" size="lg" icon={Sparkles} loading={create.isPending} disabled={!topic.trim()}>
+          <Button type="submit" variant="primary" size="lg" icon={Play} loading={create.isPending} disabled={!topic.trim()}
+            aria-describedby={!topic.trim() ? "start-hint" : undefined}>
             Start run
           </Button>
-          <span className="text-xs text-fg-subtle">⌘↵</span>
+          {topic.trim() ? (
+            <span className="text-xs text-fg-subtle [@media(pointer:coarse)]:hidden"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> to start</span>
+          ) : (
+            <span id="start-hint" className="text-xs text-fg-subtle">Add a topic to start.</span>
+          )}
           <span className="ml-auto"><SaveTemplateButton getConfig={buildConfig} disabled={!topic.trim()} /></span>
         </div>
       </form>
@@ -260,7 +261,7 @@ export default function Home() {
       {active.data && active.data.length > 0 && (
         <section aria-labelledby="active-h">
           <h2 id="active-h" className="text-lg mb-2">Active</h2>
-          <Card as="div"><ul className="divide-y divide-border">{active.data.map((r) => <RunRow key={r.id} run={r} />)}</ul></Card>
+          <Card as="div"><RunRowList runs={active.data} /></Card>
         </section>
       )}
       <section aria-labelledby="recent-h">
@@ -273,10 +274,10 @@ export default function Home() {
         ) : recent.error ? (
           <ErrorState error={recent.error} onRetry={() => void recent.refetch()} />
         ) : recent.data?.length ? (
-          <Card as="div"><ul className="divide-y divide-border">{recent.data.map((r) => <RunRow key={r.id} run={r} />)}</ul></Card>
+          <Card as="div"><RunRowList runs={recent.data} /></Card>
         ) : (
           <Card as="div">
-            <EmptyState icon={Sparkles} title="No runs yet" body="Try one of these:"
+            <EmptyState icon={History} title="No runs yet" body="Try one of these:"
               action={
                 <div className="flex flex-wrap justify-center gap-2">
                   {EXAMPLES.map((ex) => (

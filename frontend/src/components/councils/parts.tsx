@@ -3,20 +3,16 @@
 import { Eye, Minus, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { Badge, Button, Dialog, TextField } from "@/components/ui";
+import { ModeLabel } from "@/components/run/ModeLabel";
+import { Button, Dialog, TextField } from "@/components/ui";
 import { RoleAvatar } from "@/components/ui/role";
-import { MODE_LABEL, MODES, roleTitle } from "@/features/councils/logic";
+import { roleTitle } from "@/features/councils/logic";
 import { cn } from "@/lib/cn";
 import type { Member, RoleInfo } from "@/lib/types";
 
+/** A council's mode: the shared ModeLabel badge, so councils and runs render mode identically. */
 export function ModeBadge({ mode }: { mode: string }) {
-  const m = MODES.find((x) => x.value === mode);
-  return (
-    <Badge tone="accent">
-      {m && <m.icon className="size-3" aria-hidden />}
-      {MODE_LABEL[mode] ?? mode}
-    </Badge>
-  );
+  return <ModeLabel mode={mode} variant="badge" />;
 }
 
 export const isOverseer = (m: Pick<Member, "config" | "role">, overseers?: Set<string>) =>

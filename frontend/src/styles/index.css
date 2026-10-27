@@ -7,11 +7,13 @@
 @tailwind utilities;
 
 @layer base {
+  /* The root stays at the browser default (16px) so every rem token renders at its spec size.
+     The 14px body copy size is applied on <body>, never on <html> (that would shrink the rem unit). */
   html {
-    @apply bg-canvas text-fg font-sans text-base antialiased;
+    @apply bg-canvas text-fg font-sans antialiased;
   }
   body {
-    @apply min-h-screen bg-canvas;
+    @apply min-h-screen bg-canvas text-base;
   }
   :focus-visible {
     outline: 2px solid rgb(var(--focus-ring));

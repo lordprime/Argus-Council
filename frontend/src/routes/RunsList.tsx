@@ -2,13 +2,14 @@ import { History, Plus, RefreshCw, SearchX, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
+import { MODE_META } from "@/components/run/ModeLabel";
 import { Button, Card, Dialog, EmptyState, ErrorState, PageHeader, SelectField, Skeleton, TextField } from "@/components/ui";
 import { errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useRunsList } from "@/lib/queries";
 import type { Run } from "@/lib/types";
 import { TERMINAL, useDeleteRuns } from "@/features/runs/queries";
-import { MODE_META, RunsStack, RunsTable, SelectAll } from "@/features/runs/RunsViews";
+import { RunsStack, RunsTable, SelectAll } from "@/features/runs/RunsViews";
 import { useMediaQuery } from "@/features/runs/useMediaQuery";
 import { toast } from "@/stores/toast";
 
@@ -18,8 +19,9 @@ const MAX_LIMIT = 200; // backend cap for GET /runs?limit=
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-const primaryLink =
-  "inline-flex items-center gap-2 h-9 px-3 text-base rounded-md bg-accent text-accent-fg font-medium shadow-1 hover:bg-accent-hover transition-colors duration-fast";
+const linkBase = "inline-flex items-center gap-2 h-9 px-3 text-base rounded-md font-medium transition-colors duration-fast";
+const primaryLink = `${linkBase} bg-accent text-accent-fg shadow-1 hover:bg-accent-hover`;
+const secondaryLink = `${linkBase} bg-surface text-fg border border-border-strong hover:bg-surface-2`;
 
 function TableSkeleton() {
   return (
@@ -101,6 +103,8 @@ export default function RunsList() {
   // Only act on runs that are visible and deletable right now.
   const chosen = runs.filter((r) => selected.has(r.id) && TERMINAL.has(r.status));
   const filtered = Boolean(status || mode || search);
+  // Filters over zero runs are noise (audit C-23): show them once there is something to filter.
+  const showFilters = filtered || Boolean(q.data?.length);
 
   const toggle = (id: string, on: boolean) =>
     setSelected((s) => {
@@ -122,7 +126,7 @@ export default function RunsList() {
           </>
         } />
 
-      <div role="search" aria-label="Filter runs" className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_11rem_11rem_auto] items-end mb-4">
+      {showFilters && <div role="search" aria-label="Filter runs" className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_11rem_11rem_auto] items-end mb-4">
         <TextField label="Search topics" type="search" className="col-span-2 sm:col-span-1" placeholder="Filter by topic…" value={search}
           onChange={(e) => setParam("q", e.target.value)} />
         <SelectField label="Status" value={status} onChange={(e) => setParam("status", e.target.value)}>
@@ -135,7 +139,7 @@ export default function RunsList() {
         </SelectField>
         <Button variant="ghost" icon={X} onClick={clearFilters} disabled={!filtered}
           className={cn("justify-self-start", !filtered && "hidden sm:inline-flex")}>Clear</Button>
-      </div>
+      </div>}
 
       <div className="flex flex-wrap items-center gap-3 min-h-9 mb-2">
         {!wide && runs.some((r) => TERMINAL.has(r.status)) && (
@@ -167,7 +171,7 @@ export default function RunsList() {
               action={<Button onClick={clearFilters} icon={X}>Clear filters</Button>} />
           ) : (
             <EmptyState icon={History} title="No runs yet" body="Start a run from Home and it will show up here."
-              action={<Link to="/" className={primaryLink}><Plus className="size-4" aria-hidden />Start a run</Link>} />
+              action={<Link to="/" className={secondaryLink}><Plus className="size-4" aria-hidden />Start a run</Link>} />
           )
         ) : wide ? (
           <RunsTable runs={runs} selected={selected} onToggle={toggle} onToggleAll={toggleAll} />

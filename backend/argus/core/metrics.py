@@ -60,3 +60,24 @@ PROTOCOL_CALLS = Counter(
 def safe_label(value: str | None, limit: int = 80) -> str:
     """Bound label cardinality/size (labels come partly from user-configured names)."""
     return (value or "unknown")[:limit]
+
+
+# LLM failure modes (recorded by the router, so agents, overseers and /llm/complete all count).
+LLM_ERRORS = Counter(
+    "argus_llm_errors_total",
+    "LLM provider errors",
+    ["provider_kind", "status_class", "retryable"],
+    registry=REGISTRY,
+)
+LLM_FALLBACKS = Counter(
+    "argus_llm_fallbacks_total",
+    "LLM calls served by a fallback (another route, or complete() after a failed stream)",
+    ["kind"],
+    registry=REGISTRY,
+)
+OVERSIGHT_FAILURES = Counter(
+    "argus_oversight_review_failures_total",
+    "Overseer reviews that failed (the thought passed unreviewed)",
+    ["role"],
+    registry=REGISTRY,
+)

@@ -4,17 +4,35 @@ import * as RDialog from "@radix-ui/react-dialog";
 import * as RTabs from "@radix-ui/react-tabs";
 import {
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   CircleDashed,
+  Eye,
+  EyeOff,
   Info,
   Loader2,
+  Minus,
   PauseCircle,
+  Plus,
   ShieldX,
   X,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { forwardRef, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import {
+  forwardRef,
+  useId,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ElementType,
+  type InputHTMLAttributes,
+  type KeyboardEvent,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from "react";
+import { Link, NavLink } from "react-router";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -33,6 +51,13 @@ const variants: Record<Variant, string> = {
 };
 const sizes: Record<Size, string> = { sm: "h-8 px-2.5 text-sm gap-1.5", md: "h-9 px-3 text-base gap-2", lg: "h-10 px-4 text-base gap-2" };
 
+/**
+ * Touch-size variants (spec §7.6): on a coarse pointer every control grows to a 44px target. Desktop
+ * sizes are untouched. `touchTarget` is for anything with a height, `touchSquare` for icon-only controls.
+ */
+export const touchTarget = "[@media(pointer:coarse)]:min-h-11";
+export const touchSquare = "[@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11";
+
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
@@ -50,6 +75,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cn(
         "inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast",
         "disabled:opacity-50 disabled:cursor-not-allowed min-w-6 min-h-6 whitespace-nowrap",
+        touchTarget,
         variants[variant],
         sizes[size],
         className,
@@ -70,7 +96,7 @@ export const IconButton = forwardRef<HTMLButtonElement, ButtonProps & { label: s
 ) {
   return (
     <Button ref={ref} aria-label={label} title={label} icon={icon} size={size} variant={variant}
-      className={cn("px-0 aspect-square", className)} {...rest} />
+      className={cn("px-0 aspect-square", touchSquare, className)} {...rest} />
   );
 });
 
@@ -93,9 +119,10 @@ function Shell({ id, label, hint, error, className, children }: FieldShell & { i
   );
 }
 
-const control =
+/** Shared look of text inputs and selects (exported so area-specific fields stay identical). */
+export const control =
   "w-full rounded-md border border-border-strong bg-surface px-3 text-base text-fg placeholder:text-fg-subtle " +
-  "disabled:opacity-60 aria-[invalid=true]:border-danger";
+  "disabled:opacity-60 aria-[invalid=true]:border-danger " + touchTarget;
 
 export function TextField({ label, hint, error, className, ...rest }: FieldShell & InputHTMLAttributes<HTMLInputElement>) {
   const id = useId();
@@ -103,6 +130,30 @@ export function TextField({ label, hint, error, className, ...rest }: FieldShell
     <Shell id={id} label={label} hint={hint} error={error} className={className}>
       <input id={id} className={cn(control, "h-9")} aria-invalid={Boolean(error) || undefined}
         aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined} {...rest} />
+    </Shell>
+  );
+}
+
+/**
+ * Password input with a show/hide toggle. The toggle's name is its visible text plus sr-only context
+ * ("Show password"), never an aria-label, so the field stays the only element labelled "Password".
+ */
+export function PasswordField({ label, hint, error, className, ...rest }: FieldShell & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  const id = useId();
+  const [visible, setVisible] = useState(false);
+  return (
+    <Shell id={id} label={label} hint={hint} error={error} className={className}>
+      <div className="relative">
+        <input id={id} type={visible ? "text" : "password"} className={cn(control, "h-9 pr-20")} aria-invalid={Boolean(error) || undefined}
+          aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined} spellCheck={false} autoCapitalize="off" {...rest} />
+        <button type="button" aria-controls={id} onClick={() => setVisible((v) => !v)}
+          className={cn("absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 h-7 px-2 rounded-sm text-xs font-medium",
+            "text-fg-muted hover:bg-surface-2 hover:text-fg", "[@media(pointer:coarse)]:h-10")}>
+          {visible ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
+          {visible ? "Hide" : "Show"}<span className="sr-only"> {label.toLowerCase()}</span>
+        </button>
+      </div>
+      <span className="sr-only" aria-live="polite">{visible ? `${label} is visible` : ""}</span>
     </Shell>
   );
 }
@@ -144,13 +195,21 @@ export function SwitchTrack({ checked }: { checked: boolean }) {
   );
 }
 
+/**
+ * Hit area for a button that wraps a `SwitchTrack`: the 20px track sits centred in a 24px (desktop) or
+ * 44px (touch) target so switches meet WCAG 2.5.8. Use it on every switch button.
+ */
+export const switchHit =
+  "inline-flex items-center justify-center min-h-6 rounded-full disabled:opacity-50 disabled:cursor-not-allowed " +
+  "[@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11";
+
 export function Toggle({ label, checked, onChange, hint, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string; disabled?: boolean }) {
   const id = useId();
   return (
     <div className="flex items-start gap-3">
       <button id={id} type="button" role="switch" aria-checked={checked} disabled={disabled}
         aria-describedby={hint ? `${id}-hint` : undefined} onClick={() => onChange(!checked)}
-        className="mt-0.5 inline-flex rounded-full disabled:opacity-50 disabled:cursor-not-allowed">
+        className={cn(switchHit, "-my-0.5 [@media(pointer:coarse)]:-my-3")}>
         <SwitchTrack checked={checked} />
       </button>
       <div className="text-sm">
@@ -162,27 +221,138 @@ export function Toggle({ label, checked, onChange, hint, disabled }: { label: st
 }
 
 // ------------------------------------------------------------------ Segmented control
-export function Segmented<T extends string>({ label, value, onChange, options }: {
+type SegSize = "sm" | "md";
+type SegOption<T extends string> = { value: T; label: string; hint?: string; icon?: LucideIcon };
+
+/**
+ * Shared look of every segmented control (radios and tabs). The selected segment carries a 1px accent
+ * ring, which keeps at least 3:1 against both the track and the segment in light and dark (WCAG 1.4.11);
+ * in dark mode it is also raised to surface-3 so it reads lighter than the track, never darker.
+ */
+const segTrack = "inline-flex max-w-full gap-1 rounded-lg bg-surface-2 p-1";
+const segSizes: Record<SegSize, string> = { sm: "h-7 px-2.5 text-xs gap-1", md: "h-8 px-3 text-sm gap-1.5" };
+const segItem = (on: boolean, size: SegSize) =>
+  cn("inline-flex items-center justify-center rounded-md whitespace-nowrap transition-colors duration-fast", segSizes[size], touchTarget,
+    on ? "bg-surface dark:bg-surface-3 text-fg font-medium shadow-1 ring-1 ring-inset ring-accent" : "text-fg-muted hover:text-fg hover:bg-surface-3/60");
+
+/** Arrow/Home/End handling shared by radiogroups and tablists (roving tabindex: only the current item is tabbable). */
+function useRoving<T extends string>(options: { value: T }[], value: T, onChange: (v: T) => void) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const n = options.length;
+    const i = Math.max(0, options.findIndex((o) => o.value === value));
+    let next = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (i + 1) % n;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (i - 1 + n) % n;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = n - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    onChange(options[next]!.value);
+    refs.current[next]?.focus();
+  };
+  const hasValue = options.some((o) => o.value === value);
+  const tabIndex = (o: { value: T }, i: number) => (o.value === value || (!hasValue && i === 0) ? 0 : -1);
+  return { refs, onKeyDown, tabIndex };
+}
+
+export function Segmented<T extends string>({ label, value, onChange, options, size = "md", hideLabel, className }: {
   label: string;
   value: T;
   onChange: (v: T) => void;
-  options: { value: T; label: string; hint?: string; icon?: LucideIcon }[];
+  options: SegOption<T>[];
+  size?: SegSize;
+  /** Keep the legend for assistive tech only (for toolbars where context already names the control). */
+  hideLabel?: boolean;
+  className?: string;
 }) {
+  const { refs, onKeyDown, tabIndex } = useRoving(options, value, onChange);
   return (
-    <fieldset className="flex flex-col gap-1">
-      <legend className="text-sm font-medium mb-1">{label}</legend>
-      <div role="radiogroup" aria-label={label} className="inline-flex flex-wrap gap-1 rounded-lg bg-surface-2 p-1">
-        {options.map((o) => (
-          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} title={o.hint}
-            onClick={() => onChange(o.value)}
-            className={cn("inline-flex items-center gap-1.5 rounded-md px-3 h-8 text-sm transition-colors duration-fast",
-              value === o.value ? "bg-surface text-fg shadow-1 font-medium" : "text-fg-muted hover:text-fg")}>
-            {o.icon && <o.icon className="size-4" aria-hidden />}
+    <fieldset className={cn("flex flex-col gap-1 min-w-0", className)}>
+      <legend className={cn(hideLabel ? "sr-only" : "text-sm font-medium mb-1")}>{label}</legend>
+      <div role="radiogroup" aria-label={label} className={cn(segTrack, "flex-wrap self-start")}>
+        {options.map((o, i) => (
+          <button key={o.value} ref={(el) => { refs.current[i] = el; }} type="button" role="radio" aria-checked={value === o.value}
+            title={o.hint} tabIndex={tabIndex(o, i)} onKeyDown={onKeyDown}
+            onClick={() => onChange(o.value)} className={segItem(value === o.value, size)}>
+            {o.icon && <o.icon className={size === "sm" ? "size-3.5" : "size-4"} aria-hidden />}
             {o.label}
           </button>
         ))}
       </div>
     </fieldset>
+  );
+}
+
+/**
+ * The segmented look as a tablist (for view switchers). Each tab gets the id `${idPrefix}-tab-${value}` and
+ * controls `panelId`; give the panel `role="tabpanel"` and `aria-labelledby` that tab id.
+ */
+export function SegmentedTabs<T extends string>({ label, value, onChange, options, idPrefix, panelId, size = "sm", className }: {
+  label: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: SegOption<T>[];
+  idPrefix: string;
+  panelId: string;
+  size?: SegSize;
+  className?: string;
+}) {
+  const { refs, onKeyDown, tabIndex } = useRoving(options, value, onChange);
+  return (
+    <div role="tablist" aria-label={label} className={cn(segTrack, "overflow-x-auto", className)}>
+      {options.map((o, i) => (
+        <button key={o.value} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`${idPrefix}-tab-${o.value}`}
+          aria-selected={value === o.value} aria-controls={panelId} title={o.hint} tabIndex={tabIndex(o, i)}
+          onKeyDown={onKeyDown} onClick={() => onChange(o.value)} className={segItem(value === o.value, size)}>
+          {o.icon && <o.icon className={size === "sm" ? "size-3.5" : "size-4"} aria-hidden />}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ Stepper
+/** Bounded integer stepper (council size, seat counts). Promoted from components/councils/fields. */
+export function Stepper({ label, value, min, max, onChange, unit = "seats", hint, error, disabled }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  unit?: string;
+  hint?: ReactNode;
+  error?: string;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const atMin = value <= min;
+  const atMax = value >= max;
+  const btn = cn("inline-flex items-center justify-center h-9 w-9 text-fg-muted hover:bg-surface-2 hover:text-fg",
+    "disabled:opacity-40 disabled:cursor-not-allowed", touchSquare);
+  return (
+    <div className="flex flex-col gap-1">
+      <span id={`${id}-label`} className="text-sm font-medium">{label}</span>
+      <div role="group" aria-labelledby={`${id}-label`} aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined}
+        className={cn("inline-flex items-center self-start rounded-md border bg-surface", error ? "border-danger" : "border-border-strong")}>
+        <button type="button" aria-label={`Fewer ${unit}`} disabled={disabled || atMin}
+          title={atMin ? `Minimum is ${min}` : `Fewer ${unit}`} className={cn(btn, "rounded-l-md")}
+          onClick={() => onChange(Math.max(min, value - 1))}>
+          <Minus className="size-4" aria-hidden />
+        </button>
+        <output aria-live="polite" className="min-w-12 px-1 text-center tabular text-base font-medium border-x border-border">
+          {value}
+        </output>
+        <button type="button" aria-label={`More ${unit}`} disabled={disabled || atMax}
+          title={atMax ? `Maximum is ${max}` : `More ${unit}`} className={cn(btn, "rounded-r-md")}
+          onClick={() => onChange(Math.min(max, value + 1))}>
+          <Plus className="size-4" aria-hidden />
+        </button>
+      </div>
+      {error ? <p id={`${id}-err`} className="text-xs text-danger" role="alert">{error}</p>
+        : hint ? <p id={`${id}-hint`} className="text-xs text-fg-subtle">{hint}</p> : null}
+    </div>
   );
 }
 
@@ -240,11 +410,18 @@ export function Skeleton({ className }: { className?: string }) {
   return <div aria-hidden className={cn("animate-pulse rounded-md bg-surface-3", className)} />;
 }
 
-export function EmptyState({ icon: Icon, title, body, action }: { icon?: LucideIcon; title: string; body?: ReactNode; action?: ReactNode }) {
+export function EmptyState({ icon: Icon, title, body, action, titleAs: Title = "h2" }: {
+  icon?: LucideIcon;
+  title: string;
+  body?: ReactNode;
+  action?: ReactNode;
+  /** Heading level of the title. `h2` by default so an empty section still has a heading; `h1` on full-page states (404). */
+  titleAs?: "h1" | "h2" | "h3" | "p";
+}) {
   return (
     <div className="flex flex-col items-center justify-center text-center gap-2 py-12 px-4">
       {Icon && <Icon className="size-8 text-fg-subtle" aria-hidden />}
-      <p className="text-lg">{title}</p>
+      <Title className="text-lg">{title}</Title>
       {body && <div className="text-sm text-fg-muted max-w-md">{body}</div>}
       {action && <div className="mt-2">{action}</div>}
     </div>
@@ -283,15 +460,99 @@ export function Callout({ tone = "info", title, children, action }: { tone?: "in
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+// ------------------------------------------------------------------ Page frame
+type PageWidth = "form" | "default" | "wide";
+const pageWidths: Record<PageWidth, string> = { form: "max-w-[880px]", default: "max-w-6xl", wide: "max-w-none" };
+
+/**
+ * The one page container (C-09). `form` is for single-column forms (Home, builder, profile-like editors),
+ * `default` for lists, tables and detail pages, `wide` for dashboards that use the full canvas.
+ */
+export function Page({ width = "default", className, children, as: As = "div", ...rest }: {
+  width?: PageWidth;
+  className?: string;
+  children: ReactNode;
+  as?: ElementType;
+  [k: string]: unknown;
+}) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
-      <div>
-        <h1 className="text-xl">{title}</h1>
-        {description && <p className="text-sm text-fg-muted mt-1">{description}</p>}
+    <As className={cn("w-full min-w-0 mx-auto p-4 md:p-6", pageWidths[width], className)} {...rest}>
+      {children}
+    </As>
+  );
+}
+
+/**
+ * The page-header contract (C-12): optional back link and eyebrow, the page's single h1 with an optional
+ * inline badge, a description capped at a readable measure, a meta row of badges, and actions that keep
+ * their own right-hand column from `sm` up however long the description is.
+ */
+export function PageHeader({ title, description, actions, eyebrow, meta, badge, back, className }: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  eyebrow?: ReactNode;
+  meta?: ReactNode;
+  /** Shown inline after the title (for example a mode badge). */
+  badge?: ReactNode;
+  back?: { to: string; label: string };
+  className?: string;
+}) {
+  return (
+    <div className={cn("mb-6", className)}>
+      {back && (
+        <Link to={back.to} className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg mb-2 min-h-6">
+          <ArrowLeft className="size-4" aria-hidden />{back.label}
+        </Link>
+      )}
+      {eyebrow && <p className="text-xs font-medium uppercase tracking-wide text-fg-subtle mb-1">{eyebrow}</p>}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h1 className="text-xl break-words min-w-0">{title}</h1>
+            {badge}
+          </div>
+          {description && <div className="text-sm text-fg-muted mt-1 max-w-prose">{description}</div>}
+          {meta && <div className="mt-2 flex flex-wrap items-center gap-1.5">{meta}</div>}
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:max-w-[60%]">{actions}</div>}
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ Section navigation
+export interface SectionLink {
+  to: string;
+  label: string;
+  icon?: LucideIcon;
+  /** Match the path exactly (default true). */
+  end?: boolean;
+}
+
+/**
+ * Sub-navigation for a section (Connections, Settings, Insights): links styled as tabs, the current one
+ * marked `aria-current="page"` by NavLink. It sits under the page header (eyebrow → h1 → tabs → content).
+ */
+export function SectionNav({ label, links, className }: { label: string; links: SectionLink[]; className?: string }) {
+  return (
+    <nav aria-label={label} className={cn("mb-6 -mx-4 md:mx-0 border-b border-border overflow-x-auto", className)}>
+      <ul className="flex gap-1 px-4 md:px-0 min-w-max">
+        {links.map((l) => (
+          <li key={l.to}>
+            <NavLink to={l.to} end={l.end ?? true}
+              className={({ isActive }) => cn(
+                "inline-flex items-center gap-1.5 h-10 px-3 -mb-px text-sm border-b-2 whitespace-nowrap transition-colors duration-fast",
+                touchTarget,
+                isActive ? "border-accent text-fg font-medium" : "border-transparent text-fg-muted hover:text-fg hover:border-border-strong",
+              )}>
+              {l.icon && <l.icon className="size-4" aria-hidden />}
+              {l.label}
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
@@ -345,7 +606,7 @@ export function Tabs({ value, onValueChange, tabs, className }: {
       <RTabs.List className="flex gap-1 border-b border-border px-2 overflow-x-auto shrink-0" aria-label="Sections">
         {tabs.map((t) => (
           <RTabs.Trigger key={t.value} value={t.value}
-            className="h-9 px-2.5 text-sm text-fg-muted border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:text-fg whitespace-nowrap">
+            className={cn("h-9 px-2.5 text-sm text-fg-muted border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:text-fg whitespace-nowrap", touchTarget)}>
             {t.label}
           </RTabs.Trigger>
         ))}
