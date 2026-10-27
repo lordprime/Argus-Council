@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import orjson
 
+from argus.core.netguard import guarded_client
 from argus.protocols.jsonrpc import RpcError
 
 
@@ -30,7 +31,7 @@ class A2AClient:
         self.headers = {"Content-Type": "application/json"}
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
-        self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0))
+        self.client = client or guarded_client(timeout=httpx.Timeout(timeout, connect=10.0))
 
     async def fetch_card(self, base_url: str) -> dict[str, Any]:
         for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):

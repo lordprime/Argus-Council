@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     llm_cache_ttl: int = 3600
     llm_max_retries: int = 3
     provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
+    # Webhooks, HTTP MCP servers and remote A2A/ACP agents: private/loopback targets are refused
+    # unless the operator opts in. Link-local (cloud metadata) addresses are refused regardless.
+    connections_allow_private_urls: bool = False
+    # web_fetch (driven by model output, so by whatever content the agents read): a run's guardrails
+    # can only tighten this, never open private networks on their own.
+    web_fetch_allow_private_urls: bool = False
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     # Research tools

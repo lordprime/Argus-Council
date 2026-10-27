@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
-import ipaddress
 import re
 import socket
 import uuid
@@ -17,6 +16,7 @@ import httpx
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
+from argus.core.netguard import guarded_client, ip_blocked
 from argus.tools.base import Tool, ToolCallContext, ToolResult
 
 MAX_BYTES = 2 * 1024 * 1024
@@ -45,18 +45,8 @@ async def default_resolver(host: str) -> list[str]:
     return sorted({i[4][0] for i in infos})
 
 
-def _ip_blocked(ip: str) -> bool:
-    addr = ipaddress.ip_address(ip)
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-        addr = addr.ipv4_mapped
-    return (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_multicast
-        or addr.is_unspecified
-    )
+def _ip_blocked(ip: str, allow_private: bool = False) -> bool:
+    return ip_blocked(ip, allow_private)
 
 
 async def check_url(url: str, allow_domains: list[str], block_private: bool, resolver: Resolver) -> str:
@@ -71,13 +61,13 @@ async def check_url(url: str, allow_domains: list[str], block_private: bool, res
         for p in allow_domains
     ):
         raise FetchBlocked(f"Domain '{host}' is not in the allowed domains")
-    if block_private:
-        try:
-            ips = await resolver(host)
-        except OSError as exc:
-            raise FetchBlocked(f"Could not resolve {host}") from exc
-        if not ips or any(_ip_blocked(ip) for ip in ips):
-            raise FetchBlocked(f"'{host}' resolves to a private or reserved address")
+    try:
+        ips = await resolver(host)
+    except OSError as exc:
+        raise FetchBlocked(f"Could not resolve {host}") from exc
+    # Link-local (cloud metadata) addresses are refused even when private networks are allowed.
+    if not ips or any(_ip_blocked(ip, allow_private=not block_private) for ip in ips):
+        raise FetchBlocked(f"'{host}' resolves to a private or reserved address")
     return host
 
 
@@ -108,20 +98,29 @@ class WebFetch(Tool):
         max_chars: int = Field(default=20_000, ge=500, le=MAX_CHARS)
 
     def __init__(
-        self, client_factory: Callable[[], httpx.AsyncClient] | None = None, resolver: Resolver | None = None
+        self,
+        client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        resolver: Resolver | None = None,
+        *,
+        allow_private: bool = False,
     ) -> None:
+        # Server-side ceiling: a run's guardrails can block private networks but never unblock them.
+        self.allow_private = allow_private
         self.client_factory = client_factory or (
-            lambda: httpx.AsyncClient(
-                timeout=httpx.Timeout(20.0, connect=5.0), headers={"User-Agent": USER_AGENT}
+            lambda: guarded_client(
+                allow_private,
+                timeout=httpx.Timeout(20.0, connect=5.0),
+                headers={"User-Agent": USER_AGENT},
             )
         )
         self.resolver = resolver or default_resolver
 
     async def fetch(self, url: str, ctx: ToolCallContext) -> tuple[str, str, str]:
         policy = ctx.run.engine.rails.network
+        block_private = policy.block_private_ips or not self.allow_private
         async with self.client_factory() as client:
             for _ in range(MAX_REDIRECTS + 1):
-                await check_url(url, policy.allow_domains, policy.block_private_ips, self.resolver)
+                await check_url(url, policy.allow_domains, block_private, self.resolver)
                 async with client.stream("GET", url, follow_redirects=False) as resp:
                     if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:
                         url = urljoin(url, resp.headers["location"])
@@ -253,7 +252,9 @@ class WebSearch(Tool):
 
 
 def web_tools(settings: Any) -> list[Tool]:
-    tools: list[Tool] = [WebFetch()]
+    tools: list[Tool] = [
+        WebFetch(allow_private=bool(getattr(settings, "web_fetch_allow_private_urls", False)))
+    ]
     provider = getattr(settings, "search_provider", None)
     if provider:
         tools.append(
