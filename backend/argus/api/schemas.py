@@ -280,3 +280,53 @@ class SkillIn(BaseModel):
 
 class SkillPatch(BaseModel):
     enabled: bool
+
+
+# ---------------------------------------------------------------- connections
+_CONN_NAME = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9][a-z0-9_\-]*$")
+
+
+class McpServerIn(BaseModel):
+    name: str = _CONN_NAME
+    transport: Literal["http", "stdio"] = "http"
+    url: str | None = Field(default=None, max_length=500)
+    command: list[str] = Field(default_factory=list, max_length=50)
+    headers: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra headers (e.g. Authorization); "
+        "for stdio, environment variables. Stored encrypted, never returned.",
+    )
+    tool_allow: list[str] = Field(default_factory=lambda: ["*"], max_length=200)
+    risk: list[str] = Field(default_factory=lambda: ["network"], max_length=20)
+    enabled: bool = True
+
+
+class McpServerPatch(BaseModel):
+    url: str | None = Field(default=None, max_length=500)
+    headers: dict[str, str] | None = None
+    tool_allow: list[str] | None = Field(default=None, max_length=200)
+    risk: list[str] | None = Field(default=None, max_length=20)
+    enabled: bool | None = None
+
+
+class RemoteAgentIn(BaseModel):
+    name: str = _CONN_NAME
+    protocol: Literal["a2a", "acp"]
+    url: str = Field(max_length=500, description="A2A JSON-RPC endpoint or ACP base URL")
+    agent_name: str | None = Field(default=None, max_length=120, description="Required for ACP")
+    token: str | None = Field(default=None, max_length=4000)
+    description: str = Field(default="", max_length=2000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _acp_name(self) -> RemoteAgentIn:
+        if self.protocol == "acp" and not self.agent_name:
+            raise ValueError("agent_name is required for ACP agents")
+        return self
+
+
+class RemoteAgentPatch(BaseModel):
+    url: str | None = Field(default=None, max_length=500)
+    token: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=2000)
+    enabled: bool | None = None

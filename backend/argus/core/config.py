@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
+    # Protocols
+    mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
+    protocol_timeout_s: float = 60.0
+    remote_agent_timeout_s: float = 600.0
+
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
 

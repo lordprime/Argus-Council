@@ -19,6 +19,7 @@ from argus.runtime.context import Correction, RunCancelled, RunContext
 from argus.runtime.events import TERMINAL_STATUSES, Actor, Broker, EventSink
 from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Guardrails
 from argus.runtime.orchestrator import CouncilOrchestrator
+from argus.services.connections import attach_connections
 from argus.services.llm import LLMRouter
 from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
@@ -96,7 +97,11 @@ class RunManager:
             for m in run.council_snapshot.get("members", [])
             if m.get("enabled", True)
         ]
-        orchestrator = CouncilOrchestrator(ctx, members, self.tool_factory(run))
+        registry = self.tool_factory(run)
+        ctx.extra["closers"] = await attach_connections(
+            registry, self.sessionmaker, run.owner_id, self.settings, sink.emit
+        )
+        orchestrator = CouncilOrchestrator(ctx, members, registry)
         live = LiveRun(ctx, orchestrator, members)
         self.live[run.id] = live
         live.task = asyncio.create_task(self._drive(live), name=f"run-{run.id}")
@@ -125,6 +130,11 @@ class RunManager:
             status, error = "failed", f"{type(exc).__name__}: {str(exc)[:500]}"
             await ctx.sink.emit("error", {"code": "run_failed", "message": error})
         finally:
+            for close in ctx.extra.get("closers", []):
+                try:
+                    await close()
+                except Exception:  # noqa: S110
+                    pass
             for approval in list(ctx.approvals.values()):
                 if not approval.future.done():
                     approval.future.set_result({"decision": "expired", "reason": "run ended"})

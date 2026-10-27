@@ -35,7 +35,7 @@ ROLES: dict[str, Role] = {
             "Decomposes the goal, assigns work, merges results and decides when the task is done.",
             f"{_BASE}\nAs CHAIR you turn the user's topic into a concrete plan of steps, assign each step to "
             "the most suitable member, merge their outputs and decide when the deliverable is complete.",
-            default_tools=("notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=("notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*", "remote_agent"),
         ),
         Role(
             "researcher",
@@ -50,6 +50,9 @@ ROLES: dict[str, Role] = {
                 "artifact_read",
                 "artifact_list",
                 "use_skill",
+                "skill_read",
+                "mcp__*",
+                "remote_agent",
             ),
         ),
         Role(
@@ -58,7 +61,7 @@ ROLES: dict[str, Role] = {
             "Infers, compares and reasons over gathered evidence; builds the argument.",
             f"{_BASE}\nAs ANALYST you reason over the evidence: compare claims, infer conclusions, quantify "
             "uncertainty and identify gaps that need more research.",
-            default_tools=("notes_*", "artifact_read", "artifact_list", "use_skill", "skill_read"),
+            default_tools=("notes_*", "artifact_read", "artifact_list", "use_skill", "skill_read", "mcp__*"),
         ),
         Role(
             "writer",
@@ -66,7 +69,7 @@ ROLES: dict[str, Role] = {
             "Produces the final deliverable in the requested format.",
             f"{_BASE}\nAs WRITER you turn the council's findings into a polished deliverable in the exact "
             "format requested (text, markdown, LaTeX, PDF, HTML), preserving citations.",
-            default_tools=("notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=("notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*"),
         ),
         Role(
             "architect",
@@ -74,7 +77,15 @@ ROLES: dict[str, Role] = {
             "Designs the software structure, interfaces and file layout before coding starts.",
             f"{_BASE}\nAs ARCHITECT you design the solution: modules, interfaces, data flow and file layout. "
             "Prefer simple designs that satisfy the requirements.",
-            default_tools=("fs_read", "fs_list", "notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=(
+                "fs_read",
+                "fs_list",
+                "notes_*",
+                "artifact_*",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+            ),
         ),
         Role(
             "coder",
@@ -82,7 +93,7 @@ ROLES: dict[str, Role] = {
             "Writes and edits code in the sandboxed workspace and runs it.",
             f"{_BASE}\nAs CODER you implement the design in the sandboxed workspace. Make small, verifiable "
             "changes, run the code and tests, and report exactly what you ran and what it printed.",
-            default_tools=("fs_*", "shell", "notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=("fs_*", "shell", "notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*"),
         ),
         Role(
             "tester",
@@ -90,7 +101,7 @@ ROLES: dict[str, Role] = {
             "Writes and runs tests; reports failures with reproduction steps.",
             f"{_BASE}\nAs TESTER you write and run tests against the workspace and report failures with "
             "exact reproduction steps.",
-            default_tools=("fs_*", "shell", "notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=("fs_*", "shell", "notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*"),
         ),
         Role(
             "critic",
@@ -124,14 +135,23 @@ ROLES: dict[str, Role] = {
             "Shapes UX, UI and presentation quality of deliverables.",
             f"{_BASE}\nAs DESIGNER you shape user experience and presentation: structure, readability, "
             "visual hierarchy, accessibility and usability.",
-            default_tools=("fs_read", "notes_*", "artifact_*", "use_skill", "skill_read"),
+            default_tools=("fs_read", "notes_*", "artifact_*", "use_skill", "skill_read", "mcp__*"),
         ),
         Role(
             "assistant",
             "Assistant",
             "General conversational helper.",
             f"{_BASE}\nAs ASSISTANT you answer the user directly and helpfully.",
-            default_tools=("notes_*", "artifact_*", "web_search", "web_fetch", "use_skill", "skill_read"),
+            default_tools=(
+                "notes_*",
+                "artifact_*",
+                "web_search",
+                "web_fetch",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+                "remote_agent",
+            ),
         ),
     ]
 }

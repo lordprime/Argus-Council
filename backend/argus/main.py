@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, councils, health, providers, runs, skills
+from argus.api.v1 import auth, connections, councils, health, providers, runs, skills
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
@@ -21,6 +21,7 @@ from argus.core.logging import configure_logging, get_logger
 from argus.core.security import hash_password
 from argus.db.models import User
 from argus.db.session import Database
+from argus.protocols import a2a, acp, mcp_server
 from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.llm import LLMRouter
@@ -141,4 +142,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(providers.router, prefix=api)
     app.include_router(runs.router, prefix=api)
     app.include_router(skills.router, prefix=api)
+    app.include_router(connections.router, prefix=api)
+    # Agent protocols
+    app.include_router(mcp_server.router)
+    app.include_router(a2a.router)
+    app.include_router(acp.router)
     return app

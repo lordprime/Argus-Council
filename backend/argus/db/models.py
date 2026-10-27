@@ -175,3 +175,62 @@ class Skill(IdMixin, TimestampMixin, Base):
     files: Mapped[dict[str, Any]] = mapped_column(default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     source: Mapped[str] = mapped_column(String(20), default="created")
+
+
+class McpServer(IdMixin, TimestampMixin, Base):
+    """An external MCP server whose tools council agents may use."""
+
+    __tablename__ = "mcp_servers"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    transport: Mapped[str] = mapped_column(String(10), default="http")  # http | stdio
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    command: Mapped[list[Any]] = mapped_column(default=list)  # stdio only (admin)
+    headers_enc: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted JSON of extra headers
+    tool_allow: Mapped[list[Any]] = mapped_column(default=lambda: ["*"])
+    risk: Mapped[list[Any]] = mapped_column(default=lambda: ["network"])
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_tools: Mapped[list[Any]] = mapped_column(default=list)
+
+
+class RemoteAgent(IdMixin, TimestampMixin, Base):
+    """A remote agent reachable over A2A or ACP that councils may delegate to."""
+
+    __tablename__ = "remote_agents"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    protocol: Mapped[str] = mapped_column(String(8))  # a2a | acp
+    url: Mapped[str] = mapped_column(String(500))
+    agent_name: Mapped[str | None] = mapped_column(String(120), nullable=True)  # ACP agent name
+    token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    card: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class LedgerEntry(Base):
+    """Tamper-evident record of a cross-protocol interaction (hash-chained per owner)."""
+
+    __tablename__ = "ledger_entries"
+    __table_args__ = (UniqueConstraint("owner_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    protocol: Mapped[str] = mapped_column(String(8))  # mcp | a2a | acp
+    direction: Mapped[str] = mapped_column(String(8))  # inbound | outbound
+    peer: Mapped[str] = mapped_column(String(500))
+    method: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(16))
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    response_sha256: Mapped[str] = mapped_column(String(64))
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    prev_hash: Mapped[str] = mapped_column(String(64))
+    hash: Mapped[str] = mapped_column(String(64))

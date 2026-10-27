@@ -4,26 +4,22 @@ import asyncio
 import contextlib
 import secrets
 import uuid
-from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import orjson
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import ValidationError
 from sqlalchemy import select
 
-from argus.agents.roles import ROLES, roster_for
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal
 from argus.api.schemas import ApprovalDecisionIn, InterventionIn, RunDetail, RunIn, RunOut
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
 from argus.runtime.events import TERMINAL_STATUSES, load_events
-from argus.runtime.guardrails import Guardrails
 from argus.runtime.manager import RunManager
 from argus.runtime.snapshot import reduce_events
-from argus.services.councils import get_council
+from argus.services.runs import create_and_start_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -42,82 +38,10 @@ async def _own_run(db, owner_id: uuid.UUID, run_id: uuid.UUID) -> Run:
     return run
 
 
-def _ephemeral_roster(mode: str, size: int, provider: str, model: str) -> list[dict]:
-    taken: Counter[str] = Counter()
-    members = []
-    for i, role in enumerate(roster_for(mode, size)):
-        spec = ROLES[role]
-        taken[role] += 1
-        members.append(
-            {
-                "id": str(uuid.uuid4()),
-                "name": spec.title if taken[role] == 1 else f"{spec.title} {taken[role]}",
-                "role": role,
-                "provider": provider,
-                "model": model,
-                "system_prompt": spec.system_prompt,
-                "temperature": None,
-                "position": i,
-                "enabled": True,
-                "config": {"tools": list(spec.default_tools), "overseer": spec.overseer},
-            }
-        )
-    return members
-
-
 @router.post("", response_model=RunOut, status_code=status.HTTP_201_CREATED)
 async def create_run(data: RunIn, principal: CurrentPrincipal, db: DbDep, request: Request):
     principal.require_scope("runs:write")
-    council_guardrails: dict = {}
-    if data.council_id:
-        council = await get_council(db, principal.id, data.council_id)
-        members = [
-            {
-                "id": str(m.id),
-                "name": m.name,
-                "role": m.role,
-                "provider": m.provider,
-                "model": m.model,
-                "system_prompt": m.system_prompt,
-                "temperature": m.temperature,
-                "position": m.position,
-                "enabled": m.enabled,
-                "config": m.config,
-            }
-            for m in council.members
-        ]
-        council_guardrails = council.guardrails or {}
-        snapshot = {"council_id": str(council.id), "name": council.name, "members": members}
-        mode = data.mode if data.mode != "general" else council.mode
-    else:
-        size = data.size or {"chat": 2, "coding": 6, "research": 6}.get(data.mode, 5)
-        snapshot = {
-            "council_id": None,
-            "name": "Ad-hoc council",
-            "members": _ephemeral_roster(data.mode, size, data.provider, data.model),
-        }
-        mode = data.mode
-    try:
-        rails = Guardrails.resolve(council_guardrails, data.guardrails)
-    except ValidationError as exc:
-        raise ArgusError(
-            "Invalid guardrails", details={"errors": exc.errors(include_url=False)[:10]}
-        ) from exc
-    run = Run(
-        owner_id=principal.id,
-        council_id=data.council_id,
-        topic=data.topic,
-        description=data.description,
-        mode=mode,
-        outputs=list(data.outputs),
-        guardrails=rails.model_dump(),
-        council_snapshot=snapshot,
-    )
-    db.add(run)
-    await db.commit()
-    await _manager(request).start(run.id)
-    await db.refresh(run)
-    return run
+    return await create_and_start_run(db, _manager(request), principal.id, data)
 
 
 @router.get("", response_model=list[RunOut])

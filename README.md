@@ -146,12 +146,33 @@ allowed-tools: [web_search, web_fetch, notes_write]
 - Uploads are validated: frontmatter rules, text files only, no hidden files or path traversal, and size limits
   checked before extraction.
 
+## Agent protocols
+
+Argus speaks the main agent interoperability protocols, in both directions.
+
+| Protocol | Argus as a server | Argus as a client |
+| --- | --- | --- |
+| **MCP** | `POST /mcp` (Streamable HTTP, JSON-RPC). Tools: `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`. Run deliverables are **resources**, skills are **prompts**. | Register external MCP servers (`/api/v1/mcp-servers`, HTTP or admin-only stdio). Their tools appear to agents as `mcp__<server>__<tool>`, filtered by `tool_allow` and gated by `risk` tags. |
+| **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`). Each task is a council run. | Register remote agents (`/api/v1/remote-agents`, `protocol: a2a`). Councils delegate through the `remote_agent` tool (requires approval by default). |
+| **ACP** | REST under `/acp`: `GET /agents` (modes plus your saved councils), `POST /runs` (sync/async), `GET /runs/{id}`, `POST /runs/{id}/cancel`. | Register remote ACP agents (`protocol: acp`, `agent_name`), used through the same `remote_agent` tool. |
+
+Connect Claude Code (or any MCP client) to Argus with an API key:
+
+```bash
+claude mcp add --transport http argus http://localhost:8000/mcp --header "Authorization: Bearer argus_..."
+```
+
+**Ledger.** Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user, hash-chained
+ledger. Each entry holds SHA-256 digests of the request and response, the peer, method, status, latency and
+run, with `hash = sha256(prev_hash ‖ entry)`. `GET /api/v1/ledger` lists entries and `GET /api/v1/ledger/verify`
+detects any edit, deletion or reordering.
+
 ## Roadmap
 
 - [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI
 - [x] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp)
 - [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
-- [ ] M4 Protocols: MCP (server + client), A2A, ACP
+- [x] M4 Protocols: MCP (server + client), A2A, ACP, hash-chained protocol ledger
 - [ ] M5 Modes: coding sandbox, research pipeline, chat; exporters (txt, md, LaTeX, PDF, HTML)
 - [ ] M6 Web UI
 - [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
