@@ -58,6 +58,7 @@ from argus.runtime.manager import RunManager
 from argus.services.audit import audit
 from argus.services.llm import LLMRouter
 from argus.services.retention import RetentionService
+from argus.services.runs import BlockingWaits
 from argus.services.webhooks import WebhookDispatcher
 
 log = get_logger(__name__)
@@ -145,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else None
         )
         app.state.broker = build_broker(app.state.broker_client)
+        app.state.blocking_waits = BlockingWaits(settings.protocol_max_blocking_waits)
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
         app.state.runs = RunManager(
             settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks

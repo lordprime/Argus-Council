@@ -33,7 +33,7 @@ from argus.protocols.jsonrpc import (
     validate_request,
 )
 from argus.services import ledger
-from argus.services.runs import create_and_start_run, wait_terminal
+from argus.services.runs import create_and_start_run, wait_for_run, wait_seconds
 
 router = APIRouter(tags=["a2a"])
 
@@ -169,7 +169,10 @@ async def _dispatch(request: Request, db, principal, method: str, params: dict[s
         )
         cfg = params.get("configuration") or {}
         if cfg.get("blocking"):
-            run = await wait_terminal(state.db.sessionmaker, run.id, float(meta.get("timeout_s", 600)))
+            cap = state.settings.protocol_max_wait_s
+            run = await wait_for_run(
+                state, run, wait_seconds(meta.get("timeout_s", cap), cap), protocol="a2a"
+            )
         return task_from_run(run, message.get("contextId"))
     if method == "tasks/get":
         run = await _owned_run(db, principal.id, params.get("id"))
