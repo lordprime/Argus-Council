@@ -10,16 +10,18 @@ from datetime import UTC, datetime, timedelta
 import orjson
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import load_only
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
 from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunDetail, RunIn, RunOut
+from argus.api.sse import END, HEARTBEAT, SseHub
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
 from argus.runtime.events import TERMINAL_STATUSES, load_events
 from argus.runtime.manager import RunManager
-from argus.runtime.snapshot import reduce_events
+from argus.runtime.snapshot import SnapshotReducer
 from argus.services.runs import create_and_start_run
 
 # stream-ticket only grants read access to a run's own event stream.
@@ -29,6 +31,7 @@ router = APIRouter(
 
 TICKET_TTL_S = 300
 HEARTBEAT_S = 15.0
+SNAPSHOT_PAGE = 1000  # events per query when reducing a snapshot
 
 
 def _manager(request: Request) -> RunManager:
@@ -60,10 +63,21 @@ async def list_runs(
     mode: str | None = None,
     council_id: uuid.UUID | None = None,
     before: datetime | None = Query(default=None, description="Cursor: return runs created before this time"),
+    before_id: uuid.UUID | None = Query(
+        default=None, description="Cursor tie-breaker: with `before`, the id of the last run already seen"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    q = select(Run).where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
-    if before:
+    # Only the RunOut columns: never the result text or the council snapshot (polled every 10 s).
+    q = (
+        select(Run)
+        .options(load_only(*(getattr(Run, f) for f in RunOut.model_fields)))
+        .where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
+    )
+    if before and before_id:
+        # Keyset on (created_at, id) so runs sharing a timestamp are not skipped at a page boundary.
+        q = q.where(or_(Run.created_at < before, and_(Run.created_at == before, Run.id < before_id)))
+    elif before:
         q = q.where(Run.created_at < before)
     if status_:
         q = q.where(Run.status == status_)
@@ -71,7 +85,7 @@ async def list_runs(
         q = q.where(Run.mode == mode)
     if council_id:
         q = q.where(Run.council_id == council_id)
-    rows = await db.execute(q.order_by(Run.created_at.desc()).limit(limit))
+    rows = await db.execute(q.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit))
     return list(rows.scalars())
 
 
@@ -162,8 +176,16 @@ async def snapshot(
     at_seq: int | None = Query(default=None, ge=0),
 ) -> dict:
     await _own_run(db, principal.id, run_id)
-    evs = await load_events(request.app.state.db.sessionmaker, run_id, 0, None, 100_000)
-    return reduce_events(evs, at_seq)
+    # Reduce page by page: memory stays at one page however long the event log is.
+    reducer = SnapshotReducer(at_seq)
+    before = at_seq + 1 if at_seq is not None else None
+    after = 0
+    while True:
+        page = await load_events(request.app.state.db.sessionmaker, run_id, after, before, SNAPSHOT_PAGE)
+        reducer.feed(page)
+        if len(page) < SNAPSHOT_PAGE or reducer.done:
+            return reducer.result()
+        after = page[-1]["seq"]
 
 
 @router.post("/{run_id}/stream-ticket")
@@ -176,49 +198,86 @@ async def stream_ticket(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDe
     return {"ticket": ticket, "expires_at": (datetime.now(UTC) + timedelta(seconds=TICKET_TTL_S)).isoformat()}
 
 
+def _is_terminal(ev: dict) -> bool:
+    return ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES
+
+
+async def _run_finished(sessionmaker, run_id: uuid.UUID) -> bool:
+    async with sessionmaker() as s:
+        status = (await s.execute(select(Run.status).where(Run.id == run_id))).scalar_one_or_none()
+    return status is None or status in TERMINAL_STATUSES
+
+
 async def _sse(request: Request, run_id: uuid.UUID, after_seq: int) -> AsyncIterator[bytes]:
+    """Replay durable history after ``after_seq``, then follow the live feed.
+
+    Live durable events are delivered in ``seq`` order without gaps: anything the live feed
+    skipped is backfilled from the database. The stream ends on the run's terminal event, when
+    the run's row is already terminal (checked on every heartbeat), on server shutdown, or when
+    the client stalls so long that a durable event could not be buffered; in the last two cases
+    the client reconnects with ``Last-Event-ID``.
+    """
     broker = request.app.state.broker
     sessionmaker = request.app.state.db.sessionmaker
-    queue: asyncio.Queue[bytes] = asyncio.Queue()
+    hub: SseHub = request.app.state.sse
+    buf = hub.open()
     ready = asyncio.Event()
 
     async def pump() -> None:
-        async for payload in broker.subscribe(str(run_id), ready):
-            await queue.put(payload)
+        try:
+            async for payload in broker.subscribe(str(run_id), ready):
+                ev = orjson.loads(payload)
+                if not buf.offer((payload, ev), ephemeral=bool(ev.get("ephemeral"))):
+                    return
+        finally:
+            buf.close()  # a dead live feed ends the stream; the client resumes from its last id
 
     pump_task = asyncio.create_task(pump())
-    try:
-        await asyncio.wait_for(ready.wait(), 10)
-        last = after_seq
-        terminal = False
-        # Replay durable history first, then switch to live.
+    last = after_seq
+
+    async def history(before_seq: int | None = None) -> AsyncIterator[dict]:
+        nonlocal last
         while True:
-            batch = await load_events(sessionmaker, run_id, last, None, 1000)
+            batch = await load_events(sessionmaker, run_id, last, before_seq, 1000)
             for ev in batch:
                 last = ev["seq"]
-                terminal = terminal or (
-                    ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES
-                )
-                yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+                yield ev
             if len(batch) < 1000:
-                break
-        if terminal:
-            return
+                return
+
+    try:
+        await asyncio.wait_for(ready.wait(), 10)
+        # Replay durable history first, then switch to live.
+        async for ev in history():
+            yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+            if _is_terminal(ev):
+                return
         while not await request.is_disconnected():
-            try:
-                payload = await asyncio.wait_for(queue.get(), HEARTBEAT_S)
-            except TimeoutError:
+            item = await buf.get(HEARTBEAT_S)
+            if item is END:
+                return
+            if item is HEARTBEAT:
+                if await _run_finished(sessionmaker, run_id):
+                    async for ev in history():
+                        yield _frame(ev["seq"], ev["type"], orjson.dumps(ev))
+                    return
                 yield b": keep-alive\n\n"
                 continue
-            ev = orjson.loads(payload)
+            payload, ev = item
             if not ev.get("ephemeral"):
                 if ev["seq"] <= last:
                     continue
+                if ev["seq"] > last + 1:
+                    async for missed in history(before_seq=ev["seq"]):
+                        yield _frame(missed["seq"], missed["type"], orjson.dumps(missed))
+                        if _is_terminal(missed):
+                            return
                 last = ev["seq"]
             yield _frame(ev["seq"], ev["type"], payload)
-            if ev["type"] == "run.status" and ev["data"].get("status") in TERMINAL_STATUSES:
+            if _is_terminal(ev):
                 return
     finally:
+        hub.release(buf)
         pump_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pump_task

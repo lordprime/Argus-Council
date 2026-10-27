@@ -198,6 +198,35 @@ async def test_orphan_blob_dirs_are_swept(app, client, auth):
     assert not orphan.exists() and fresh.exists()
 
 
+async def test_webhook_deliveries_and_notifications_are_pruned(app, client, auth):
+    from argus.db.models import Notification, Webhook, WebhookDelivery
+
+    uid = await _uid(client, auth)
+    async with app.state.db.sessionmaker() as s:
+        hook = Webhook(owner_id=uid, url="https://h.example.com", events=["*"], secret_enc="x")
+        s.add(hook)
+        await s.flush()
+        for age, name in ((40, "old"), (5, "new")):
+            s.add(
+                WebhookDelivery(
+                    webhook_id=hook.id, ts=NOW - timedelta(days=age), event=name, delivery_id=name
+                )
+            )
+        s.add(Notification(user_id=uid, kind="k", title="old", created_at=NOW - timedelta(days=120)))
+        s.add(Notification(user_id=uid, kind="k", title="new", created_at=NOW - timedelta(days=1)))
+        await s.commit()
+    policy = (await client.get("/api/v1/admin/retention", headers=auth)).json()["policy"]
+    assert policy["webhook_delivery_days"] == 30 and policy["notification_days"] == 90
+
+    dry = (await client.post("/api/v1/admin/retention/run", json={"dry_run": True}, headers=auth)).json()
+    assert dry["webhook_deliveries"] == 1 and dry["notifications"] == 1
+    stats = (await client.post("/api/v1/admin/retention/run", json={"dry_run": False}, headers=auth)).json()
+    assert stats["webhook_deliveries"] == 1 and stats["notifications"] == 1
+    async with app.state.db.sessionmaker() as s:
+        assert list((await s.execute(select(WebhookDelivery.event))).scalars()) == ["new"]
+        assert list((await s.execute(select(Notification.title))).scalars()) == ["new"]
+
+
 async def test_retention_endpoints_are_admin_only(client, auth):
     member = await register_and_login(client, "member@example.com")
     assert (await client.get("/api/v1/admin/retention", headers=member)).status_code == 403

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from argus.core.logging import get_logger
-from argus.core.metrics import INTERCEPTS
+from argus.core.metrics import INTERCEPTS, OVERSIGHT_FAILURES, intercept_reason_label, role_label
 from argus.providers.types import CompletionRequest, Message, ToolCall
 from argus.runtime.events import Actor
 from argus.runtime.guardrails import Violation
@@ -198,6 +198,7 @@ class OverseerAgent:
                 ledger=ctx.ledger,
             )
         except Exception as exc:
+            OVERSIGHT_FAILURES.labels(role_label(self.actor.role)).inc()
             log.warning("oversight.review_failed", overseer=self.actor.name, error=str(exc)[:200])
             return None
         ctx.engine.record_usage(resp.usage)
@@ -280,7 +281,7 @@ class ThoughtBus:
         effective = Verdict("pass")
         for v in verdicts:
             iid = f"int_{uuid.uuid4().hex[:12]}"
-            INTERCEPTS.labels("overseer", v.reason[:40], v.action).inc()
+            INTERCEPTS.labels("overseer", intercept_reason_label(v.reason), v.action).inc()
             env = await self.ctx.sink.emit(
                 "intercept.raised",
                 {

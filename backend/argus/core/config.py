@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./argus.db"
     redis_url: str | None = None
     cache_default_ttl: int = 300
+    # Bound every cache/rate-limit Redis command so a hung Redis degrades instead of stalling requests.
+    # (Run event pub/sub uses its own connection without a read timeout: subscribers idle for minutes.)
+    redis_socket_timeout_s: float = Field(default=2.0, gt=0)
+    redis_connect_timeout_s: float = Field(default=2.0, gt=0)
+    # Per-dependency timeout for /health/ready.
+    health_check_timeout_s: float = Field(default=2.0, gt=0)
 
     # Auth
     secret_key: SecretStr = SecretStr(_INSECURE_DEFAULT_SECRET)
@@ -86,12 +92,18 @@ class Settings(BaseSettings):
     # Storage
     data_dir: str = "./data"
 
+    # Webhooks: on shutdown, wait at most this long for in-flight deliveries (the rest stay queued
+    # in the outbox and are resumed by the next process). Keep it below the container stop grace.
+    webhook_shutdown_grace_s: float = Field(default=5.0, ge=0, le=60)
+
     # Data retention (days; 0 = keep forever). See argus/services/retention.py.
     retention_run_days: int = Field(default=0, ge=0)  # finished runs + events + artifacts + blobs
     retention_event_days: int = Field(default=0, ge=0)  # event log of finished runs only
     retention_audit_days: int = Field(default=365, ge=0)
     # The hash-chained ledger is never pruned by default: verification replays it from genesis.
     retention_ledger_days: int = Field(default=0, ge=0)
+    retention_webhook_delivery_days: int = Field(default=30, ge=0)  # webhook delivery log
+    retention_notification_days: int = Field(default=90, ge=0)  # in-app notifications, read or not
     retention_batch_size: int = Field(default=500, ge=1, le=10_000)
     retention_interval_s: int = Field(default=3600, ge=60)
     retention_enabled: bool = True  # run the periodic retention task in this process
@@ -100,7 +112,15 @@ class Settings(BaseSettings):
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
+    # Inbound blocking calls (MCP start_run wait_seconds, A2A blocking, ACP sync) waiting at once in
+    # this process; beyond it, calls return the run's current state and the client polls.
+    protocol_max_blocking_waits: int = Field(default=100, ge=0)
+    protocol_max_wait_s: float = Field(default=600.0, gt=0, le=3600)
     remote_agent_timeout_s: float = 600.0
+
+    # Runs
+    approval_timeout_s: float = Field(default=3600.0, gt=0)  # a pending approval expires after this
+    run_start_timeout_s: float = Field(default=60.0, gt=0)  # bound on preparing a run (connections etc.)
 
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120

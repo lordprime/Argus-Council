@@ -50,14 +50,13 @@ export interface MemoryItem {
   updated_at: string | null;
 }
 
-/** Accepted upload types (PDF is refused by the server with 415). */
-export const ACCEPT = ".md,.markdown,.txt,.text,.html,.htm,text/markdown,text/plain,text/html";
+/** Accepted upload types. PDFs must have a text layer (scans without OCR have no text to index). */
+export const ACCEPT = ".md,.markdown,.txt,.text,.html,.htm,.pdf,text/markdown,text/plain,text/html,application/pdf";
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const OK_EXT = /\.(md|markdown|txt|text|html?)$/i;
+const OK_EXT = /\.(md|markdown|txt|text|html?|pdf)$/i;
 
 export function fileProblem(file: File): string | null {
-  if (/\.pdf$/i.test(file.name)) return "PDF is not supported yet — upload Markdown, plain text or HTML.";
-  if (!OK_EXT.test(file.name)) return "Unsupported file type — use .md, .txt or .html.";
+  if (!OK_EXT.test(file.name)) return "Unsupported file type — use .md, .txt, .html or .pdf.";
   if (file.size > MAX_FILE_BYTES) return "File is larger than the 5 MB limit.";
   if (file.size === 0) return "File is empty.";
   return null;

@@ -8,7 +8,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from argus.core.errors import NotFound
 from argus.core.logging import get_logger
+from argus.providers.base import ProviderError
 from argus.runtime.agent import AgentOutcome, AgentRunner, MemberSpec
 from argus.runtime.context import RunContext
 from argus.runtime.oversight import OverseerAgent, ThoughtBus, parse_json_object
@@ -195,12 +197,25 @@ class CouncilOrchestrator:
                 for d in self.steps
                 if d.id in step.depends_on and d.output
             )
-            outcome: AgentOutcome = await self.runner(step.assignee).run_task(
-                step.instructions,
-                step_id=step.id,
-                step_title=step.title,
-                context=upstream[-24_000:],
-            )
+            try:
+                outcome: AgentOutcome = await self.runner(step.assignee).run_task(
+                    step.instructions,
+                    step_id=step.id,
+                    step_title=step.title,
+                    context=upstream[-24_000:],
+                )
+            except (ProviderError, NotFound) as exc:
+                # A provider that keeps failing (after retries and fallbacks) or was removed fails
+                # this step only: its dependants are skipped and the rest of the plan goes on.
+                log.warning("orchestrator.step_provider_failed", step=step.id, error=str(exc)[:200])
+                outcome = AgentOutcome(
+                    "", ok=False, reason=f"provider error: {type(exc).__name__}: {str(exc)[:300]}"
+                )
+                await self.ctx.sink.emit(
+                    "member.status",
+                    {"member_id": step.assignee.id, "status": "idle"},
+                    actor=step.assignee.actor,
+                )
             step.output = outcome.text
             step.status = "done" if outcome.ok else "failed"
             await self.ctx.sink.emit(
@@ -224,7 +239,7 @@ class CouncilOrchestrator:
             while pending or running:
                 for sid, st in list(pending.items()):
                     if all(d in finished for d in st.depends_on):
-                        failed_dep = any(self._step(d).status == "failed" for d in st.depends_on)
+                        failed_dep = any(self._step(d).status in ("failed", "skipped") for d in st.depends_on)
                         if failed_dep:
                             st.status = "skipped"
                             await self.ctx.sink.emit(
@@ -307,7 +322,15 @@ class CouncilOrchestrator:
             )
             return option, f"[{m.name}] {rationale}"
 
-        results = await asyncio.gather(*(cast(m) for m in voters))
+        tasks = [asyncio.create_task(cast(m), name=f"vote-{m.id}") for m in voters]
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            # One voter failing (or the run being cancelled) must stop the others: they would
+            # otherwise keep calling the LLM and tools after the run has ended.
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         tally = {
             "approve": sum(1 for o, _ in results if o == "approve"),
             "revise": sum(1 for o, _ in results if o == "revise"),

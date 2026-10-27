@@ -10,9 +10,10 @@ import zipfile
 import orjson
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from argus.core.config import Settings
-from argus.db.models import CliSession
+from argus.db.models import CliCredential, CliSession
 from argus.main import create_app
 from argus.providers.cli.errors import CLIError
 from argus.providers.types import CompletionRequest, Message
@@ -267,9 +268,13 @@ async def test_export_never_contains_cli_credentials(cli_app, cli_client):
     assert r.status_code == 200, r.text
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     names = set(zf.namelist())
-    assert "cli_credentials.json" not in names
+    # Like provider configs: which CLI has a key (masked hint), never the key or its ciphertext.
+    creds = orjson.loads(zf.read("cli_credentials.json"))
+    assert [c["cli"] for c in creds] == ["gemini"] and "api_key_enc" not in creds[0]
+    async with cli_app.state.db.sessionmaker() as s:
+        enc = (await s.execute(select(CliCredential.api_key_enc))).scalar_one()
     everything = b"".join(zf.read(n) for n in names)
-    assert b"AIzaSyExportLeakCheck" not in everything and b"api_key_enc" not in everything
+    assert b"AIzaSyExportLeakCheck" not in everything and enc.encode() not in everything
     assert len(orjson.loads(zf.read("cli_sessions.json"))) == 1
 
 

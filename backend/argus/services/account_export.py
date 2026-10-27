@@ -2,9 +2,22 @@
 
 The export is a zip archive of everything a user owns. Tables are read through SQLAlchemy core
 (``Base.metadata``) so feature tables added later (templates, knowledge, ...) are picked up
-automatically when they carry an ``owner_id``/``user_id`` column, and silently skipped when the
-table does not exist in this deployment's schema. Secrets (encrypted credentials, password and
-key hashes, webhook secrets) are never exported.
+automatically when they carry an ``owner_id``/``user_id`` column (or a foreign key to such a
+table, e.g. skill versions, knowledge chunks, webhook deliveries and the webhook outbox), and
+silently skipped when the table does not exist in this deployment's schema. Secrets (encrypted
+credentials, password and key hashes, webhook secrets) are never exported.
+
+Data outside the database: the only per-user files are artifact blobs under
+``<data_dir>/artifacts/<run_id>/``. Blobs referenced by an artifact row are exported with that
+artifact; any other file in a run's directory is exported under ``runs/<id>/files/``. Knowledge
+uploads are not kept as files (only their extracted text, in the chunks), and sandbox
+workspaces are temporary. Short-lived Redis entries (rate-limit counters, idempotency replays,
+cached model lists) expire on their own TTL and are neither exported nor erased.
+
+Erasure deletes the user row (every owned table cascades), removes the run blob directories,
+and scrubs the audit trail: rows of the user's own actions keep what happened but lose their
+IP address and user agent, and the user's email is removed from any audit detail (for example
+failed logins against the account). Skill versions the user authored elsewhere lose the author.
 """
 
 from __future__ import annotations
@@ -19,13 +32,13 @@ from pathlib import Path
 from typing import IO, Any
 
 import orjson
-from sqlalchemy import Table, delete, func, inspect, select
+from sqlalchemy import Table, delete, func, inspect, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.core.errors import ArgusError
 from argus.core.logging import get_logger
 from argus.db.base import Base
-from argus.db.models import AuditEvent, Run, RunEvent, User
+from argus.db.models import AuditEvent, Run, RunEvent, SkillVersion, User
 from argus.runtime.events import TERMINAL_STATUSES
 from argus.services.retention import descendant_run_ids, remove_blob_dirs
 
@@ -41,11 +54,10 @@ _SPECIAL = {
     "artifacts",
     "audit_events",
     "council_members",
-    "webhook_deliveries",
-    # CLI agent API keys: credentials, never exported (not even the masked hint). Vendor CLI logins
-    # live only in the runner volume and are never part of the database or an export.
-    "cli_credentials",
 }
+# cli_credentials is exported like provider_configs: which CLI has a key and its masked hint, never
+# the encrypted key (``_secret`` drops ``*_enc``). Vendor CLI logins live only in the runner volume
+# and are never part of the database or an export.
 _OWNER_COLUMNS = ("owner_id", "user_id")
 
 
@@ -81,6 +93,28 @@ def _safe_name(path: str) -> str:
     return "/".join(parts) or "unnamed"
 
 
+def _run_files(root: Path, run_id: Any, referenced: set[str]) -> list[tuple[str, Path]]:
+    """Regular files under ``root/<run_id>/`` that no artifact row references, as (relative name, path).
+
+    Symlinks and anything resolving outside the run directory are skipped.
+    """
+    root = root.resolve()
+    base = (root / str(run_id)).resolve()
+    if root not in base.parents or not base.is_dir():
+        return []
+    out = []
+    for path in sorted(base.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        real = path.resolve()
+        if base not in real.parents:
+            continue
+        rel = real.relative_to(root).as_posix()
+        if rel not in referenced:
+            out.append((real.relative_to(base).as_posix(), real))
+    return out
+
+
 class _CappedZip:
     """A zip on a temp file that refuses to grow past ``limit`` bytes."""
 
@@ -98,6 +132,10 @@ class _CappedZip:
 
     def write(self, name: str, data: bytes) -> None:
         self.zip.writestr(name, data)
+        self._check()
+
+    def write_file(self, name: str, src: Path) -> None:
+        self.zip.write(src, name)
         self._check()
 
     def write_blob(self, name: str, root: Path, rel: str) -> bool:
@@ -219,12 +257,20 @@ async def _fill(s: AsyncSession, z: _CappedZip, user: User, blob_root: Path) -> 
     artifacts_t = Base.metadata.tables["artifacts"]
     run_rows = await _rows(s, select(runs_t).where(runs_t.c.owner_id == uid).order_by(runs_t.c.created_at))
     counts["runs"] = len(run_rows)
-    counts["run_events"] = counts["artifacts"] = 0
+    counts["run_events"] = counts["artifacts"] = counts["run_files"] = 0
     index = []
     for run in run_rows:
         rid = run["id"]
         base = f"runs/{rid}"
-        index.append({"id": rid, "topic": run.get("topic"), "status": run.get("status"), "path": base})
+        index.append(
+            {
+                "id": rid,
+                "parent_run_id": run.get("parent_run_id"),
+                "topic": run.get("topic"),
+                "status": run.get("status"),
+                "path": base,
+            }
+        )
         z.write(f"{base}/run.json", _dumps(run))
         if run.get("result"):
             z.write(f"{base}/result.md", str(run["result"]).encode())
@@ -258,6 +304,11 @@ async def _fill(s: AsyncSession, z: _CappedZip, user: User, blob_root: Path) -> 
         counts["artifacts"] += len(arts)
         if meta:
             z.write(f"{base}/artifacts.json", _dumps(meta))
+        # Files on disk for this run that no artifact row points at.
+        referenced = {str(a["blob_path"]) for a in arts if a.get("blob_path")}
+        for rel, path in await asyncio.to_thread(_run_files, blob_root, rid, referenced):
+            await asyncio.to_thread(z.write_file, f"{base}/files/{_safe_name(rel)}", path)
+            counts["run_files"] += 1
     z.write("runs/index.json", _dumps(index))
 
     return {
@@ -310,8 +361,33 @@ async def delete_account(s: AsyncSession, user: User, blob_root: Path) -> dict[s
     """
     roots = list((await s.execute(select(Run.id).where(Run.owner_id == user.id))).scalars())
     run_ids = await descendant_run_ids(s, roots)
+    await _scrub_references(s, user)
     # Sub-runs of the user's runs are owned by the same user; anything else stays.
     await s.execute(delete(User).where(User.id == user.id))
     await s.commit()
     dirs, size = await asyncio.to_thread(remove_blob_dirs, blob_root, run_ids)
     return {"runs": len(run_ids), "blob_dirs": dirs, "blob_bytes": size}
+
+
+async def _scrub_references(s: AsyncSession, user: User) -> None:
+    """Remove personal data that survives the cascade in rows the user does not own."""
+    # Audit rows keep the action and time; the FK sets actor_id to NULL on delete.
+    await s.execute(update(AuditEvent).where(AuditEvent.actor_id == user.id).values(ip="", user_agent=""))
+    email = AuditEvent.detail["email"].as_string()
+    rows = (
+        await s.execute(
+            select(AuditEvent.id, AuditEvent.detail).where(
+                or_(email == user.email, email == user.email.lower())
+            )
+        )
+    ).all()
+    for row_id, detail in rows:
+        clean = {k: v for k, v in (detail or {}).items() if k != "email"}
+        await s.execute(
+            update(AuditEvent).where(AuditEvent.id == row_id).values(detail={**clean, "email": None})
+        )
+    await s.execute(
+        update(SkillVersion)
+        .where(or_(SkillVersion.author_id == user.id, SkillVersion.author == user.email))
+        .values(author="")
+    )

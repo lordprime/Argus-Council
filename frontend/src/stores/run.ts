@@ -4,6 +4,7 @@
 import { create } from "zustand";
 
 import { applyComms } from "@/features/viz/comms";
+import { beginDraft, endDraft, writable } from "@/stores/draft";
 import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
 import type { Actor, Member, RunEvent } from "@/lib/types";
 
@@ -145,7 +146,30 @@ export interface RunState {
   comms: CommEvent[];
   /** Sub-councils spawned by this run, keyed by child run id. */
   subcouncils: Record<string, SubCouncilInfo>;
+  /** Oldest timeline items dropped to keep `items` under ITEMS_CAP (pending approvals are never dropped). */
+  trimmed?: number;
+  /** Lookups the reducer maintains so per-event work stays O(1) (implementation review L5). */
+  index?: RunIndex;
+  /** Store bookkeeping: when the workspace last opened this run (for the cached-runs limit). */
+  touched?: number;
 }
+
+/**
+ * Append-only id maps, shared between successive states of one run (entries are only ever added, and
+ * every hit is checked against `items`, so an older state reading a newer entry is harmless).
+ */
+export interface RunIndex {
+  /** thought.completed event id → thought id (intercepts cite the event as their causation). */
+  thoughtByEvent: Map<string, string>;
+  /** intercept id → id of the thought it is attached to (corrections cite the intercept). */
+  thoughtByIntercept: Map<string, string>;
+}
+
+/** Most timeline items kept per run; past it the oldest are trimmed in blocks of ITEMS_TRIM. */
+export const ITEMS_CAP = 4000;
+const ITEMS_TRIM = 250;
+/** Runs kept in memory besides replays; the least recently opened beyond this are dropped. */
+export const MAX_CACHED_RUNS = 3;
 
 export function emptyRun(runId: string, members: Member[] = []): RunState {
   return {
@@ -165,6 +189,8 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     reconnectAttempt: 0,
     comms: [],
     subcouncils: {},
+    trimmed: 0,
+    index: { thoughtByEvent: new Map(), thoughtByIntercept: new Map() },
   };
 }
 
@@ -172,20 +198,67 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "halted"]);
 export const isTerminal = (status: string) => TERMINAL.has(status);
 
 function push(s: RunState, item: TimelineItem) {
-  if (!s.items[item.id]) s.order.push(item.id);
-  s.items[item.id] = item;
+  if (!s.items[item.id]) {
+    writable(s, "order").push(item.id);
+    if (s.order.length > ITEMS_CAP + ITEMS_TRIM) trim(s);
+  }
+  writable(s, "items")[item.id] = item;
 }
 
-function findThoughtByEvent(s: RunState, eventId?: string): ThoughtItem | undefined {
-  if (!eventId) return undefined;
+/** Drop the oldest items down to ITEMS_CAP, keeping pending approvals and the plan card. */
+function trim(s: RunState) {
+  let excess = s.order.length - ITEMS_CAP;
+  const items = writable(s, "items");
+  const keep: string[] = [];
+  let i = 0;
+  for (; i < s.order.length && excess > 0; i++) {
+    const id = s.order[i]!;
+    const it = items[id];
+    if (it && ((it.kind === "approval" && it.status === "pending") || it.kind === "plan")) {
+      keep.push(id);
+      continue;
+    }
+    delete items[id];
+    excess--;
+    s.trimmed = (s.trimmed ?? 0) + 1;
+  }
+  s.order = [...keep, ...s.order.slice(i)];
+}
+
+function indexOf(s: RunState): RunIndex {
+  s.index ??= { thoughtByEvent: new Map(), thoughtByIntercept: new Map() };
+  return s.index;
+}
+
+/** Fallback for states built without the index (tests, hand-made fixtures): a reverse scan. */
+function scanThoughts(s: RunState, match: (t: ThoughtItem) => boolean): ThoughtItem | undefined {
   for (let i = s.order.length - 1; i >= 0; i--) {
     const it = s.items[s.order[i]!];
-    if (it?.kind === "thought" && it.eventId === eventId) return it;
+    if (it?.kind === "thought" && match(it)) return it;
   }
   return undefined;
 }
 
-/** Apply one event to a draft state (mutates; callers clone first). */
+function findThoughtByEvent(s: RunState, eventId?: string): ThoughtItem | undefined {
+  if (!eventId) return undefined;
+  const hit = s.items[indexOf(s).thoughtByEvent.get(eventId) ?? ""];
+  if (hit?.kind === "thought" && hit.eventId === eventId) return hit;
+  return scanThoughts(s, (t) => t.eventId === eventId);
+}
+
+/** The thought an intercept is attached to. */
+export function findThoughtByIntercept(s: RunState, interceptId?: string): ThoughtItem | undefined {
+  if (!interceptId) return undefined;
+  const has = (t: ThoughtItem) => t.intercepts.some((x) => x.id === interceptId);
+  const hit = s.items[indexOf(s).thoughtByIntercept.get(interceptId) ?? ""];
+  if (hit?.kind === "thought" && has(hit)) return hit;
+  return scanThoughts(s, has);
+}
+
+/**
+ * Apply one event. Inside `reduceAll` the shared collections are copied on first write; called directly
+ * it mutates `s`, so the caller must own it.
+ */
 export function applyEvent(s: RunState, ev: RunEvent): void {
   if (!ev.ephemeral) {
     if (ev.seq <= s.lastSeq) return; // duplicate after reconnect
@@ -219,7 +292,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       break;
     case "thought.delta": {
       const t = s.items[d.thought_id];
-      if (t?.kind === "thought") s.items[d.thought_id] = { ...t, text: t.text + d.text };
+      if (t?.kind === "thought") writable(s, "items")[d.thought_id] = { ...t, text: t.text + d.text };
       break;
     }
     case "thought.completed": {
@@ -239,6 +312,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
         endTs: ev.ts,
       } as ThoughtItem;
       push(s, done);
+      indexOf(s).thoughtByEvent.set(ev.id, d.thought_id);
       break;
     }
     case "intercept.raised": {
@@ -248,27 +322,21 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       };
       const thought = (d.target?.thought_id && s.items[d.target.thought_id]) || findThoughtByEvent(s, ev.causation_id);
       if (thought?.kind === "thought") {
-        s.items[thought.id] = { ...thought, intercepts: [...thought.intercepts, info] };
+        writable(s, "items")[thought.id] = { ...thought, intercepts: [...thought.intercepts, info] };
+        if (info.id) indexOf(s).thoughtByIntercept.set(info.id, thought.id);
       } else {
         push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
       }
       break;
     }
     case "correction.issued": {
-      let attached = false;
-      for (const id of s.order) {
-        const it = s.items[id];
-        if (it?.kind !== "thought") continue;
-        const idx = it.intercepts.findIndex((x) => x.id === d.intercept_id);
-        if (idx >= 0) {
-          const intercepts = [...it.intercepts];
-          intercepts[idx] = { ...intercepts[idx]!, correction: d.text };
-          s.items[id] = { ...it, intercepts };
-          attached = true;
-          break;
-        }
+      const it = findThoughtByIntercept(s, d.intercept_id);
+      if (it) {
+        const intercepts = it.intercepts.map((x) => (x.id === d.intercept_id ? { ...x, correction: d.text } : x));
+        writable(s, "items")[it.id] = { ...it, intercepts };
+      } else {
+        push(s, { kind: "user", id: ev.id, ...base, type: ev.type, data: d });
       }
-      if (!attached) push(s, { kind: "user", id: ev.id, ...base, type: ev.type, data: d });
       break;
     }
     case "correction.resolved":
@@ -282,13 +350,13 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       break;
     case "tool.call.output": {
       const t = s.items[d.tool_call_id];
-      if (t?.kind === "tool") s.items[d.tool_call_id] = { ...t, output: (t.output + d.chunk).slice(-20000) };
+      if (t?.kind === "tool") writable(s, "items")[d.tool_call_id] = { ...t, output: (t.output + d.chunk).slice(-20000) };
       break;
     }
     case "tool.call.completed": {
       const t = s.items[d.tool_call_id];
       if (t?.kind === "tool") {
-        s.items[d.tool_call_id] = { ...t, status: d.status, preview: d.result_preview, durationMs: d.duration_ms, endTs: ev.ts };
+        writable(s, "items")[d.tool_call_id] = { ...t, status: d.status, preview: d.result_preview, durationMs: d.duration_ms, endTs: ev.ts };
       }
       break;
     }
@@ -300,7 +368,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       break;
     case "approval.resolved": {
       const a = s.items[d.approval_id];
-      if (a?.kind === "approval") s.items[d.approval_id] = { ...a, status: d.decision, reason: d.reason, resolvedTs: ev.ts };
+      if (a?.kind === "approval") writable(s, "items")[d.approval_id] = { ...a, status: d.decision, reason: d.reason, resolvedTs: ev.ts };
       break;
     }
     case "vote.opened":
@@ -309,7 +377,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "vote.cast": {
       const v = s.items[d.vote_id];
       if (v?.kind === "vote") {
-        s.items[d.vote_id] = {
+        writable(s, "items")[d.vote_id] = {
           ...v, casts: [...v.casts, { memberId: d.member_id, option: d.option_id, rationale: d.rationale, actor: ev.actor }],
         };
       }
@@ -317,7 +385,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     }
     case "vote.closed": {
       const v = s.items[d.vote_id];
-      if (v?.kind === "vote") s.items[d.vote_id] = { ...v, result: d.result_option_id, tally: d.tally };
+      if (v?.kind === "vote") writable(s, "items")[d.vote_id] = { ...v, result: d.result_option_id, tally: d.tally };
       break;
     }
     case "artifact.upserted":
@@ -356,9 +424,18 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
   applyComms(s, ev);
 }
 
+/**
+ * Reduce a batch into a new state. Collections are copied only when the batch writes to them (see
+ * stores/draft.ts), so `state` is never mutated and a batch of text deltas does not copy the timeline.
+ */
 export function reduceAll(state: RunState, events: RunEvent[]): RunState {
-  const s: RunState = { ...state, order: [...state.order], items: { ...state.items }, comms: [...(state.comms ?? [])], subcouncils: state.subcouncils ?? {} };
-  for (const ev of events) applyEvent(s, ev);
+  const s: RunState = { ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {} };
+  beginDraft(s);
+  try {
+    for (const ev of events) applyEvent(s, ev);
+  } finally {
+    endDraft(s);
+  }
   return s;
 }
 
@@ -373,10 +450,30 @@ interface RunsStore {
   drop: (runId: string) => void;
 }
 
+let clock = 0;
+
+/** Keep the MAX_CACHED_RUNS most recently opened runs (replay states are dropped by their own owner). */
+function evict(runs: Record<string, RunState>): Record<string, RunState> {
+  const real = Object.keys(runs).filter((k) => !k.startsWith("replay:"));
+  if (real.length <= MAX_CACHED_RUNS) return runs;
+  const drop = real.sort((a, b) => (runs[b]!.touched ?? 0) - (runs[a]!.touched ?? 0)).slice(MAX_CACHED_RUNS);
+  const next = { ...runs };
+  for (const k of drop) {
+    delete next[k];
+    delete next[`replay:${k}`];
+  }
+  return next;
+}
+
 export const useRuns = create<RunsStore>((set) => ({
   runs: {},
+  /** Create the run's state (or mark it recently used) and drop the least recently opened beyond MAX_CACHED_RUNS. */
   init: (runId, members) =>
-    set((st) => (st.runs[runId] ? st : { runs: { ...st.runs, [runId]: emptyRun(runId, members) } })),
+    set((st) => {
+      const cur = st.runs[runId];
+      const touched = ++clock;
+      return { runs: evict({ ...st.runs, [runId]: cur ? { ...cur, touched } : { ...emptyRun(runId, members), touched } }) };
+    }),
   apply: (runId, events) =>
     set((st) => {
       const cur = st.runs[runId] ?? emptyRun(runId);
@@ -409,6 +506,18 @@ export const useRuns = create<RunsStore>((set) => ({
     }),
 }));
 
+/** Stable placeholder per run id, so selectors on a not-yet-initialised run return the same values. */
+const EMPTY = new Map<string, RunState>();
+function placeholder(runId: string): RunState {
+  let s = EMPTY.get(runId);
+  if (!s) {
+    if (EMPTY.size > 16) EMPTY.clear();
+    s = emptyRun(runId);
+    EMPTY.set(runId, s);
+  }
+  return s;
+}
+
 export function useRun<T>(runId: string, select: (s: RunState) => T): T {
-  return useRuns((st) => select(st.runs[runId] ?? emptyRun(runId)));
+  return useRuns((st) => select(st.runs[runId] ?? placeholder(runId)));
 }
