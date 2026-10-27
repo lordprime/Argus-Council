@@ -18,6 +18,7 @@ from argus.core.config import Settings
 from argus.core.errors import Forbidden, RateLimited, Unauthorized
 from argus.core.security import API_KEY_PREFIX, decode_token, hash_api_key
 from argus.db.models import ApiKey, User
+from argus.services.sessions import session_revoked
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -49,6 +50,7 @@ class Principal:
     user: User
     via: str  # "jwt" | "api_key"
     scopes: set[str] = field(default_factory=lambda: {"*"})
+    sid: str | None = None  # session id of a JWT principal (see argus.services.sessions)
 
     @property
     def id(self) -> uuid.UUID:
@@ -92,10 +94,14 @@ async def _principal_from_api_key(db: AsyncSession, token: str) -> Principal:
     return Principal(user=user, via="api_key", scopes=scopes)
 
 
-async def resolve_principal(db: AsyncSession, settings: Settings, token: str) -> Principal:
+async def resolve_principal(
+    db: AsyncSession, settings: Settings, token: str, cache: Cache | None = None
+) -> Principal:
     if token.startswith(API_KEY_PREFIX):
         return await _principal_from_api_key(db, token)
     payload = decode_token(settings, token, "access")
+    if cache is not None and await session_revoked(cache, payload):
+        raise Unauthorized("Session has been signed out")
     try:
         user_id = uuid.UUID(payload["sub"])
     except ValueError as exc:
@@ -103,7 +109,7 @@ async def resolve_principal(db: AsyncSession, settings: Settings, token: str) ->
     user = await db.get(User, user_id)
     if user is None or not user.is_active:
         raise Unauthorized("Inactive user")
-    return Principal(user=user, via="jwt")
+    return Principal(user=user, via="jwt", sid=payload.get("sid"))
 
 
 async def get_principal(
@@ -120,7 +126,7 @@ async def get_principal(
     token = creds.credentials if creds else request.headers.get("X-API-Key")
     if not token:
         raise Unauthorized("Authentication required")
-    principal = await resolve_principal(db, settings, token)
+    principal = await resolve_principal(db, settings, token, cache)
     request.state.actor_id = principal.id
     if await cache.hit_rate_limit(f"user:{principal.id}", settings.rate_limit_per_minute):
         raise RateLimited("Too many requests")
@@ -176,3 +182,16 @@ async def require_admin(principal: CurrentPrincipal) -> Principal:
 
 
 AdminPrincipal = Annotated[Principal, Depends(require_admin)]
+
+
+async def require_admin_writer(principal: AdminPrincipal) -> Principal:
+    """Admin mutations: an interactive session, or an API key holding the full ``*`` scope.
+
+    A narrowly scoped (e.g. read-only) key belonging to an admin must not change other accounts.
+    """
+    if principal.via != "jwt" and "*" not in principal.scopes:
+        raise Forbidden("Admin changes need a signed-in session or an API key with the '*' scope")
+    return principal
+
+
+AdminWriter = Annotated[Principal, Depends(require_admin_writer)]

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from argus.api.deps import AdminPrincipal, CacheDep, DbDep, SessionPrincipal, SettingsDep
+from argus.api.deps import AdminPrincipal, AdminWriter, CacheDep, DbDep, SessionPrincipal, SettingsDep
 from argus.core.errors import ArgusError, Conflict, RateLimited
 from argus.core.security import verify_password
 from argus.services.account_export import (
@@ -124,7 +124,7 @@ async def get_retention(request: Request, _: AdminPrincipal, settings: SettingsD
 
 @router.post("/admin/retention/run")
 async def run_retention(
-    request: Request, _: AdminPrincipal, data: RetentionRunIn | None = None
+    request: Request, _: AdminWriter, data: RetentionRunIn | None = None
 ) -> dict[str, Any]:
     """Apply the policy now. With ``dry_run`` nothing is deleted and the counts are returned."""
     dry_run = bool(data and data.dry_run)
