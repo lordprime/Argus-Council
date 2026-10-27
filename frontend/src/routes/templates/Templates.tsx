@@ -1,8 +1,8 @@
 import { LayoutTemplate, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router";
 
-import { Badge, Button, Callout, Card, Dialog, EmptyState, ErrorState, IconButton, PageHeader, Skeleton, TextArea, TextField } from "@/components/ui";
+import { ModeLabel } from "@/components/run/ModeLabel";
+import { Badge, Button, ButtonLink, Callout, Card, CardTitle, Dialog, EmptyState, ErrorState, IconButton, Page, PageHeader, Skeleton, TextArea, TextField } from "@/components/ui";
 import { RunTemplateDialog } from "@/features/templates/components";
 import { templateVariables, useDeleteTemplate, useTemplates, useUpdateTemplate, type RunTemplate } from "@/features/templates/queries";
 import { errorMessage } from "@/lib/api";
@@ -63,7 +63,7 @@ function TemplateCard({ t, onRun, onEdit }: { t: RunTemplate; onRun: () => void;
       <Card as="article" aria-labelledby={headingId} className="p-4 flex flex-col gap-3 h-full">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <h2 id={headingId} className="text-base font-semibold truncate">{t.name}</h2>
+            <CardTitle as="h2" id={headingId} className="truncate">{t.name}</CardTitle>
             {t.summary && <p className="text-sm text-fg-muted mt-0.5">{t.summary}</p>}
           </div>
           <IconButton label={`Edit ${t.name}`} icon={Pencil} onClick={onEdit} />
@@ -71,7 +71,7 @@ function TemplateCard({ t, onRun, onEdit }: { t: RunTemplate; onRun: () => void;
         </div>
         <p className="text-sm font-mono break-words bg-surface-2 rounded-md px-2 py-1.5">{t.topic}</p>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge>{t.mode}</Badge>
+          <ModeLabel mode={t.mode} variant="badge" />
           {t.council_id ? <Badge tone="info">Saved council</Badge> : <Badge>{t.provider} · {t.model}</Badge>}
           {t.variables.map((v) => <Badge key={v} tone="warning">{`{{${v}}}`}</Badge>)}
         </div>
@@ -91,14 +91,13 @@ export default function Templates() {
   const [running, setRunning] = useState<RunTemplate | null>(null);
   const [editing, setEditing] = useState<RunTemplate | null>(null);
   return (
-    <div className="max-w-[1100px] mx-auto p-4 md:p-6">
+    <Page>
       <PageHeader title="Templates" description="Saved run configurations. Variables in {{braces}} are filled in each time you run one."
-        actions={<Link to="/" className="inline-flex items-center gap-2 h-9 px-3 rounded-md border border-border-strong text-sm hover:bg-surface-2">
-          <Plus className="size-4" aria-hidden /> New from composer</Link>} />
+        actions={<ButtonLink to="/" icon={Plus}>New from composer</ButtonLink>} />
       {templates.isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2"><Skeleton className="h-40" /><Skeleton className="h-40" /></div>
       ) : templates.error ? (
-        <ErrorState error={templates.error} onRetry={() => void templates.refetch()} />
+        <Card as="div"><ErrorState error={templates.error} onRetry={() => void templates.refetch()} /></Card>
       ) : templates.data?.length ? (
         <ul className="grid gap-3 sm:grid-cols-2">
           {templates.data.map((t) => <TemplateCard key={t.id} t={t} onRun={() => setRunning(t)} onEdit={() => setEditing(t)} />)}
@@ -106,12 +105,11 @@ export default function Templates() {
       ) : (
         <Card as="div">
           <EmptyState icon={LayoutTemplate} title="No templates yet"
-            body="Set up a run on Home and choose “Save as template”. Add {{variables}} to the topic to reuse it for different subjects."
-            action={<Link to="/" className="text-accent underline text-sm">Go to the composer</Link>} />
+            body="Set up a run on Home and choose “Save as template”. Add {{variables}} to the topic to reuse it for different subjects." />
         </Card>
       )}
       <RunTemplateDialog template={running} onOpenChange={(o) => !o && setRunning(null)} />
       <EditTemplateDialog template={editing} onOpenChange={(o) => !o && setEditing(null)} />
-    </div>
+    </Page>
   );
 }
