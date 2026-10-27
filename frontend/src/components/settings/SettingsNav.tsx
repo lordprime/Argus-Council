@@ -34,7 +34,7 @@ export function SettingsLayout({ title, description, actions, form, children }: 
 }) {
   return (
     <Page>
-      <PageHeader eyebrow="Settings" title={title} description={description} actions={actions} className="mb-4" />
+      <PageHeader eyebrow="Settings" title={title} description={description} actions={actions} />
       <SettingsNav />
       <div className={cn("flex flex-col gap-6", form && "max-w-[880px]")}>{children}</div>
     </Page>

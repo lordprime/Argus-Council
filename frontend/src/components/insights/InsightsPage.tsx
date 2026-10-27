@@ -21,7 +21,7 @@ export function InsightsPage({ title, description, meta, actions, children }: {
 }) {
   return (
     <Page width="wide">
-      <PageHeader eyebrow="Insights" title={title} description={description} meta={meta} actions={actions} className="mb-4" />
+      <PageHeader eyebrow="Insights" title={title} description={description} meta={meta} actions={actions} />
       <SectionNav label="Insights" links={TABS} />
       <div className="flex flex-col gap-4 min-w-0">{children}</div>
     </Page>

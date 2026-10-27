@@ -128,18 +128,22 @@ export function CardTitle({ as: As = "h3", id, title, className, children }: {
   return <As id={id} title={title} className={cn("text-base font-semibold text-fg", className)}>{children}</As>;
 }
 
-/** A section heading (`text-lg`) with an optional muted count, description and actions on the right. */
-export function SectionTitle({ id, as: As = "h2", children, count, description, actions, className }: {
+/**
+ * A section heading (`text-lg`) with an optional muted count, description and actions on the right.
+ * `flush` drops the bottom margin and centres the actions, for headers inside a gap-spaced stack.
+ */
+export function SectionTitle({ id, as: As = "h2", children, count, description, actions, flush, className }: {
   id?: string;
   as?: "h2" | "h3";
   children: ReactNode;
   count?: number;
   description?: ReactNode;
   actions?: ReactNode;
+  flush?: boolean;
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-wrap items-end justify-between gap-2 mb-3", className)}>
+    <div className={cn("flex flex-wrap justify-between gap-2", flush ? "items-center" : "items-end mb-3", className)}>
       <div className="min-w-0">
         <As id={id} className="text-lg">
           {children}

@@ -27,7 +27,7 @@ export function ConnectionsPage({ title, description, actions, children }: {
 }) {
   return (
     <Page>
-      <PageHeader eyebrow="Connections" title={title} description={description} actions={actions} className="mb-4" />
+      <PageHeader eyebrow="Connections" title={title} description={description} actions={actions} />
       <ConnectionsNav />
       {children}
     </Page>
