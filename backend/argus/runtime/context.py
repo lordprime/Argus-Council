@@ -168,41 +168,49 @@ class Workspace:
         await self.sink.emit("artifact.deleted", {"artifact_id": str(art.id), "path": rel})
         return True
 
+    def _latest(self, *columns: Any) -> Any:
+        """SELECT ``columns`` of the newest version of every live path in this run, by path."""
+        latest = (
+            select(Artifact.path, func.max(Artifact.version).label("v"))
+            .where(Artifact.run_id == self.run_id)
+            .group_by(Artifact.path)
+            .subquery()
+        )
+        return (
+            select(*columns)
+            .join(latest, (Artifact.path == latest.c.path) & (Artifact.version == latest.c.v))
+            .where(Artifact.run_id == self.run_id, Artifact.deleted.is_(False))
+            .order_by(Artifact.path)
+        )
+
     async def text_files(self, limit_bytes: int = 32 * 1024 * 1024) -> dict[str, str]:
-        """Latest content of every live text file (used to materialise the workspace in the sandbox)."""
+        """Latest content of every live text file (used to materialise the workspace in the sandbox).
+
+        One query: called before every ``run_command`` and ``grep``.
+        """
         out: dict[str, str] = {}
         total = 0
-        for f in await self.list():
-            if f["kind"] == "export":
-                continue
-            art = await self.read(f["path"])
-            if art is None or art.content is None:
-                continue
-            total += len(art.content.encode())
+        q = self._latest(Artifact.path, Artifact.content).where(
+            Artifact.kind != "export", Artifact.content.is_not(None)
+        )
+        async with self.sessionmaker() as s:
+            rows = (await s.execute(q)).all()
+        for path, content in rows:
+            total += len(content.encode())
             if total > limit_bytes:
                 break
-            out[art.path] = art.content
+            out[path] = content
         return out
 
     async def list(self) -> list[dict[str, Any]]:
+        """Metadata of the latest version of every live file (content is not loaded)."""
+        q = self._latest(Artifact.path, Artifact.version, Artifact.size, Artifact.kind, Artifact.mime)
         async with self.sessionmaker() as s:
-            latest = (
-                select(Artifact.path, func.max(Artifact.version).label("v"))
-                .where(Artifact.run_id == self.run_id)
-                .group_by(Artifact.path)
-                .subquery()
-            )
-            rows = await s.execute(
-                select(Artifact)
-                .join(latest, (Artifact.path == latest.c.path) & (Artifact.version == latest.c.v))
-                .where(Artifact.run_id == self.run_id)
-                .order_by(Artifact.path)
-            )
-            return [
-                {"path": a.path, "version": a.version, "size": a.size, "kind": a.kind, "mime": a.mime}
-                for a in rows.scalars()
-                if not a.deleted
-            ]
+            rows = (await s.execute(q)).all()
+        return [
+            {"path": path, "version": version, "size": size, "kind": kind, "mime": mime}
+            for path, version, size, kind, mime in rows
+        ]
 
 
 def _diff_stats(old: str | None, new: str) -> tuple[int, int]:
