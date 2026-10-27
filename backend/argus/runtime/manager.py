@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.config import Settings
 from argus.core.errors import Conflict, NotFound
 from argus.core.logging import get_logger
+from argus.core.metrics import RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run
 from argus.runtime.agent import MemberSpec
 from argus.runtime.context import Correction, RunCancelled, RunContext
@@ -126,6 +127,8 @@ class RunManager:
     async def _drive(self, live: LiveRun) -> None:
         ctx = live.ctx
         status, error, result = "completed", None, ""
+        RUNS_STARTED.labels(ctx.mode).inc()
+        RUNS_ACTIVE.inc()
         await self._set(ctx.run_id, status="running", started_at=datetime.now(UTC))
         await ctx.sink.emit("run.status", {"status": "running"})
         try:
@@ -170,6 +173,8 @@ class RunManager:
             )
             await ctx.sink.emit("run.status", {"status": status, **({"reason": error} if error else {})})
             self.live.pop(ctx.run_id, None)
+            RUNS_ACTIVE.dec()
+            RUNS_FINISHED.labels(ctx.mode, status).inc()
 
     async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
         from argus.services.exports import export_markdown

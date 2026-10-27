@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -9,24 +12,30 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, connections, councils, health, providers, runs, skills
+from argus.api.v1 import auth, connections, councils, health, observability, providers, runs, skills
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
 from argus.core.logging import configure_logging, get_logger
+from argus.core.metrics import HTTP_LATENCY, HTTP_REQUESTS, REGISTRY
 from argus.core.security import hash_password
 from argus.db.models import User
 from argus.db.session import Database
 from argus.protocols import a2a, acp, mcp_server
 from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
+from argus.services.audit import audit
 from argus.services.llm import LLMRouter
 
 log = get_logger(__name__)
+
+# High-volume or credential-exchange endpoints that need no audit row.
+_NOT_AUDITED = {"/llm/complete", "/auth/refresh", "/{run_id}/stream-ticket", "/runs/{run_id}/stream-ticket"}
 
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -61,12 +70,20 @@ async def _bootstrap_admin(app: FastAPI, settings: Settings) -> None:
         log.info("bootstrap.admin_created", email=email)
 
 
+def _spawn(app: FastAPI, coro) -> None:  # type: ignore[no-untyped-def]
+    tasks: set[asyncio.Task[None]] = app.state.background
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_json)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.background = set()
         app.state.db = Database(settings)
         app.state.cache = await build_cache(settings.redis_url, settings.cache_default_ttl)
         if not hasattr(app.state, "llm"):
@@ -84,6 +101,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await app.state.runs.shutdown()
+            if app.state.background:
+                await asyncio.gather(*app.state.background, return_exceptions=True)
             await app.state.broker.close()
             await app.state.llm.aclose()
             await app.state.cache.close()
@@ -122,7 +141,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     content={"error": {"code": "payload_too_large", "message": "Request body too large"}},
                     headers={"X-Request-ID": rid},
                 )
+            started = time.perf_counter()
             response = await call_next(request)
+            route = request.scope.get("route")
+            template = getattr(route, "path", None) or "unmatched"
+            HTTP_REQUESTS.labels(request.method, template, str(response.status_code)).inc()
+            if (
+                request.method in ("POST", "PUT", "PATCH", "DELETE")
+                and request.url.path.startswith("/api/v1/")
+                and template not in _NOT_AUDITED
+            ):
+                params = dict(request.path_params)
+                # Fire-and-forget: the write must neither wait on nor block the request's own transaction.
+                _spawn(
+                    app,
+                    audit(
+                        request,
+                        f"{request.method} {template}",
+                        actor_id=getattr(request.state, "actor_id", None),
+                        target_type=template.strip("/").split("/")[0],
+                        target_id=next(iter(params.values()), ""),
+                        success=response.status_code < 400,
+                        detail={"status": response.status_code, **getattr(request.state, "audit_detail", {})},
+                    ),
+                )
+            if not template.endswith("/events/stream"):
+                HTTP_LATENCY.labels(request.method, template).observe(time.perf_counter() - started)
         finally:
             structlog.contextvars.unbind_contextvars("request_id")
         response.headers["X-Request-ID"] = rid
@@ -134,6 +178,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
         return response
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics(request: Request) -> Response:
+        token = settings.metrics_token
+        if token is not None:
+            expected = f"Bearer {token.get_secret_value()}".encode()
+            if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
+                return Response(status_code=401)
+        elif settings.is_production:
+            return Response(status_code=404)  # metrics must be explicitly enabled in production
+        return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
     install_error_handlers(app)
     app.include_router(health.router)
     api = "/api/v1"
@@ -143,6 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runs.router, prefix=api)
     app.include_router(skills.router, prefix=api)
     app.include_router(connections.router, prefix=api)
+    app.include_router(observability.router, prefix=api)
     # Agent protocols
     app.include_router(mcp_server.router)
     app.include_router(a2a.router)

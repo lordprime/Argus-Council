@@ -201,6 +201,17 @@ ledger. Each entry holds SHA-256 digests of the request and response, the peer, 
 run, with `hash = sha256(prev_hash ‖ entry)`. `GET /api/v1/ledger` lists entries and `GET /api/v1/ledger/verify`
 detects any edit, deletion or reordering.
 
+## Observability
+
+- **Metrics**: `GET /metrics` (Prometheus) covers HTTP traffic and latency, runs started/finished/active, LLM
+  calls/tokens/cost/latency per provider and model, tool calls and latency, intercepts, guardrail violations,
+  approvals and protocol calls. Set `ARGUS_METRICS_TOKEN` to scrape it in production.
+- **Audit log**: every state-changing API request is recorded (actor, action, target, IP, user agent, outcome),
+  including failed sign-ins. Secrets are never stored. `GET /api/v1/audit`; admins can add `?all=true`.
+- **Insights**: `GET /api/v1/insights?days=30` analyses your runs and their event logs: success rate, spend and
+  latency per model, tool error rates, intercepts by reason, guardrail violations and top failure reasons.
+- **Structured logs**: JSON logs with request ids in production.
+
 ## Roadmap
 
 - [x] M1 Backend foundation: API, Postgres, Redis cache, auth, councils, Docker, CI

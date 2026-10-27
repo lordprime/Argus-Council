@@ -234,3 +234,22 @@ class LedgerEntry(Base):
     detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
     prev_hash: Mapped[str] = mapped_column(String(64))
     hash: Mapped[str] = mapped_column(String(64))
+
+
+class AuditEvent(Base):
+    """Who did what, from where. Written in its own transaction so failed attempts are kept."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    action: Mapped[str] = mapped_column(String(60), index=True)
+    target_type: Mapped[str] = mapped_column(String(40), default="")
+    target_id: Mapped[str] = mapped_column(String(120), default="")
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    user_agent: Mapped[str] = mapped_column(String(200), default="")
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)

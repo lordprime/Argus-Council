@@ -73,12 +73,14 @@ async def register(data: RegisterIn, request: Request, db: DbDep, settings: Sett
 @router.post("/login", response_model=TokenOut)
 async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDep, cache: CacheDep):
     await _throttle(cache, request, "login")
+    request.state.audit_detail = {"email": data.email.lower()}
     user = (await db.execute(select(User).where(User.email == data.email.lower()))).scalar_one_or_none()
     if user is None:
         verify_password(data.password, _DUMMY_HASH)
         raise Unauthorized("Invalid credentials")
     if not verify_password(data.password, user.password_hash) or not user.is_active:
         raise Unauthorized("Invalid credentials")
+    request.state.actor_id = user.id
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(data.password)
     return _tokens(settings, user)

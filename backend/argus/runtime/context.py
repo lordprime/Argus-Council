@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from argus.core.metrics import APPROVALS, VIOLATIONS
 from argus.db.models import Artifact
 from argus.runtime.events import Actor, EventSink
 from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Violation
@@ -307,6 +308,7 @@ class RunContext:
         self.engine.enforce_limits()
 
     async def violation(self, v: Violation, target: dict[str, Any] | None = None, actor: Actor | None = None):
+        VIOLATIONS.labels(v.rule, v.action).inc()
         await self.sink.emit("guardrail.violation", v.as_event(target), actor=actor)
 
     async def budget_update(self, *, final: bool = False) -> None:
@@ -341,6 +343,7 @@ class RunContext:
             decision = {"decision": "expired"}
         finally:
             self.approvals.pop(aid, None)
+        APPROVALS.labels(str(decision.get("decision", "unknown"))).inc()
         await self.sink.emit("approval.resolved", {"approval_id": aid, **decision}, actor=Actor.user())
         return decision
 

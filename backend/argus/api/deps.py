@@ -96,6 +96,7 @@ async def get_principal(
     if not token:
         raise Unauthorized("Authentication required")
     principal = await resolve_principal(db, settings, token)
+    request.state.actor_id = principal.id
     if await cache.hit_rate_limit(f"user:{principal.id}", settings.rate_limit_per_minute):
         raise RateLimited("Too many requests")
     return principal

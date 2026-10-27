@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     sandbox_token: SecretStr | None = None
     sandbox_local: bool = False
 
+    # Observability: when set, /metrics requires "Authorization: Bearer <token>"
+    metrics_token: SecretStr | None = None
+
     # Storage
     data_dir: str = "./data"
 
@@ -79,6 +82,7 @@ class Settings(BaseSettings):
         "searxng_url",
         "sandbox_url",
         "sandbox_token",
+        "metrics_token",
         mode="before",
     )
     @classmethod

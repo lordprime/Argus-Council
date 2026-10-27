@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from argus.core.metrics import PROTOCOL_CALLS
 from argus.db.models import LedgerEntry
 
 GENESIS = "0" * 64
@@ -74,6 +75,7 @@ async def record(
     run_id: uuid.UUID | None = None,
     detail: dict[str, Any] | None = None,
 ) -> LedgerEntry:
+    PROTOCOL_CALLS.labels(protocol, direction, "ok" if status in ("ok", "completed") else "error").inc()
     lock = _locks[(id(asyncio.get_running_loop()), owner_id)]
     for attempt in range(3):
         try:
