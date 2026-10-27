@@ -2,7 +2,8 @@
 # End-to-end smoke test against a running Argus API.
 set -euo pipefail
 BASE="${1:-http://127.0.0.1:8000}"
-email="smoke-$(date +%s)@example.com"
+# Unique per run: CI runs this twice within the same second.
+email="smoke-$(date +%s)-$$-$RANDOM@example.com"
 pw="smoke-test-password-123"
 
 curl -fsS "$BASE/health/ready" | grep -q '"status":"ok"'
