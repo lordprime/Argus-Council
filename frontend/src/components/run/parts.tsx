@@ -557,10 +557,10 @@ export function InterventionBar({ runId, members, disabled, status, followUp }: 
         <Popover.Root>
           <Popover.Trigger asChild>
             {/* Visible text (the target) starts the name, then what the button does. */}
-            <Button type="button" className="shrink-0 max-w-[8rem]">
+            <Button type="button" className="shrink-0 max-w-[8rem]"
+              aria-label={`${targetName}, ${kind === "message" ? "message" : "standing order"}: change recipient or type`}>
               <AtSign className="size-4 shrink-0" aria-hidden />
               <span className="truncate">{targetName}</span>
-              <span className="sr-only">, {kind === "message" ? "message" : "standing order"}: change recipient or type</span>
               <ChevronDown className="size-3.5 shrink-0" aria-hidden />
             </Button>
           </Popover.Trigger>

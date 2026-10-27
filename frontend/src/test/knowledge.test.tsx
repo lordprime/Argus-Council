@@ -112,7 +112,7 @@ describe("Knowledge page", () => {
     mockFetch((url, init) => (url === "/api/v1/knowledge-bases/kb1/documents" && !init.method ? json({ documents: docs }) : baseHandler(url, init)));
     xhrReply = (file) => {
       if (file.name === "huge.txt") return { status: 413, body: { error: { code: "limit_exceeded", message: "Knowledge base would exceed 2000 chunks" } } };
-      const doc = { ...DOC, id: "d2", filename: file.name, chunk_count: 2 };
+      const doc = { ...DOC, id: `d-${file.name}`, filename: file.name, chunk_count: 2 };
       docs = [doc, ...docs];
       return { status: 201, body: doc };
     };

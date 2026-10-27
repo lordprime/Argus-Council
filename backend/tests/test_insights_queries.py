@@ -117,5 +117,12 @@ async def test_insights_does_not_load_payloads_or_run_bodies(client, auth, app):
         cols = sql.split("FROM")[0]
         assert "runs.result" not in cols and "runs.council_snapshot" not in cols, sql
         # The payload may only be read through JSON path expressions, never as a whole column.
-        bare = re.sub(r"json_extract\(run_events\.payload", "", cols, flags=re.IGNORECASE)
+        # SQLite renders a path read as json_extract(run_events.payload, ...), Postgres as
+        # run_events.payload #>> ... (or ->> / -> for a single key).
+        bare = re.sub(
+            r"json_extract\(run_events\.payload|run_events\.payload\s*(#>>|->>|->|#>)",
+            "",
+            cols,
+            flags=re.IGNORECASE,
+        )
         assert "run_events.payload" not in bare, sql

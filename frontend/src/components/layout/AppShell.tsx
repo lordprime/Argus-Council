@@ -117,11 +117,12 @@ function UserMenu({ withTheme }: { withTheme: boolean }) {
     <Dropdown.Root>
       <Dropdown.Trigger asChild>
         {/* The visible initials start the accessible name ("DA, account menu"), so speech users can say
-            what they see (2.5.3 label in name). */}
-        <button type="button"
+            what they see (2.5.3 label in name). A single aria-label keeps that name identical in every
+            browser; text split across a visible and an sr-only span gains a space before the comma. */}
+        <button type="button" aria-label={`${initials}, account menu`}
           className={cn("inline-flex items-center justify-center size-8 rounded-full bg-accent-subtle text-accent text-xs font-semibold",
             touchSquare)}>
-          {initials}<span className="sr-only">, account menu</span>
+          {initials}
         </button>
       </Dropdown.Trigger>
       <Dropdown.Portal>
@@ -313,10 +314,10 @@ function TabNav() {
           })}
           <li>
             <button type="button" aria-haspopup="dialog" aria-expanded={more} onClick={() => setMore(true)}
+              aria-label={moreActive ? "More, current section" : undefined}
               className={cn(tabClass(moreActive), "w-full")}>
               <TabBar active={moreActive} />
               <Ellipsis className="size-5" aria-hidden /> More
-              {moreActive && <span className="sr-only">, current section</span>}
             </button>
           </li>
         </ul>
