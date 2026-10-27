@@ -8,6 +8,7 @@ import mimetypes
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -27,8 +28,14 @@ class Workspace:
     """Versioned text artifacts for a run, persisted in the database."""
 
     def __init__(
-        self, run_id: uuid.UUID, sessionmaker: async_sessionmaker, sink: EventSink, engine: GuardrailEngine
+        self,
+        run_id: uuid.UUID,
+        sessionmaker: async_sessionmaker,
+        sink: EventSink,
+        engine: GuardrailEngine,
+        blob_root: Path | None = None,
     ) -> None:
+        self.blob_root = blob_root or Path("./data/artifacts")
         self.run_id = run_id
         self.sessionmaker = sessionmaker
         self.sink = sink
@@ -79,6 +86,51 @@ class Workspace:
         )
         return art
 
+    async def write_binary(
+        self, path: str, data: bytes, *, by: str, mime: str, kind: str = "export"
+    ) -> Artifact:
+        rel = self.engine.normalize_path(path, write=True)
+        digest = hashlib.sha256(data).hexdigest()
+        blob_rel = f"{self.run_id}/{digest}"
+        target = self.blob_root / blob_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        async with self.sessionmaker() as s:
+            prev = (
+                await s.execute(
+                    select(Artifact.version)
+                    .where(Artifact.run_id == self.run_id, Artifact.path == rel)
+                    .order_by(Artifact.version.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            art = Artifact(
+                run_id=self.run_id,
+                path=rel,
+                version=(prev or 0) + 1,
+                kind=kind,
+                mime=mime,
+                size=len(data),
+                sha256=digest,
+                content=None,
+                blob_path=blob_rel,
+                created_by=by,
+            )
+            s.add(art)
+            await s.commit()
+        await self.sink.emit(
+            "artifact.upserted",
+            {
+                "artifact_id": str(art.id),
+                "kind": kind,
+                "path": rel,
+                "mime": mime,
+                "version": art.version,
+                "size": art.size,
+            },
+        )
+        return art
+
     async def read(self, path: str, version: int | None = None) -> Artifact | None:
         rel = self.engine.normalize_path(path, write=False)
         async with self.sessionmaker() as s:
@@ -90,6 +142,46 @@ class Workspace:
             )
             art = (await s.execute(q)).scalar_one_or_none()
         return None if art is None or art.deleted else art
+
+    async def delete(self, path: str, *, by: str) -> bool:
+        rel = self.engine.normalize_path(path, write=True)
+        art = await self.read(rel)
+        if art is None:
+            return False
+        async with self.sessionmaker() as s:
+            s.add(
+                Artifact(
+                    run_id=self.run_id,
+                    path=rel,
+                    version=art.version + 1,
+                    kind=art.kind,
+                    mime=art.mime,
+                    size=0,
+                    sha256=hashlib.sha256(b"").hexdigest(),
+                    content="",
+                    created_by=by,
+                    deleted=True,
+                )
+            )
+            await s.commit()
+        await self.sink.emit("artifact.deleted", {"artifact_id": str(art.id), "path": rel})
+        return True
+
+    async def text_files(self, limit_bytes: int = 32 * 1024 * 1024) -> dict[str, str]:
+        """Latest content of every live text file (used to materialise the workspace in the sandbox)."""
+        out: dict[str, str] = {}
+        total = 0
+        for f in await self.list():
+            if f["kind"] == "export":
+                continue
+            art = await self.read(f["path"])
+            if art is None or art.content is None:
+                continue
+            total += len(art.content.encode())
+            if total > limit_bytes:
+                break
+            out[art.path] = art.content
+        return out
 
     async def list(self) -> list[dict[str, Any]]:
         async with self.sessionmaker() as s:
@@ -176,6 +268,7 @@ class RunContext:
         sessionmaker: async_sessionmaker,
         approval_timeout_s: float = 3600,
         depth: int = 0,
+        blob_root: Path | None = None,
     ) -> None:
         self.run_id = run_id
         self.owner_id = owner_id
@@ -188,7 +281,7 @@ class RunContext:
         self.llm = llm
         self.sessionmaker = sessionmaker
         self.ledger = UsageLedger()
-        self.workspace = Workspace(run_id, sessionmaker, sink, engine)
+        self.workspace = Workspace(run_id, sessionmaker, sink, engine, blob_root)
         self.notes: list[dict[str, Any]] = []
         self.sources: dict[str, dict[str, Any]] = {}
         self.controls = Controls()

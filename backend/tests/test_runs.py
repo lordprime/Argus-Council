@@ -65,7 +65,7 @@ async def test_offline_research_run_end_to_end(client, auth, app):
     detail = (await client.get(f"{API}/{run['id']}", headers=auth)).json()
     assert detail["result"].startswith("# Solid-state batteries")
     arts = (await client.get(f"{API}/{run['id']}/artifacts", headers=auth)).json()["artifacts"]
-    assert [a["path"] for a in arts] == ["report.md"]
+    assert [a["path"] for a in arts] == ["exports/solid-state-batteries.pdf", "report.md"]
     content = await client.get(
         f"{API}/{run['id']}/artifacts/content", params={"path": "report.md"}, headers=auth
     )

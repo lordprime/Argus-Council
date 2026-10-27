@@ -9,11 +9,11 @@ from datetime import UTC, datetime, timedelta
 
 import orjson
 from fastapi import APIRouter, Query, Request, status
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from sqlalchemy import select
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal
-from argus.api.schemas import ApprovalDecisionIn, InterventionIn, RunDetail, RunIn, RunOut
+from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunDetail, RunIn, RunOut
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
 from argus.runtime.events import TERMINAL_STATUSES, load_events
@@ -292,7 +292,52 @@ async def artifact_content(
     art = (await db.execute(q)).scalar_one_or_none()
     if art is None:
         raise NotFound("Artifact not found")
+    if art.content is None:
+        raise ArgusError("Binary artifact: use /artifacts/download")
     # Served as plain text with nosniff so browsers never render model-produced HTML/JS inline.
     return PlainTextResponse(
         art.content or "", headers={"Content-Disposition": "inline", "X-Artifact-Version": str(art.version)}
+    )
+
+
+@router.post("/{run_id}/exports", status_code=status.HTTP_201_CREATED)
+async def create_export(
+    run_id: uuid.UUID, data: ExportIn, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    await _own_run(db, principal.id, run_id)
+    return await _manager(request).export(run_id, data.format)
+
+
+@router.get("/{run_id}/artifacts/download")
+async def download_artifact(
+    run_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    db: DbDep,
+    request: Request,
+    path: str = Query(max_length=500),
+    version: int | None = Query(default=None, ge=1),
+):
+    await _own_run(db, principal.id, run_id)
+    q = select(Artifact).where(Artifact.run_id == run_id, Artifact.path == path, Artifact.deleted.is_(False))
+    q = q.where(Artifact.version == version) if version else q.order_by(Artifact.version.desc()).limit(1)
+    art = (await db.execute(q)).scalar_one_or_none()
+    if art is None:
+        raise NotFound("Artifact not found")
+    if art.content is not None:
+        data = art.content.encode()
+    else:
+        root = _manager(request).blob_root.resolve()
+        blob = (root / (art.blob_path or "")).resolve()
+        if root not in blob.parents or not blob.is_file():
+            raise NotFound("Artifact content missing")
+        data = blob.read_bytes()
+    filename = art.path.rsplit("/", 1)[-1].replace('"', "")
+    return Response(
+        data,
+        media_type=art.mime,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Artifact-Version": str(art.version),
+            "X-Content-SHA256": art.sha256,
+        },
     )

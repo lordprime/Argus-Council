@@ -146,6 +146,30 @@ allowed-tools: [web_search, web_fetch, notes_write]
 - Uploads are validated: frontmatter rules, text files only, no hidden files or path traversal, and size limits
   checked before extraction.
 
+## Modes, tools and outputs
+
+| Mode | What the council does | Key tools |
+| --- | --- | --- |
+| `research` | Frames sub-questions, gathers evidence, analyses, writes a cited report | `web_search`, `web_fetch` (every fetch becomes a numbered source), `notes_*`, `research-report` skill |
+| `coding` | Designs, implements, tests and documents software | `fs_read/write/edit/list/search/delete` on a versioned workspace, `shell` in the sandbox |
+| `chat` | Answers directly with an overseer watching | notes, skills, optional web |
+| `general` | Plans and produces whatever is asked | all permitted tools |
+
+**Sandbox.** `shell` commands run in a separate `sandbox` container with no network route (internal Docker
+network), a read-only root FS, a tmpfs work area, dropped capabilities, and CPU/memory/pid limits plus rlimits per
+command. The workspace is copied in and changed files are versioned back. With the isolated sandbox, coding
+councils run commands without per-command approval. For development, `ARGUS_SANDBOX_LOCAL=true` runs commands
+on the host with rlimits only, keeps approvals on, and is refused in production.
+
+**Web.** `web_fetch` only fetches http(s) URLs. It enforces `guardrails.network.allow_domains`, rejects hosts that
+resolve to private, loopback, link-local or metadata addresses (re-checked on every redirect), caps size and
+content types, strips scripts and navigation, and treats page text as untrusted data. `web_search` uses SearXNG
+(self-hosted), Tavily or Brave (`ARGUS_SEARCH_PROVIDER`).
+
+**Outputs.** Request any of `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json` in `outputs`. They are generated when
+the run completes, can be regenerated with `POST /runs/{id}/exports`, and are downloaded from
+`/runs/{id}/artifacts/download?path=exports/...`. Exports escape raw HTML from model output and drop unsafe link schemes.
+
 ## Agent protocols
 
 Argus speaks the main agent interoperability protocols, in both directions.
@@ -173,7 +197,7 @@ detects any edit, deletion or reordering.
 - [x] M2 Multi-provider LLM layer (Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp)
 - [x] M3 Council runtime: planning, parallel execution, thought bus with interception and correction, guardrails, approvals, votes, live SSE streaming
 - [x] M4 Protocols: MCP (server + client), A2A, ACP, hash-chained protocol ledger
-- [ ] M5 Modes: coding sandbox, research pipeline, chat; exporters (txt, md, LaTeX, PDF, HTML)
+- [x] M5 Modes: coding sandbox, research tools with citations, chat; exporters (txt, md, html, LaTeX, PDF, DOCX, JSON)
 - [ ] M6 Web UI
 - [x] Skills (`SKILL.md` packages, loaded on demand like Claude Code)
 

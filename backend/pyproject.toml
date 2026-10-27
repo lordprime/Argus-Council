@@ -24,6 +24,10 @@ dependencies = [
     "cryptography>=43",
     "pyyaml>=6.0",
     "python-multipart>=0.0.9",
+    "markdown-it-py>=3.0",
+    "reportlab>=4.2",
+    "python-docx>=1.1",
+    "beautifulsoup4>=4.12",
 ]
 
 [dependency-groups]

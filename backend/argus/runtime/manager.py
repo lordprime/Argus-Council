@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select, update
@@ -19,12 +20,15 @@ from argus.runtime.context import Correction, RunCancelled, RunContext
 from argus.runtime.events import TERMINAL_STATUSES, Actor, Broker, EventSink
 from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Guardrails
 from argus.runtime.orchestrator import CouncilOrchestrator
+from argus.sandbox.client import build_sandbox
 from argus.services.connections import attach_connections
 from argus.services.llm import LLMRouter
 from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
 from argus.tools.builtin import builtin_tools
+from argus.tools.code import code_tools
 from argus.tools.skills import skill_tools
+from argus.tools.web import web_tools
 
 log = get_logger(__name__)
 
@@ -50,8 +54,15 @@ class RunManager:
         self.sessionmaker = sessionmaker
         self.broker = broker
         self.llm = llm
-        self.tool_factory = tool_factory or (lambda run: ToolRegistry([*builtin_tools(), *skill_tools()]))
+        self.sandbox = build_sandbox(settings)
+        self.tool_factory = tool_factory or (
+            lambda run: ToolRegistry(
+                [*builtin_tools(), *skill_tools(), *web_tools(settings), *code_tools(self.sandbox)]
+            )
+        )
         self.live: dict[uuid.UUID, LiveRun] = {}
+        self._offline_locks: dict[uuid.UUID, asyncio.Lock] = {}
+        self.blob_root = Path(settings.data_dir) / "artifacts"
 
     # ------------------------------------------------------------ lifecycle
     async def recover(self) -> None:
@@ -87,6 +98,7 @@ class RunManager:
             engine=engine,
             llm=self.llm,
             sessionmaker=self.sessionmaker,
+            blob_root=self.blob_root,
         )
         skills = await skills_for_owner(self.sessionmaker, run.owner_id)
         ctx.skills = {
@@ -118,6 +130,7 @@ class RunManager:
         await ctx.sink.emit("run.status", {"status": "running"})
         try:
             result = await live.orchestrator.run()
+            await self._auto_export(ctx, result)
         except RunCancelled:
             status = "cancelled"
         except GuardrailBreach as exc:
@@ -157,6 +170,42 @@ class RunManager:
             )
             await ctx.sink.emit("run.status", {"status": status, **({"reason": error} if error else {})})
             self.live.pop(ctx.run_id, None)
+
+    async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
+        from argus.services.exports import export_markdown
+
+        meta = {"run_id": str(ctx.run_id), "mode": ctx.mode, "topic": ctx.topic}
+        for fmt in ctx.outputs:
+            if fmt == "md":
+                continue  # the Markdown deliverable is already in the workspace
+            try:
+                await export_markdown(ctx.workspace, markdown, fmt, title=ctx.topic, run_meta=meta)
+            except Exception as exc:
+                log.warning("run.export_failed", format=fmt, error=str(exc)[:200])
+
+    async def export(self, run_id: uuid.UUID, fmt: str) -> dict[str, Any]:
+        """Export the deliverable of a live or finished run."""
+        from argus.services.exports import export_markdown
+
+        async with self.sessionmaker() as s:
+            run = await s.get(Run, run_id)
+        if run is None:
+            raise NotFound("Run not found")
+        if not run.result:
+            raise Conflict("Run has no deliverable yet")
+        meta = {"run_id": str(run.id), "mode": run.mode, "topic": run.topic}
+        live = self.live.get(run_id)
+        if live is not None:
+            return await export_markdown(live.ctx.workspace, run.result, fmt, title=run.topic, run_meta=meta)
+        async with self._offline_locks.setdefault(run_id, asyncio.Lock()):
+            async with self.sessionmaker() as s:
+                run = await s.get(Run, run_id)
+            sink = EventSink(run.id, run.council_id, self.sessionmaker, self.broker, start_seq=run.last_seq)
+            engine = GuardrailEngine(Guardrails.model_validate(run.guardrails))
+            from argus.runtime.context import Workspace
+
+            ws = Workspace(run.id, self.sessionmaker, sink, engine, self.blob_root)
+            return await export_markdown(ws, run.result, fmt, title=run.topic, run_meta=meta)
 
     async def shutdown(self) -> None:
         tasks = [lr.task for lr in self.live.values() if lr.task]

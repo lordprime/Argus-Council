@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
+    # Research tools
+    search_provider: Literal["searxng", "tavily", "brave"] | None = None
+    search_api_key: SecretStr | None = None
+    searxng_url: str | None = None
+
+    # Code execution sandbox (separate container); local execution is for development only
+    sandbox_url: str | None = None
+    sandbox_token: SecretStr | None = None
+    sandbox_local: bool = False
+
+    # Storage
+    data_dir: str = "./data"
+
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
@@ -55,6 +68,23 @@ class Settings(BaseSettings):
 
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
+
+    @field_validator(
+        "redis_url",
+        "encryption_key",
+        "bootstrap_admin_email",
+        "bootstrap_admin_password",
+        "search_provider",
+        "search_api_key",
+        "searxng_url",
+        "sandbox_url",
+        "sandbox_token",
+        mode="before",
+    )
+    @classmethod
+    def _empty_is_unset(cls, v: object) -> object:
+        # docker compose passes unset variables as empty strings
+        return None if isinstance(v, str) and not v.strip() else v
 
     @field_validator("cors_origins", mode="before")
     @classmethod

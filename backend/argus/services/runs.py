@@ -44,6 +44,16 @@ def ephemeral_roster(mode: str, size: int, provider: str, model: str) -> list[di
     return members
 
 
+def mode_defaults(mode: str, manager: RunManager) -> dict:
+    """Base guardrail layer per mode (council and run settings override it)."""
+    from argus.sandbox.client import RemoteSandbox
+
+    if mode == "coding" and isinstance(getattr(manager, "sandbox", None), RemoteSandbox):
+        # Commands run in an isolated, network-less sandbox: no per-command approval needed.
+        return {"approval_required": ["package_install", "remote_agent", "network_write"]}
+    return {}
+
+
 async def create_and_start_run(
     db: AsyncSession,
     manager: RunManager,
@@ -82,7 +92,7 @@ async def create_and_start_run(
         }
         mode = data.mode
     try:
-        rails = Guardrails.resolve(council_guardrails, data.guardrails)
+        rails = Guardrails.resolve(mode_defaults(mode, manager), council_guardrails, data.guardrails)
     except ValidationError as exc:
         raise ArgusError(
             "Invalid guardrails", details={"errors": exc.errors(include_url=False)[:10]}

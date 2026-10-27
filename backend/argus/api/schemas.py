@@ -252,6 +252,10 @@ class RunDetail(RunOut):
     council_snapshot: dict[str, Any]
 
 
+class ExportIn(BaseModel):
+    format: OutputFormat
+
+
 class InterventionIn(BaseModel):
     kind: Literal["message", "intercept", "hold", "release", "correct", "halt_all", "release_all"]
     target: dict[str, Any] = Field(default_factory=dict)

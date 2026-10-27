@@ -67,3 +67,23 @@ def test_empty_bootstrap_env_is_ignored(monkeypatch):
     monkeypatch.setenv("ARGUS_BOOTSTRAP_ADMIN_PASSWORD", "")
     s = Settings()
     assert not (s.bootstrap_admin_email and s.bootstrap_admin_password)
+
+
+def test_empty_optional_env_vars_are_unset(monkeypatch):
+    for name in (
+        "ARGUS_SEARCH_PROVIDER",
+        "ARGUS_SEARCH_API_KEY",
+        "ARGUS_SANDBOX_URL",
+        "ARGUS_SANDBOX_TOKEN",
+        "ARGUS_ENCRYPTION_KEY",
+        "ARGUS_REDIS_URL",
+        "ARGUS_SEARXNG_URL",
+    ):
+        monkeypatch.setenv(name, "")
+    s = Settings()
+    assert (
+        s.search_provider is None
+        and s.sandbox_url is None
+        and s.encryption_key is None
+        and s.redis_url is None
+    )
