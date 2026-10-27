@@ -1,0 +1,249 @@
+# Prometheus alerting rules for Argus Council.
+#
+# Assumed scrape setup:
+#   * job "argus-api": scrapes http://api:8000/metrics with "Authorization: Bearer $ARGUS_METRICS_TOKEN"
+#     from the compose "backend" network (nginx does not proxy /metrics; in production it returns
+#     404 unless ARGUS_METRICS_TOKEN is set).
+#   * job "argus-ready": a blackbox_exporter http_2xx probe of http://api:8000/health/ready
+#     (503 when Postgres or Redis is unreachable from the API).
+#   * postgres_exporter, redis_exporter and cAdvisor / node_exporter for the "argus-infra" group.
+#
+# Every argus_* metric referenced here is defined in backend/argus/core/metrics.py.
+# Validate with: promtool check rules deploy/prometheus/alerts.yml
+groups:
+  - name: argus-availability
+    rules:
+      - alert: ArgusApiDown
+        expr: up{job="argus-api"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Argus API is not being scraped (down or unreachable)"
+      - alert: ArgusNotReady
+        expr: probe_success{job="argus-ready"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "/health/ready is failing: Postgres or Redis is unreachable from the API"
+      - alert: ArgusHigh5xxRate
+        expr: |
+          sum(rate(argus_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(argus_http_requests_total[5m])), 1e-9) > 0.02
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 2% of API requests fail with 5xx (unhandled errors included)"
+      - alert: ArgusSlowApi
+        expr: |
+          histogram_quantile(0.95, sum by (le, route) (rate(argus_http_request_seconds_bucket[5m]))) > 2
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "p95 latency of {{ $labels.route }} is above 2s"
+      - alert: ArgusRateLimitedBurst
+        expr: sum(rate(argus_http_requests_total{status="429"}[5m])) > 1
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "Sustained 429 responses"
+      - alert: ArgusCacheDegraded
+        expr: sum by (op) (rate(argus_cache_degraded_total[5m])) > 0
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "Redis operations failing ({{ $labels.op }}): rate limits are per process, caching is off, refresh/tickets/idempotency return 503"
+
+  - name: argus-runs
+    rules:
+      - alert: ArgusRunFailureRatio
+        expr: |
+          sum(increase(argus_runs_finished_total{status=~"failed|halted"}[1h]))
+            / clamp_min(sum(increase(argus_runs_finished_total[1h])), 1) > 0.25
+          and sum(increase(argus_runs_finished_total[1h])) >= 5
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "More than a quarter of council runs failed or halted in the last hour"
+      - alert: ArgusRunsNotFinishing
+        expr: |
+          argus_runs_active > 0
+          and on() sum(increase(argus_runs_finished_total[2h])) == 0
+          and on() sum(increase(argus_llm_calls_total[30m])) == 0
+        for: 30m
+        labels: {severity: page}
+        annotations:
+          summary: "Runs are active but none finished in 2h and no LLM call completed in 30m (stuck runs or a wedged provider)"
+      - alert: ArgusEventPersistFailures
+        expr: increase(argus_event_persist_failures_total[10m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "Run events failed to persist; affected runs may be stuck"
+      - alert: ArgusApprovalsExpiring
+        expr: increase(argus_approvals_total{decision="expired"}[1h]) > 0
+        labels: {severity: info}
+        annotations:
+          summary: "Approval requests expired without a decision"
+      - alert: ArgusApprovalsWaiting
+        expr: argus_approvals_pending > 0
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $value }} approval request(s) have been waiting for at least 30 minutes"
+      - alert: ArgusGuardrailHalts
+        expr: sum(increase(argus_guardrail_violations_total{action="halted"}[1h])) > 5
+        labels: {severity: info}
+        annotations:
+          summary: "More than 5 guardrail halts in the last hour"
+      - alert: ArgusSlowRuns
+        expr: |
+          histogram_quantile(0.95, sum by (le, mode) (rate(argus_run_duration_seconds_bucket{status="completed"}[6h]))) > 3600
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "p95 duration of completed {{ $labels.mode }} runs is above 1h"
+
+  - name: argus-llm
+    rules:
+      - alert: ArgusLlmSpendBurn
+        # Includes agents, overseers and /llm/complete (all recorded by the router). Tune to budget.
+        expr: sum(increase(argus_llm_cost_usd_total[1h])) > 50
+        labels: {severity: warn}
+        annotations:
+          summary: "Estimated LLM spend above $50 in the last hour"
+      - alert: ArgusLlmErrorFinishes
+        expr: |
+          sum by (provider) (rate(argus_llm_calls_total{finish="error"}[10m]))
+            / clamp_min(sum by (provider) (rate(argus_llm_calls_total[10m])), 1e-9) > 0.1
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "More than 10% of {{ $labels.provider }} completions finish with an error"
+      - alert: ArgusLlmSlow
+        expr: histogram_quantile(0.95, sum by (le, provider) (rate(argus_llm_seconds_bucket[10m]))) > 90
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "p95 {{ $labels.provider }} LLM latency above 90s"
+      - alert: ArgusLlmProviderErrors
+        expr: sum by (provider_kind, status_class) (rate(argus_llm_errors_total[10m])) > 0.05
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.provider_kind }} returns {{ $labels.status_class }} errors (including retried attempts)"
+      - alert: ArgusLlmFallbacksServing
+        expr: sum(rate(argus_llm_fallbacks_total[15m])) > 0.05
+        for: 15m
+        labels: {severity: info}
+        annotations:
+          summary: "LLM calls are regularly served by fallback routes"
+      - alert: ArgusOversightFailingOpen
+        expr: sum(increase(argus_oversight_review_failures_total[15m])) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "Overseer reviews are failing; thoughts pass unreviewed"
+      - alert: ArgusToolErrorRatio
+        expr: |
+          sum by (source) (rate(argus_tool_calls_total{status=~"error|timeout"}[15m]))
+            / clamp_min(sum by (source) (rate(argus_tool_calls_total[15m])), 1e-9) > 0.3
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "More than 30% of {{ $labels.source }} tool calls fail"
+      - alert: ArgusProtocolErrors
+        expr: sum by (protocol, direction) (rate(argus_protocol_calls_total{status="error"}[15m])) > 0.1
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.protocol }} {{ $labels.direction }} calls are failing"
+      - alert: ArgusProtocolWaitsShed
+        expr: sum by (protocol) (increase(argus_protocol_blocking_waits_shed_total[15m])) > 0
+        labels: {severity: info}
+        annotations:
+          summary: "Blocking {{ $labels.protocol }} calls hit ARGUS_PROTOCOL_MAX_BLOCKING_WAITS and returned early"
+
+  - name: argus-delivery-and-retention
+    rules:
+      - alert: ArgusWebhookFailures
+        expr: |
+          sum(rate(argus_webhook_deliveries_total{result!="ok"}[15m]))
+            / clamp_min(sum(rate(argus_webhook_deliveries_total[15m])), 1e-9) > 0.2
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "More than 20% of webhook deliveries fail after retries"
+      - alert: ArgusRetentionStale
+        # Assumes the default ARGUS_RETENTION_INTERVAL_S (1h). Also fires when retention never
+        # succeeded since a process start more than 3h ago.
+        expr: |
+          (time() - argus_retention_last_success_timestamp > 3 * 3600)
+          and on(instance) (time() - process_start_time_seconds{job="argus-api"} > 3 * 3600)
+        labels: {severity: warn}
+        annotations:
+          summary: "Data retention has not completed successfully for more than 3 hours"
+      - alert: ArgusTooManySseStreams
+        expr: argus_sse_streams > 500
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $value }} open run event streams"
+
+  - name: argus-hygiene
+    rules:
+      - alert: ArgusMetricCardinality
+        expr: count({job="argus-api", __name__=~"argus_.*"}) > 20000
+        labels: {severity: warn}
+        annotations:
+          summary: "argus_* series count is above 20k; a label is growing without bound"
+      - alert: ArgusMemoryNearLimit
+        # The api container is limited to 1 GiB in deploy/docker-compose.yml.
+        expr: process_resident_memory_bytes{job="argus-api"} > 0.85 * 1024 * 1024 * 1024
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "API resident memory above 85% of the 1 GiB container limit"
+      - alert: ArgusFileDescriptorsHigh
+        expr: process_open_fds{job="argus-api"} / process_max_fds{job="argus-api"} > 0.8
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "API is using more than 80% of its file descriptors"
+
+  - name: argus-infra
+    rules:
+      - alert: PostgresConnectionsSaturated
+        expr: sum(pg_stat_activity_count{datname="argus"}) > 25
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "Postgres connections near the API pool limit (10 + 20 overflow)"
+      - alert: PostgresIdleInTransaction
+        expr: pg_stat_activity_max_tx_duration{datname="argus",state="idle in transaction"} > 120
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "A Postgres session has been idle in transaction for more than 2 minutes"
+      - alert: RedisEvictingKeys
+        # Redis runs with noeviction; any eviction means the policy was changed.
+        expr: increase(redis_evicted_keys_total[10m]) > 0
+        labels: {severity: warn}
+        annotations:
+          summary: "Redis evicted keys (idempotency records and stream tickets are at risk)"
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "Redis above 90% of maxmemory; with noeviction, writes will start failing"
+      - alert: ContainerRestarting
+        expr: increase(container_restart_count{name=~"argus-.*"}[15m]) > 2
+        labels: {severity: page}
+        annotations:
+          summary: "Container {{ $labels.name }} is restarting repeatedly (crash loop or OOM)"
+      - alert: DataVolumeFilling
+        expr: |
+          node_filesystem_avail_bytes{mountpoint=~"/var/lib/docker.*"}
+            / node_filesystem_size_bytes{mountpoint=~"/var/lib/docker.*"} < 0.15
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "Less than 15% space left on the Docker data volume"
