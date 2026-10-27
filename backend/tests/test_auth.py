@@ -98,3 +98,46 @@ async def test_login_throttled(client, auth, monkeypatch):
         for _ in range(12)
     ]
     assert 429 in codes
+
+
+async def test_update_profile_and_password(client, auth):
+    r = await client.patch("/api/v1/auth/me", headers=auth, json={"display_name": "  Ada  "})
+    assert r.status_code == 200 and r.json()["display_name"] == "Ada"
+    r = await client.patch("/api/v1/auth/me", headers=auth, json={"new_password": "brand new password!"})
+    assert r.status_code == 422  # current password required
+    r = await client.patch(
+        "/api/v1/auth/me",
+        headers=auth,
+        json={"current_password": "wrong", "new_password": "brand new password!"},
+    )
+    assert r.status_code == 401
+    r = await client.patch(
+        "/api/v1/auth/me",
+        headers=auth,
+        json={"current_password": "correct horse battery staple", "new_password": "short"},
+    )
+    assert r.status_code == 422
+    r = await client.patch(
+        "/api/v1/auth/me",
+        headers=auth,
+        json={"current_password": "correct horse battery staple", "new_password": "brand new password!"},
+    )
+    assert r.status_code == 200
+    old = await client.post(
+        "/api/v1/auth/login", json={"email": "admin@example.com", "password": "correct horse battery staple"}
+    )
+    assert old.status_code == 401
+    new = await client.post(
+        "/api/v1/auth/login", json={"email": "admin@example.com", "password": "brand new password!"}
+    )
+    assert new.status_code == 200
+
+
+async def test_api_key_cannot_change_password(client, auth):
+    key = (await client.post("/api/v1/auth/api-keys", json={"name": "k"}, headers=auth)).json()["key"]
+    r = await client.patch(
+        "/api/v1/auth/me",
+        headers={"X-API-Key": key},
+        json={"current_password": "correct horse battery staple", "new_password": "brand new password!"},
+    )
+    assert r.status_code == 403

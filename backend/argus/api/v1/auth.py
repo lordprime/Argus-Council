@@ -12,6 +12,7 @@ from argus.api.schemas import (
     ApiKeyIn,
     ApiKeyOut,
     LoginIn,
+    ProfilePatch,
     RefreshIn,
     RegisterIn,
     TokenOut,
@@ -101,6 +102,21 @@ async def refresh(data: RefreshIn, db: DbDep, settings: SettingsDep, cache: Cach
 @router.get("/me", response_model=UserOut)
 async def me(principal: CurrentPrincipal):
     return principal.user
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrincipal, cache: CacheDep):
+    user = principal.user
+    if data.display_name is not None:
+        user.display_name = data.display_name.strip()
+    if data.new_password is not None:
+        if principal.via == "api_key":
+            raise Forbidden("Passwords cannot be changed with an API key")
+        await _throttle(cache, request, "password")
+        if not verify_password(data.current_password or "", user.password_hash):
+            raise Unauthorized("Current password is incorrect")
+        user.password_hash = hash_password(data.new_password)
+    return user
 
 
 @router.get("/api-keys", response_model=list[ApiKeyOut])

@@ -46,6 +46,18 @@ class UserOut(ORM):
     created_at: datetime
 
 
+class ProfilePatch(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    current_password: str | None = Field(default=None, max_length=256)
+    new_password: str | None = Field(default=None, min_length=12, max_length=256)
+
+    @model_validator(mode="after")
+    def _password_pair(self) -> ProfilePatch:
+        if self.new_password is not None and not self.current_password:
+            raise ValueError("current_password is required to set a new password")
+        return self
+
+
 class ApiKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     scopes: list[str] = Field(default_factory=lambda: ["*"])
