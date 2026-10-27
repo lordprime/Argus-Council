@@ -270,14 +270,17 @@ async def test_worker_delivers_in_the_background(client, auth, app):
     app.state.webhooks.client_factory = receiver.factory()
     app.state.webhooks.emit(await _me(client, auth), "run.completed", {"a": 1})
     app.state.webhooks.emit(await _me(client, auth), "run.started", {"a": 1})  # not subscribed
-    for _ in range(200):
-        if receiver.seen:
+    await asyncio.wait_for(receiver.entered.wait(), 10)
+    # The row is removed just after the response is logged; wait for that too.
+    for _ in range(500):
+        async with app.state.db.sessionmaker() as s:
+            pending = (await s.execute(select(func.count(WebhookOutbox.id)))).scalar_one()
+        if not pending:
             break
         await asyncio.sleep(0.02)
-    assert len(receiver.seen) == 1
-    async with app.state.db.sessionmaker() as s:
-        assert (await s.execute(select(func.count(WebhookOutbox.id)))).scalar_one() == 0
-    assert hook["id"]
+    assert pending == 0 and len(receiver.seen) == 1
+    log = await _deliveries(app, hook["id"])
+    assert [(d.event, d.ok) for d in log] == [("run.completed", True)]
 
 
 async def test_test_endpoint_is_a_single_attempt(client, auth, app):
