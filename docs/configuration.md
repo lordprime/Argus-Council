@@ -2,7 +2,7 @@
 
 The API reads its settings from environment variables with the `ARGUS_` prefix (and, for local
 development, from a `.env` file in its working directory). They are defined in
-[`backend/argus/core/config.py`](https://github.com/morpheuslord/Argus-Council/blob/main/backend/argus/core/config.py).
+[`backend/argus/core/config.py`](https://github.com/lordprime/Argus-Council/blob/main/backend/argus/core/config.py).
 Empty values count as unset, because Docker Compose passes unset variables as empty strings.
 
 In the Docker stack, put values in `deploy/.env` and run `./scripts/deploy.sh --no-build` (or

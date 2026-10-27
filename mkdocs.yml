@@ -1,4 +1,4 @@
-# MkDocs Material configuration for https://morpheuslord.github.io/Argus-Council/
+# MkDocs Material configuration for https://lordprime.github.io/Argus-Council/
 #
 # The content lives in the lowercase `docs/` directory, next to the review reports
 # it already held. Never create a capital `Docs/` folder beside it: on
@@ -9,15 +9,15 @@
 #   uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs serve
 
 site_name: Argus Council
-site_url: https://morpheuslord.github.io/Argus-Council/
+site_url: https://lordprime.github.io/Argus-Council/
 site_description: >-
   Self-hosted councils of LLM agents for research, coding and chat: they plan,
   debate, vote and deliver under guardrails, with overseer agents and a human
   who can intercept and correct any thought.
-site_author: morpheuslord
+site_author: lordprime
 
-repo_url: https://github.com/morpheuslord/Argus-Council
-repo_name: morpheuslord/Argus-Council
+repo_url: https://github.com/lordprime/Argus-Council
+repo_name: lordprime/Argus-Council
 edit_uri: edit/main/docs/
 
 docs_dir: docs
@@ -124,8 +124,8 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/morpheuslord/Argus-Council
+      link: https://github.com/lordprime/Argus-Council
     - icon: fontawesome/brands/docker
-      link: https://github.com/morpheuslord/Argus-Council/blob/main/deploy/docker-compose.yml
+      link: https://github.com/lordprime/Argus-Council/blob/main/deploy/docker-compose.yml
 
-copyright: Argus Council 0.1.0 · Copyright &copy; morpheuslord — MIT License
+copyright: Argus Council 0.1.0 · Copyright &copy; 2026 Abhishek Reddy Ramesh Reddy — MIT License

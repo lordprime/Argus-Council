@@ -7,11 +7,11 @@ and how to get it merged. By taking part you agree to follow the
 ## Reporting bugs and asking for features
 
 - **Security problems**: do not open an issue. Follow [SECURITY.md](SECURITY.md).
-- **Bugs**: open a [bug report](https://github.com/morpheuslord/Argus-Council/issues/new?template=bug_report.yml)
+- **Bugs**: open a [bug report](https://github.com/lordprime/Argus-Council/issues/new?template=bug_report.yml)
   with the version (commit), how you run it (Docker stack or local), the steps, and what you
   expected. Logs and the run's event log (`GET /api/v1/runs/{id}/events`) help most; remove any
   keys or personal data first.
-- **Features**: open a [feature request](https://github.com/morpheuslord/Argus-Council/issues/new?template=feature_request.yml)
+- **Features**: open a [feature request](https://github.com/lordprime/Argus-Council/issues/new?template=feature_request.yml)
   that describes the problem before the solution.
 
 ## Setting up
@@ -61,7 +61,7 @@ uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs build
 
 - Keep a pull request to one change, with tests for new behaviour and for the bug it fixes.
 - Every claim in the docs must be true of the code: update `docs/` and the README in the same pull
-  request when behaviour, configuration or the API changes, and add a line to the `Unreleased`
+  request when behaviour, configuration or the API changes, and add a line to the current version's
   section of [CHANGELOG.md](CHANGELOG.md).
 - Follow the existing style: `ruff` for Python (line length 110), ESLint and TypeScript strictness
   for the frontend, and plain, specific wording in user-facing text.

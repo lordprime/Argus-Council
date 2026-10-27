@@ -11,6 +11,6 @@
 - [ ] Backend: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - [ ] Frontend: `npm run lint && npm run typecheck && npm test && npm run build`
 - [ ] Schema changes come with an Alembic migration
-- [ ] Docs (`docs/`, README) and the `Unreleased` section of `CHANGELOG.md` match the change
+- [ ] Docs (`docs/`, README) and the current version's section of `CHANGELOG.md` match the change
 - [ ] `docs/api/openapi.json` regenerated with `./scripts/gen-openapi.sh` if routes or schemas changed
 - [ ] No secrets, `.env` files, databases or run artifacts committed

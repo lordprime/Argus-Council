@@ -3,7 +3,7 @@
 Argus runs LLM agents that browse the web, execute code and talk to other agents, so it assumes
 that model output and anything an agent reads are untrusted. This page summarises the controls in
 place. To report a vulnerability, follow the
-[security policy](https://github.com/morpheuslord/Argus-Council/blob/main/SECURITY.md); do not open
+[security policy](https://github.com/lordprime/Argus-Council/blob/main/SECURITY.md); do not open
 a public issue.
 
 ## Containment

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. **Security problems go through [SECURITY.md](https://github.com/morpheuslord/Argus-Council/blob/main/SECURITY.md), not here.**
+        Thanks for the report. **Security problems go through [SECURITY.md](https://github.com/lordprime/Argus-Council/blob/main/SECURITY.md), not here.**
         Remove API keys, tokens, passwords and personal data from everything you paste.
   - type: textarea
     id: what

@@ -27,7 +27,7 @@ correct any agent, or the whole council, at any moment.
     * **[Data retention, export and erasure](deployment.md#data-retention)**: scheduled pruning,
       a full account export and account deletion.
 
-    The full list is in the [changelog](https://github.com/morpheuslord/Argus-Council/blob/main/CHANGELOG.md).
+    The full list is in the [changelog](https://github.com/lordprime/Argus-Council/blob/main/CHANGELOG.md).
 
 <iframe scrolling="no" class="argus-figure argus-figure--hero" src="assets/figures/hairline-council.html" title="Interactive drawing of a council table: the eye on the table follows the seat you point at" loading="lazy"></iframe>
 
@@ -80,7 +80,7 @@ correct any agent, or the whole council, at any moment.
 ## Install
 
 ```bash
-git clone https://github.com/morpheuslord/Argus-Council.git
+git clone https://github.com/lordprime/Argus-Council.git
 cd Argus-Council
 ./scripts/deploy.sh --smoke     # generates secrets, builds, starts, waits, smoke-tests
 ```

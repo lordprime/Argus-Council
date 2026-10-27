@@ -38,7 +38,7 @@ jobs:
   sync:
     name: sync docs/ to the wiki
     # Only the canonical repository owns the wiki; forks skip.
-    if: github.repository == 'morpheuslord/Argus-Council'
+    if: github.repository == 'lordprime/Argus-Council'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

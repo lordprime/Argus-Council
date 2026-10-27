@@ -13,7 +13,7 @@ without Docker, see [Local development](#local-development).
 ## Deploy with Docker
 
 ```bash
-git clone https://github.com/morpheuslord/Argus-Council.git
+git clone https://github.com/lordprime/Argus-Council.git
 cd Argus-Council
 ./scripts/deploy.sh --smoke
 ```

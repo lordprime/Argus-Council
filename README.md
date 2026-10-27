@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/morpheuslord/Argus-Council/actions/workflows/ci.yml"><img src="https://github.com/morpheuslord/Argus-Council/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/morpheuslord/Argus-Council/actions/workflows/pages.yml"><img src="https://github.com/morpheuslord/Argus-Council/actions/workflows/pages.yml/badge.svg?branch=main" alt="Docs"></a>
-  <a href="https://morpheuslord.github.io/Argus-Council/"><img src="https://img.shields.io/badge/docs-morpheuslord.github.io%2FArgus--Council-4338CA" alt="Documentation"></a>
+  <a href="https://github.com/lordprime/Argus-Council/actions/workflows/ci.yml"><img src="https://github.com/lordprime/Argus-Council/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/lordprime/Argus-Council/actions/workflows/pages.yml"><img src="https://github.com/lordprime/Argus-Council/actions/workflows/pages.yml/badge.svg?branch=main" alt="Docs"></a>
+  <a href="https://lordprime.github.io/Argus-Council/"><img src="https://img.shields.io/badge/docs-lordprime.github.io%2FArgus--Council-4338CA" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4338CA" alt="MIT License"></a>
 </p>
 
@@ -22,7 +22,7 @@ Markdown, plain text, HTML, LaTeX, PDF, DOCX or JSON. Every thought passes a *th
 is acted on, where guardrails and overseer agents can annotate, hold or block it; risky tool calls
 wait for a human; and you can intercept and correct any agent, or the whole council, at any moment.
 
-**Documentation: [morpheuslord.github.io/Argus-Council](https://morpheuslord.github.io/Argus-Council/)**
+**Documentation: [lordprime.github.io/Argus-Council](https://lordprime.github.io/Argus-Council/)**
 
 ## Contents
 
@@ -89,14 +89,14 @@ flowchart TB
 | Web UI | React, TypeScript, Vite and Tailwind, served by the web container on the same origin as the API |
 | Containers | Multi-stage builds, non-root users, read-only root filesystems, all capabilities dropped, internal networks for the database, cache and sandbox |
 
-More in [Architecture](https://morpheuslord.github.io/Argus-Council/architecture/).
+More in [Architecture](https://lordprime.github.io/Argus-Council/architecture/).
 
 ## Quick start
 
 Requirements: Docker with the Compose plugin, Git, and `openssl` or Python 3.
 
 ```bash
-git clone https://github.com/morpheuslord/Argus-Council.git
+git clone https://github.com/lordprime/Argus-Council.git
 cd Argus-Council
 ./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, starts, waits, smoke-tests
 ```
@@ -118,7 +118,7 @@ or add your own connection under *Connections, Providers*.
 ./scripts/build.sh [--version TAG] [--ca corp-ca.crt] [api|web]   # images only
 ```
 
-Each script has `--help`. See [Deployment and operations](https://morpheuslord.github.io/Argus-Council/deployment/).
+Each script has `--help`. See [Deployment and operations](https://lordprime.github.io/Argus-Council/deployment/).
 
 ## Configuration
 
@@ -142,7 +142,7 @@ The API reads `ARGUS_*` environment variables (`backend/argus/core/config.py`). 
 | `<KIND>_API_KEY`, `ARGUS_<KIND>_BASE_URL` | unset | System providers, e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARGUS_OLLAMA_BASE_URL` |
 
 The full table, including which variables Compose passes through, is in
-[Configuration](https://morpheuslord.github.io/Argus-Council/configuration/).
+[Configuration](https://lordprime.github.io/Argus-Council/configuration/).
 
 ## Using the API
 
@@ -179,7 +179,7 @@ Writes need a scope on API keys (`runs:write`, `councils:write`, `providers:writ
 `connections:write`, `webhooks:write`, `knowledge:write`, or `*`); viewers are read-only everywhere.
 Webhooks are signed with HMAC-SHA256, run creation is idempotent with `Idempotency-Key`, and the
 full reference is generated from the OpenAPI document:
-[API reference](https://morpheuslord.github.io/Argus-Council/api/).
+[API reference](https://lordprime.github.io/Argus-Council/api/).
 
 ## How a run works
 
@@ -342,21 +342,10 @@ audit, lint, typecheck, tests and build, a Compose smoke test, a UI end-to-end t
 production build with its strict CSP, and Trivy image and secret scans. The docs workflow builds
 the site with `mkdocs build --strict` on every pull request.
 
-## Roadmap
-
-- [x] Backend foundation, multi-provider LLM layer, council runtime with oversight and live streaming
-- [x] Protocols (MCP, A2A, ACP) and the hash-chained ledger
-- [x] Modes, sandbox, research tools, exporters; web UI with five run views, insights and settings
-- [x] Skills and marketplace, sub-councils, roles, webhooks, MCP trust levels, provider health
-- [x] Knowledge bases and memory, run templates, notifications, data retention, export and erasure
-- [ ] Dev-council review passes (reports in [`docs/review`](docs/review) and [`docs/design`](docs/design))
-
-See [CHANGELOG.md](CHANGELOG.md) for what changed.
-
 ## Security
 
 See [SECURITY.md](SECURITY.md) for how to report a vulnerability, and the
-[security overview](https://morpheuslord.github.io/Argus-Council/security-overview/) for the
+[security overview](https://lordprime.github.io/Argus-Council/security-overview/) for the
 controls in place. Please do not open public issues for security problems.
 
 ## Contributing

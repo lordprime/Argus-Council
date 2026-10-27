@@ -10,9 +10,9 @@ other people's private information are not acceptable.
 
 ## Reporting
 
-Report unacceptable behaviour privately to the project maintainer,
-[@morpheuslord](https://github.com/morpheuslord), for example through a
-[private security advisory](https://github.com/morpheuslord/Argus-Council/security/advisories/new)
+Report unacceptable behaviour privately to the project maintainers,
+[@lordprime](https://github.com/lordprime) and [@morpheuslord](https://github.com/morpheuslord), for example through a
+[private security advisory](https://github.com/lordprime/Argus-Council/security/advisories/new)
 when the matter needs confidentiality. Reports are reviewed promptly and handled confidentially.
 
 ## Enforcement
