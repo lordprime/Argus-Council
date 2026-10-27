@@ -415,7 +415,18 @@ async def test_agents_use_external_mcp_and_remote_agent(client, auth, app, api_k
     assert ("mcp", "outbound", "tools/call:list_councils") in kinds
     assert ("mcp", "inbound", "tools/call:list_councils") in kinds
     assert ("a2a", "outbound", "message/send") in kinds and ("a2a", "inbound", "message/send") in kinds
-    assert all(e["run_id"] == run["id"] for e in entries if e["direction"] == "outbound")
+    outbound = [e for e in entries if e["direction"] == "outbound"]
+    # Tool calls belong to the run. MCP discovery is ledgered too: via the API outside any run, and
+    # at attach time under the run that connected (the outer run or the A2A twin's nested run).
+    calls = [e for e in outbound if e["method"].startswith("tools/call") or e["method"] == "message/send"]
+    assert calls and all(e["run_id"] == run["id"] for e in calls)
+    attach = [e for e in outbound if e["detail"].get("purpose") == "run"]
+    assert {e["method"] for e in attach} == {"initialize", "tools/list"} and all(e["run_id"] for e in attach)
+    assert any(e["run_id"] == run["id"] for e in attach)
+    assert {e["method"] for e in outbound if e["detail"].get("purpose") == "discover"} == {
+        "initialize",
+        "tools/list",
+    }
     assert (await client.get("/api/v1/ledger/verify", headers=auth)).json()["ok"] is True
 
 

@@ -6,7 +6,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import select
 
 from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep, write_scope
@@ -17,7 +17,16 @@ from argus.db.models import LedgerEntry, McpServer, RemoteAgent
 from argus.protocols.a2a_client import A2AClient
 from argus.protocols.acp_client import AcpClient
 from argus.services import ledger
-from argus.services.connections import connect_mcp
+from argus.services.connections import (
+    DEFAULT_TRUST,
+    agent_requires_approval,
+    connect_mcp,
+    encode_mcp_risk,
+    ledgered,
+    mcp_settings,
+    public_card,
+    set_agent_card,
+)
 from argus.services.llm import validate_base_url
 
 router = APIRouter(tags=["connections"], dependencies=[write_scope("connections:write")])
@@ -30,6 +39,7 @@ class UpstreamError(ArgusError):
 
 def _mcp_out(s: McpServer, box: SecretBox | None = None) -> dict[str, Any]:
     header_names = sorted(json.loads(box.decrypt(s.headers_enc))) if box and s.headers_enc else []
+    trust, require_approval, risk = mcp_settings(s)
     return {
         "id": str(s.id),
         "name": s.name,
@@ -38,7 +48,9 @@ def _mcp_out(s: McpServer, box: SecretBox | None = None) -> dict[str, Any]:
         "command": s.command,
         "header_names": header_names,
         "tool_allow": s.tool_allow,
-        "risk": s.risk,
+        "risk": risk,
+        "trust": trust,
+        "require_approval": require_approval,
         "enabled": s.enabled,
         "tools": [
             {"name": t.get("name"), "description": t.get("description", "")[:300]} for t in s.last_tools or []
@@ -57,8 +69,9 @@ def _agent_out(a: RemoteAgent) -> dict[str, Any]:
         "agent_name": a.agent_name,
         "description": a.description,
         "enabled": a.enabled,
+        "requires_approval": agent_requires_approval(a),
         "has_token": bool(a.token_enc),
-        "card": a.card,
+        "card": public_card(a),
         "created_at": a.created_at.isoformat(),
     }
 
@@ -112,7 +125,7 @@ async def create_mcp(
         command=data.command if data.transport == "stdio" else [],
         headers_enc=box.encrypt(json.dumps(data.headers)) if data.headers else None,
         tool_allow=data.tool_allow,
-        risk=data.risk,
+        risk=encode_mcp_risk(data.risk, data.trust or DEFAULT_TRUST, data.require_approval),
         enabled=data.enabled,
     )
     db.add(server)
@@ -132,6 +145,14 @@ async def update_mcp(
         server.headers_enc = box.encrypt(json.dumps(h)) if h else None
     if values.get("url"):
         values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+    trust, require_approval, risk = mcp_settings(server)
+    if {"risk", "trust", "require_approval"} & values.keys():
+        new = {k: values.pop(k, None) for k in ("risk", "trust", "require_approval")}
+        server.risk = encode_mcp_risk(
+            risk if new["risk"] is None else new["risk"],
+            new["trust"] or trust,
+            require_approval if new["require_approval"] is None else new["require_approval"],
+        )
     for k, v in values.items():
         setattr(server, k, v)
     await db.flush()
@@ -145,12 +166,14 @@ async def delete_mcp(server_id: uuid.UUID, principal: CurrentPrincipal, db: DbDe
 
 @router.post("/mcp-servers/{server_id}/discover")
 async def discover_mcp(
-    server_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
+    server_id: uuid.UUID, request: Request, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ) -> dict:
     server = await _get(db, McpServer, principal.id, server_id)
     box = SecretBox(settings)
     try:
-        client, tools = await connect_mcp(server, settings, box)
+        client, tools = await connect_mcp(
+            server, settings, box, sessionmaker=request.app.state.db.sessionmaker
+        )
     except Exception as exc:
         raise UpstreamError(f"Could not connect: {str(exc)[:200]}") from exc
     info = client.server_info
@@ -184,6 +207,7 @@ async def create_agent(
         description=data.description,
         enabled=data.enabled,
     )
+    set_agent_card(agent, {}, requires_approval=data.requires_approval)
     db.add(agent)
     await db.flush()
     return _agent_out(agent)
@@ -200,6 +224,17 @@ async def update_agent(
         agent.token_enc = SecretBox(settings).encrypt(t) if t else None
     if values.get("url"):
         values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+    if "requires_approval" in values:
+        set_agent_card(agent, requires_approval=bool(values.pop("requires_approval")))
+    if "agent_name" in values:
+        name = values.pop("agent_name")
+        if agent.protocol != "acp":
+            raise ArgusError("agent_name only applies to ACP agents")
+        if not name:
+            raise ArgusError("agent_name is required for ACP agents")
+        if name != agent.agent_name:
+            agent.agent_name = name
+            set_agent_card(agent, {})  # the cached card described the previous agent
     for k, v in values.items():
         setattr(agent, k, v)
     await db.flush()
@@ -213,34 +248,56 @@ async def delete_agent(agent_id: uuid.UUID, principal: CurrentPrincipal, db: DbD
 
 @router.post("/remote-agents/{agent_id}/refresh")
 async def refresh_agent(
-    agent_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
+    agent_id: uuid.UUID, request: Request, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ) -> dict:
-    """Fetch the A2A agent card, or confirm the ACP agent exists, and cache it."""
+    """Fetch the A2A agent card, or confirm the ACP agent exists, and cache it (both ledgered)."""
     agent = await _get(db, RemoteAgent, principal.id, agent_id)
     token = SecretBox(settings).decrypt(agent.token_enc) if agent.token_enc else None
+    maker = request.app.state.db.sessionmaker
+    detail = {"agent": agent.name, "purpose": "refresh"}
     try:
         if agent.protocol == "a2a":
             client = A2AClient(agent.url, token, timeout=settings.protocol_timeout_s)
             try:
                 base = agent.url.rsplit("/", 1)[0] if agent.url.rstrip("/").endswith("/a2a") else agent.url
-                agent.card = await client.fetch_card(base)
+                card = await ledgered(
+                    maker,
+                    principal.id,
+                    lambda: client.fetch_card(base),
+                    protocol="a2a",
+                    peer=base,
+                    method="agent-card",
+                    request={"base_url": base},
+                    detail=detail,
+                )
             finally:
                 await client.aclose()
         else:
             client2 = AcpClient(agent.url, token, timeout=settings.protocol_timeout_s)
             try:
-                found = {a["name"]: a for a in await client2.agents()}
+                listing = await ledgered(
+                    maker,
+                    principal.id,
+                    client2.agents,
+                    protocol="acp",
+                    peer=agent.url,
+                    method="agents:list",
+                    request={"path": "/agents"},
+                    detail=detail,
+                )
             finally:
                 await client2.aclose()
+            found = {a.get("name"): a for a in listing}
             if agent.agent_name not in found:
                 raise UpstreamError(f"ACP server has no agent named '{agent.agent_name}'")
-            agent.card = found[agent.agent_name]
+            card = found[agent.agent_name]
     except ArgusError:
         raise
     except Exception as exc:
         raise UpstreamError(f"Could not reach agent: {str(exc)[:200]}") from exc
+    set_agent_card(agent, card if isinstance(card, dict) else {})
     if not agent.description:
-        agent.description = str(agent.card.get("description", ""))[:2000]
+        agent.description = str(public_card(agent).get("description", ""))[:2000]
     return _agent_out(agent)
 
 

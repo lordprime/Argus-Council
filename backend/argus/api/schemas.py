@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -335,6 +335,8 @@ class SkillPatch(BaseModel):
 
 # ---------------------------------------------------------------- connections
 _CONN_NAME = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9][a-z0-9_\-]*$")
+McpTrust = Literal["trusted", "ask", "blocked"]
+_ToolName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 class McpServerIn(BaseModel):
@@ -349,6 +351,14 @@ class McpServerIn(BaseModel):
     )
     tool_allow: list[str] = Field(default_factory=lambda: ["*"], max_length=200)
     risk: list[str] = Field(default_factory=lambda: ["network"], max_length=20)
+    trust: McpTrust = Field(
+        default="ask",
+        description="trusted: tools run without extra approval; ask: every tool call needs approval; "
+        "blocked: the server's tools are never attached to runs",
+    )
+    require_approval: list[_ToolName] = Field(
+        default_factory=list, max_length=200, description="Tool names that always need approval"
+    )
     enabled: bool = True
 
 
@@ -357,6 +367,8 @@ class McpServerPatch(BaseModel):
     headers: dict[str, str] | None = None
     tool_allow: list[str] | None = Field(default=None, max_length=200)
     risk: list[str] | None = Field(default=None, max_length=20)
+    trust: McpTrust | None = None
+    require_approval: list[_ToolName] | None = Field(default=None, max_length=200)
     enabled: bool | None = None
 
 
@@ -368,6 +380,7 @@ class RemoteAgentIn(BaseModel):
     token: str | None = Field(default=None, max_length=4000)
     description: str = Field(default="", max_length=2000)
     enabled: bool = True
+    requires_approval: bool = Field(default=True, description="Delegating to this agent needs approval")
 
     @model_validator(mode="after")
     def _acp_name(self) -> RemoteAgentIn:
@@ -381,6 +394,8 @@ class RemoteAgentPatch(BaseModel):
     token: str | None = Field(default=None, max_length=4000)
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool | None = None
+    requires_approval: bool | None = None
+    agent_name: str | None = Field(default=None, min_length=1, max_length=120, description="ACP only")
 
 
 # ---------------------------------------------------------------- webhooks

@@ -10,8 +10,8 @@ from sqlalchemy import select
 from argus.api.deps import CurrentPrincipal, DbDep, write_scope
 from argus.api.schemas import SkillIn, SkillPatch
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound
-from argus.db.models import Skill
-from argus.skills.library import builtin_skills, from_row
+from argus.db.models import Council, Skill
+from argus.skills.library import builtin_skills, from_row, skill_permitted
 from argus.skills.package import SkillError, SkillPackage, load_zip, parse_skill_md, validate_files
 
 router = APIRouter(
@@ -61,6 +61,18 @@ def _apply(row: Skill, pkg: SkillPackage) -> None:
     row.allowed_tools = pkg.allowed_tools
     row.meta = pkg.metadata
     row.files = pkg.files
+
+
+async def _used_by(db, owner_id, name: str) -> list[dict]:
+    """Councils whose guardrails let their agents load ``name`` (skills allow-list minus deny-list)."""
+    rows = await db.execute(select(Council).where(Council.owner_id == owner_id).order_by(Council.name))
+    out = []
+    for c in rows.scalars():
+        policy = (c.guardrails or {}).get("skills") or {}
+        allow, deny = policy.get("allow", ["*"]), policy.get("deny", [])
+        if isinstance(allow, list) and isinstance(deny, list) and skill_permitted(name, allow, deny):
+            out.append({"id": str(c.id), "name": c.name})
+    return out
 
 
 async def _create(db, owner_id, pkg: SkillPackage, *, source: str, enabled: bool = True) -> Skill:
@@ -129,7 +141,19 @@ async def get_skill(name: str, principal: CurrentPrincipal, db: DbDep) -> dict:
         pkg, info = builtin_skills()[name], {"source": "builtin", "enabled": True}
     else:
         raise NotFound("Skill not found")
-    return {**_summary(pkg, **info), "skill_md": pkg.render(), "file_contents": pkg.files}
+    return {
+        **_summary(pkg, **info),
+        "skill_md": pkg.render(),
+        "file_contents": pkg.files,
+        "used_by_councils": await _used_by(db, principal.id, name),
+    }
+
+
+@router.get("/{name}/usage")
+async def skill_usage(name: str, principal: CurrentPrincipal, db: DbDep) -> dict:
+    if await _row(db, principal.id, name) is None and name not in builtin_skills():
+        raise NotFound("Skill not found")
+    return {"name": name, "used_by_councils": await _used_by(db, principal.id, name)}
 
 
 @router.put("/{name}")
