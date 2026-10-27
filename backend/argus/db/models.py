@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -37,8 +38,17 @@ class User(IdMixin, TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(16), default="member", server_default="member", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Optional TOTP second factor (argus/core/totp.py): the shared secret is encrypted with SecretBox
+    # and only counts once ``totp_enabled`` is set by a verified code; recovery codes are SHA-256.
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    totp_recovery: Mapped[list[Any]] = mapped_column(default=list)
 
     api_keys: Mapped[list[ApiKey]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def mfa_enabled(self) -> bool:
+        return bool(self.totp_enabled)
 
     @hybrid_property
     def is_admin(self) -> bool:

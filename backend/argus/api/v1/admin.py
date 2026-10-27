@@ -27,6 +27,7 @@ class AdminUserOut(BaseModel):
     role: Role
     is_admin: bool
     is_active: bool
+    mfa_enabled: bool = False
     created_at: datetime
     last_login_at: datetime | None
     run_count: int
@@ -37,6 +38,8 @@ class AdminUserPatch(BaseModel):
 
     role: Role | None = None
     is_active: bool | None = None
+    # Turn off a user's two-factor authentication (lost device and recovery codes).
+    reset_mfa: bool | None = None
 
 
 def _out(user: User, run_count: int) -> AdminUserOut:
@@ -47,6 +50,7 @@ def _out(user: User, run_count: int) -> AdminUserOut:
         role=user.role,  # type: ignore[arg-type]
         is_admin=user.is_admin,
         is_active=user.is_active,
+        mfa_enabled=bool(user.totp_enabled),
         created_at=user.created_at,
         last_login_at=user.last_login_at,
         run_count=run_count,
@@ -93,6 +97,9 @@ async def update_user(
     if data.is_active is not None and data.is_active != user.is_active:
         changes["is_active"] = {"from": user.is_active, "to": data.is_active}
         user.is_active = data.is_active
+    if data.reset_mfa and (user.totp_enabled or user.totp_secret_enc):
+        user.totp_enabled, user.totp_secret_enc, user.totp_recovery = False, None, []
+        changes["mfa"] = {"from": "enabled", "to": "reset"}
     if demoting or deactivating:
         # stdio MCP servers run commands on the host; only active admins may keep them.
         disabled = await disable_stdio_servers(db, user.id)

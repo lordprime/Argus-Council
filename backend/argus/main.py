@@ -27,6 +27,7 @@ from argus.api.v1 import (
     data,
     health,
     knowledge,
+    mfa,
     notifications,
     observability,
     providers,
@@ -283,6 +284,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     api = "/api/v1"
     app.include_router(auth.router, prefix=api)
+    app.include_router(mfa.router, prefix=api)
     app.include_router(admin.router, prefix=api)
     app.include_router(councils.router, prefix=api)
     app.include_router(providers.router, prefix=api)
