@@ -14,14 +14,17 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from argus.core.logging import get_logger
 from argus.db.models import Run
 from argus.providers.types import Usage
 from argus.runtime.events import TERMINAL_STATUSES, Envelope
-from argus.runtime.guardrails import Guardrails
+from argus.runtime.guardrails import GuardrailEngine, Guardrails
 from argus.tools.base import Tool, ToolCallContext, ToolResult
 
 if TYPE_CHECKING:
     from argus.runtime.manager import RunManager
+
+log = get_logger(__name__)
 
 # Child events worth relaying; deltas and budget ticks would only flood the parent stream.
 RELAYED = frozenset(
@@ -78,6 +81,11 @@ class SubCouncilTool(Tool):
     def __init__(self, manager: RunManager) -> None:
         self.manager = manager
 
+    def timeout_for(self, args: BaseModel | None) -> float | None:
+        # The child enforces its own max_runtime_minutes; a generic tool timeout would kill it
+        # before its spend is charged back.
+        return None
+
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         from argus.services.runs import ephemeral_roster
 
@@ -89,11 +97,12 @@ class SubCouncilTool(Tool):
                 f"Sub-council depth limit reached ({rails.max_subcouncil_depth}); do the task yourself."
             )
         child_rails = Guardrails.resolve(rails.model_dump()).clamp_to(rails)
-        if rails.budget.usd is not None:
-            left = max(rails.budget.usd - parent.engine.usage.cost_usd, 0.0)
-            if left <= 0:
-                return ToolResult.error("No budget left for a sub-council.")
-            child_rails.budget.usd = min(child_rails.budget.usd or left, left)
+        usd, tokens = child_budget(parent.engine, child_rails)
+        if usd is not None and usd <= 0:
+            return ToolResult.error("No budget left for a sub-council.")
+        if tokens is not None and tokens <= 0:
+            return ToolResult.error("No token budget left for a sub-council.")
+        child_rails.budget.usd, child_rails.budget.tokens = usd, tokens
         member = self.manager.member(parent.run_id, ctx.member_id)
         provider, model = (member.provider, member.model) if member else ("mock", "mock-1")
         roster = ephemeral_roster(args.mode, args.size, provider, model)
@@ -137,51 +146,92 @@ class SubCouncilTool(Tool):
             step_id=ctx.step_id,
         )
         queue: asyncio.Queue[Envelope] = asyncio.Queue()
-        await self.manager.start(child_id, depth=parent.depth + 1, listeners=[queue.put_nowait])
+        child_engine: GuardrailEngine | None = None
         try:
-            await asyncio.wait_for(self._relay(queue, parent, child_id), child_rails.max_runtime_minutes * 60)
-        except TimeoutError:
-            await self._stop(child_id)
+            try:
+                live = await self.manager.start(
+                    child_id,
+                    depth=parent.depth + 1,
+                    listeners=[queue.put_nowait],
+                    budget_parent=parent.engine,
+                )
+            except Exception as exc:  # the child row is already marked failed
+                log.warning("subcouncil.start_failed", child_run_id=str(child_id), error=str(exc)[:200])
+            else:
+                child_engine = live.ctx.engine
+                parent.children.add(child_id)  # cancelling the parent cancels the child
+                try:
+                    await asyncio.wait_for(
+                        self._relay(queue, parent, child_id), child_rails.max_runtime_minutes * 60
+                    )
+                except TimeoutError:
+                    pass  # _finish stops it
         except asyncio.CancelledError:
-            # The parent was cancelled: never leave an orphaned child council running.
-            await asyncio.shield(self._stop(child_id))
+            # The parent's task is being cancelled: still stop the child and charge its spend back
+            # before letting the cancellation through, so the parent's final usage includes it.
+            await asyncio.shield(asyncio.ensure_future(self._finish(ctx, child_id, child_engine)))
             raise
-        async with parent.sessionmaker() as s:
-            child = await s.get(Run, child_id)
-        assert child is not None
-        usage = child.usage or {}
-        parent.engine.record_usage(
-            Usage(
-                input_tokens=int(usage.get("tokens_in", 0)),
-                output_tokens=int(usage.get("tokens_out", 0)),
-                cost_usd=float(usage.get("usd", 0.0)),
+        child, usage = await self._finish(ctx, child_id, child_engine)
+        if child is None or child.status != "completed":
+            status = child.status if child else "unknown"
+            return ToolResult.error(
+                f"Sub-council ended {status}: {(child.error if child else None) or 'no result'}"
             )
+        return ToolResult(
+            (child.result or "")[:60_000],
+            data={"child_run_id": str(child_id), "usd": usage.get("usd", 0)},
         )
+
+    async def _finish(
+        self, ctx: ToolCallContext, child_id: uuid.UUID, child_engine: GuardrailEngine | None
+    ) -> tuple[Run | None, dict[str, Any]]:
+        """Stop the child if needed, charge its spend to the parent, emit ``subcouncil.completed``."""
+        parent = ctx.run
+        parent.children.discard(child_id)
+        await self._stop(child_id)
+        child: Run | None = None
+        try:
+            async with parent.sessionmaker() as s:
+                child = await s.get(Run, child_id)
+        except Exception as exc:
+            log.warning("subcouncil.read_failed", child_run_id=str(child_id), error=str(exc)[:200])
+        usage = dict((child.usage if child else None) or {})
+        if child_engine is not None:
+            # The child's spend already counts against this run while it runs; settle it for good.
+            charged = parent.engine.settle_child(child_engine)
+            usage = usage or {
+                "usd": round(charged.cost_usd, 6),
+                "tokens_in": charged.input_tokens,
+                "tokens_out": charged.output_tokens,
+            }
+        else:
+            parent.engine.record_usage(
+                Usage(
+                    input_tokens=int(usage.get("tokens_in", 0)),
+                    output_tokens=int(usage.get("tokens_out", 0)),
+                    cost_usd=float(usage.get("usd", 0.0)),
+                )
+            )
         await parent.sink.emit(
             "subcouncil.completed",
             {
                 "child_run_id": str(child_id),
-                "status": child.status,
-                "error": child.error,
+                "status": child.status if child else "unknown",
+                "error": child.error if child else None,
                 "usage": usage,
                 "tool_call_id": ctx.tool_call_id,
             },
             actor=_actor(ctx),
             step_id=ctx.step_id,
         )
-        if child.status != "completed":
-            return ToolResult.error(f"Sub-council ended {child.status}: {child.error or 'no result'}")
-        return ToolResult(
-            (child.result or "")[:60_000],
-            data={"child_run_id": str(child_id), "usd": usage.get("usd", 0)},
-        )
+        return child, usage
 
     async def _stop(self, child_id: uuid.UUID) -> None:
         await self.manager.cancel(child_id)
         try:
             await self.manager.wait(child_id, 30)
         except TimeoutError:
-            pass
+            log.warning("subcouncil.stop_timeout", child_run_id=str(child_id))
 
     async def _relay(self, queue: asyncio.Queue[Envelope], parent: Any, child_id: uuid.UUID) -> None:
         while True:
@@ -200,6 +250,24 @@ class SubCouncilTool(Tool):
                 )
             if env.type == "run.status" and env.data.get("status") in TERMINAL_STATUSES:
                 return
+
+
+def child_budget(parent: GuardrailEngine, rails: Guardrails) -> tuple[float | None, int | None]:
+    """Caps for a new child: its own (clamped) limits, never above what the parent has left now.
+
+    "Left" counts the spend of the parent's sub-councils that are still running, so children
+    spawned in parallel cannot each be handed the parent's whole remaining budget.
+    """
+    used = parent.total_usage
+    usd = rails.budget.usd
+    if parent.rails.budget.usd is not None:
+        left = max(parent.rails.budget.usd - used.cost_usd, 0.0)
+        usd = left if usd is None else min(usd, left)
+    tokens = rails.budget.tokens
+    if parent.rails.budget.tokens is not None:
+        left_tokens = max(parent.rails.budget.tokens - used.total_tokens, 0)
+        tokens = left_tokens if tokens is None else min(tokens, left_tokens)
+    return usd, tokens
 
 
 def _actor(ctx: ToolCallContext):

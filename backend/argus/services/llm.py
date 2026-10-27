@@ -28,7 +28,7 @@ from argus.core.errors import ArgusError, NotFound
 from argus.core.logging import get_logger
 from argus.core.netguard import ip_blocked
 from argus.db.models import ProviderConfig
-from argus.providers.base import Provider, ProviderError, with_retries
+from argus.providers.base import Provider, ProviderError, retry_delay, with_retries
 from argus.providers.catalog import KINDS, build_provider
 from argus.providers.health import HealthResult, failure
 from argus.providers.mock import MockProvider
@@ -133,6 +133,8 @@ def _elapsed_ms(start: float) -> int:
 class LLMRouter:
     # Passive health: re-write an unchanged status at most this often (seconds).
     HEALTH_WRITE_INTERVAL = 60.0
+    # First backoff step for retryable provider errors; doubles per attempt, with jitter.
+    retry_base_delay = 0.5
 
     def __init__(
         self,
@@ -282,7 +284,9 @@ class LLMRouter:
                 start = time.perf_counter()
                 try:
                     resp = await with_retries(
-                        lambda p=provider, q=request: p.complete(q), attempts=self.settings.llm_max_retries
+                        lambda p=provider, q=request: p.complete(q),
+                        attempts=self.settings.llm_max_retries,
+                        base_delay=self.retry_base_delay,
                     )
                 except ProviderError as exc:
                     self.note_health(provider, failure(exc, _elapsed_ms(start)))
@@ -310,21 +314,39 @@ class LLMRouter:
         ledger: UsageLedger | None = None,
         on_event: Callable[[StreamEvent], None] | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        """Stream one completion.
+
+        A retryable error (429, 5xx, overloaded, connection reset) that happens before the first
+        event is retried with the same jittered backoff as ``complete()``. Once an event has been
+        handed to the caller the error is raised instead: replaying the stream would duplicate
+        output, so the caller decides how to recover.
+        """
         provider = await self.resolve(db, owner_id, route.provider)
         request = req.model_copy(update={"model": route.model})
-        start = time.perf_counter()
-        try:
-            async for event in provider.stream(request):
-                if event.type == "done":
-                    self.note_health(provider, HealthResult("ok", latency_ms=_elapsed_ms(start)))
-                    if event.response and ledger:
-                        ledger.record(event.response)
-                if on_event:
-                    on_event(event)
-                yield event
-        except ProviderError as exc:
-            self.note_health(provider, failure(exc, _elapsed_ms(start)))
-            raise
+        attempts = max(self.settings.llm_max_retries, 1)
+        for attempt in range(1, attempts + 1):
+            start = time.perf_counter()
+            emitted = False
+            try:
+                async for event in provider.stream(request):
+                    if event.type == "done":
+                        self.note_health(provider, HealthResult("ok", latency_ms=_elapsed_ms(start)))
+                        if event.response and ledger:
+                            ledger.record(event.response)
+                    if on_event:
+                        on_event(event)
+                    emitted = True
+                    yield event
+                return
+            except ProviderError as exc:
+                self.note_health(provider, failure(exc, _elapsed_ms(start)))
+                if emitted or not exc.retryable or attempt == attempts:
+                    raise
+                delay = retry_delay(attempt, exc, base_delay=self.retry_base_delay)
+                log.warning(
+                    "llm.stream_retry", provider=route.provider, attempt=attempt, delay=round(delay, 2)
+                )
+                await asyncio.sleep(delay)
 
     async def aclose(self) -> None:
         await self.flush_health()

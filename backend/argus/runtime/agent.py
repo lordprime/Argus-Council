@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from argus.agents.roles import ROLES
+from argus.core.errors import NotFound
 from argus.core.logging import get_logger
 from argus.core.metrics import (
     LLM_CALLS,
@@ -37,7 +38,6 @@ from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
 
 log = get_logger(__name__)
 
-TOOL_TIMEOUT_S = 300
 PREVIEW_CHARS = 2000
 
 
@@ -186,11 +186,14 @@ class AgentRunner:
         )
         t0 = time.monotonic()
         response: CompletionResponse | None = None
+        streamed = False
         try:
+            # The router retries retryable errors that happen before any output was produced.
             async for ev in self.ctx.llm.stream(
                 req, Route(self.member.provider, self.member.model), owner_id=self.ctx.owner_id
             ):
                 if ev.type == "text" and ev.text:
+                    streamed = True
                     await self.ctx.sink.emit(
                         "thought.delta",
                         {"thought_id": thought_id, "text": ev.text},
@@ -199,10 +202,21 @@ class AgentRunner:
                     )
                 elif ev.type == "done":
                     response = ev.response
-        except ProviderError as exc:
-            if not self.member.fallbacks:
+        except (ProviderError, NotFound) as exc:
+            # The stream failed after output reached the user (re-streaming would duplicate it),
+            # its retries are used up, or the provider no longer exists. A non-streamed
+            # completion is safe either way: thought.completed carries the full text and replaces
+            # any partial deltas, and complete() retries with backoff and walks the fallbacks.
+            # A non-retryable error with no fallback would only fail again.
+            retryable = isinstance(exc, ProviderError) and exc.retryable
+            if not self.member.fallbacks and not retryable:
                 raise
-            log.warning("agent.stream_failed_falling_back", member=self.member.name, error=str(exc)[:200])
+            log.warning(
+                "agent.stream_failed_completing",
+                member=self.member.name,
+                error=str(exc)[:200],
+                partial=streamed,
+            )
         if response is None:
             response = await self.ctx.llm.complete(
                 req,
@@ -325,8 +339,12 @@ class AgentRunner:
         await self.ctx.sink.emit(
             "member.status", {"member_id": self.member.id, "status": "tool", "detail": call.name}, actor=actor
         )
+        timeout = tool.timeout_for(tool.parse(args) if args is not call.arguments else parsed)
         try:
-            result = await asyncio.wait_for(tool.invoke(args, tctx), timeout=TOOL_TIMEOUT_S)
+            if timeout is None:
+                result = await tool.invoke(args, tctx)
+            else:
+                result = await asyncio.wait_for(tool.invoke(args, tctx), timeout=timeout)
         except TimeoutError:
             return await finish("timeout", ToolResult.error(f"{call.name} timed out"), t0)
         except GuardrailBreach as exc:

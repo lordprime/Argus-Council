@@ -125,6 +125,9 @@ class RemoteAgentTool(Tool):
             f"Available: {listing}"
         )[:1024]
 
+    def timeout_for(self, args: BaseModel | None) -> float | None:
+        return self.timeout_s + 30  # the protocol client enforces timeout_s itself
+
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         agent = self.agents.get(args.agent)
         if agent is None:

@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     protocol_timeout_s: float = 60.0
     remote_agent_timeout_s: float = 600.0
 
+    # Runs
+    approval_timeout_s: float = Field(default=3600.0, gt=0)  # a pending approval expires after this
+    run_start_timeout_s: float = Field(default=60.0, gt=0)  # bound on preparing a run (connections etc.)
+
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
 

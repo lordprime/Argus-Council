@@ -20,6 +20,10 @@ from argus.providers.types import ToolSpec
 if TYPE_CHECKING:
     from argus.runtime.context import RunContext
 
+# Default wall-clock limit for one tool call; tools with longer or self-enforced limits override
+# ``Tool.timeout_for``.
+TOOL_TIMEOUT_S = 300.0
+
 
 @dataclass
 class ToolResult:
@@ -58,6 +62,13 @@ class Tool(abc.ABC):
     def risk_for(self, args: BaseModel) -> frozenset[str]:
         """Risk tags for a specific invocation; override for argument-dependent risk."""
         return self.risk
+
+    def timeout_for(self, args: BaseModel | None) -> float | None:
+        """Wall-clock limit for one call (``args`` is None when they do not validate).
+
+        ``None`` means the tool enforces its own limit and must not be cut off from outside.
+        """
+        return TOOL_TIMEOUT_S
 
     async def invoke(self, raw_args: dict[str, Any], ctx: ToolCallContext) -> ToolResult:
         try:
