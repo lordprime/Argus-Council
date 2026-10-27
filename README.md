@@ -39,7 +39,9 @@ guardrail breaches, and you can step in and correct the council at any point.
 ```bash
 ./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, starts, waits, smoke-tests
 ./scripts/update.sh           # git pull, back up DB + artifacts to backups/, rebuild, restart; rolls back if unhealthy
-./scripts/update.sh --rollback
+./scripts/update.sh --rollback  # previous images; schema via alembic downgrade (--restore-db: pre-update backup)
+./scripts/backup.sh           # verified, checksummed backup into backups/ (cron-safe)
+./scripts/restore.sh --list   # then ./scripts/restore.sh [TIMESTAMP]; refuses corrupt or truncated backups
 ./scripts/build.sh [--version TAG] [--ca corp-ca.crt] [api|web]   # images only
 ```
 

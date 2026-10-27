@@ -37,6 +37,24 @@ export const auth = {
       /* ignore */
     }
   },
+  /** End the session server-side (its refresh and access tokens stop working), then forget it. */
+  revoke() {
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem(REFRESH_KEY);
+    } catch {
+      stored = null;
+    }
+    if (stored) {
+      void fetch("/api/v1/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: stored }),
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+    auth.clear();
+  },
   hasSession() {
     try {
       return Boolean(accessToken || sessionStorage.getItem(REFRESH_KEY));

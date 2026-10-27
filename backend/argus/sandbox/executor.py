@@ -124,6 +124,12 @@ async def execute(
             except ProcessLookupError:
                 pass
             out, err = await proc.communicate()
+        # Reap background children (`cmd &`) so nothing from this run outlives it and touches the
+        # next run's workspace. A child that calls setsid() escapes this; see docs/security/audit.md.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
         changed, deleted = await asyncio.to_thread(_collect, root, before)
         return {
             "exit_code": proc.returncode if not timed_out else -9,

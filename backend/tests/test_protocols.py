@@ -432,7 +432,7 @@ async def test_agents_use_external_mcp_and_remote_agent(client, auth, app, api_k
 
 async def test_dead_mcp_server_does_not_block_run(client, auth, app):
     await client.post(
-        "/api/v1/mcp-servers", headers=auth, json={"name": "dead", "url": "http://127.0.0.1:9/mcp"}
+        "/api/v1/mcp-servers", headers=auth, json={"name": "dead", "url": "http://dead-mcp.invalid/mcp"}
     )
     r = await client.post("/api/v1/runs", headers=auth, json={"topic": "t", "mode": "chat", "size": 2})
     run = await wait_status(client, auth, r.json()["id"], timeout=90)

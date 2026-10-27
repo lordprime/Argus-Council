@@ -7,9 +7,11 @@ import time
 import uuid
 from typing import Any
 
+import httpx
 from pydantic import BaseModel, Field
 
 from argus.core.logging import get_logger
+from argus.core.netguard import guarded_client
 from argus.protocols.a2a_client import A2AClient, task_text
 from argus.protocols.acp_client import AcpClient, run_text
 from argus.protocols.mcp_client import McpClient, render_result, tool_name
@@ -97,6 +99,11 @@ class McpTool(Tool):
             )
 
 
+def _peer_client(agent: dict[str, Any]) -> httpx.AsyncClient:
+    # SSRF guard: the URL was checked when saved, but DNS can change; re-check on every connect.
+    return guarded_client(bool(agent.get("allow_private")), timeout=httpx.Timeout(60.0, connect=10.0))
+
+
 class RemoteAgentTool(Tool):
     name = "remote_agent"
     risk = frozenset({"remote_agent"})
@@ -128,7 +135,7 @@ class RemoteAgentTool(Tool):
         status, response = "ok", None
         try:
             if agent["protocol"] == "a2a":
-                client = A2AClient(agent["url"], agent.get("token"))
+                client = A2AClient(agent["url"], agent.get("token"), client=_peer_client(agent))
                 try:
                     response = await client.run_to_completion(args.message, timeout_s=self.timeout_s)
                 finally:
@@ -138,7 +145,7 @@ class RemoteAgentTool(Tool):
                     response.get("status", {}).get("state", "ok") if response.get("kind") == "task" else "ok"
                 )
             else:
-                client2 = AcpClient(agent["url"], agent.get("token"))
+                client2 = AcpClient(agent["url"], agent.get("token"), client=_peer_client(agent))
                 try:
                     response = await client2.run(agent["agent_name"], args.message, timeout_s=self.timeout_s)
                 finally:

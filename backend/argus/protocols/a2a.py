@@ -139,6 +139,18 @@ async def _owned_run(db, owner_id: uuid.UUID, task_id: Any) -> Run:
     return run
 
 
+MAX_BLOCKING_S = 600.0
+
+
+def _wait_seconds(raw: Any) -> float:
+    """Client-chosen blocking wait, bounded so one request cannot hold a worker indefinitely."""
+    try:
+        value = float(raw if raw is not None else MAX_BLOCKING_S)
+    except (TypeError, ValueError):
+        value = MAX_BLOCKING_S
+    return min(max(value, 0.0), MAX_BLOCKING_S) if value == value else MAX_BLOCKING_S
+
+
 async def _dispatch(request: Request, db, principal, method: str, params: dict[str, Any]) -> Any:
     state = request.app.state
     if method in ("message/send", "tasks/cancel"):
@@ -169,7 +181,7 @@ async def _dispatch(request: Request, db, principal, method: str, params: dict[s
         )
         cfg = params.get("configuration") or {}
         if cfg.get("blocking"):
-            run = await wait_terminal(state.db.sessionmaker, run.id, float(meta.get("timeout_s", 600)))
+            run = await wait_terminal(state.db.sessionmaker, run.id, _wait_seconds(meta.get("timeout_s")))
         return task_from_run(run, message.get("contextId"))
     if method == "tasks/get":
         run = await _owned_run(db, principal.id, params.get("id"))
@@ -210,6 +222,8 @@ async def a2a_endpoint(request: Request) -> JSONResponse:
         except ArgusError:
             return JSONResponse(err(None, -32003, "Invalid credentials"), status_code=401)
         await db.commit()
+        if await state.cache.hit_rate_limit(f"user:{principal.id}", state.settings.rate_limit_per_minute):
+            return JSONResponse(err(None, -32002, "Rate limited"), status_code=429)
         try:
             msg = orjson.loads(await request.body())
         except orjson.JSONDecodeError:

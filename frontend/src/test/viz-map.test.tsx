@@ -151,6 +151,30 @@ describe("CouncilMap", () => {
     expect(container.querySelectorAll('[data-edge="protocol"]')).toHaveLength(0);
   });
 
+  it("offers no Live toggle on a finished run and says it ended", () => {
+    const { container } = render(<CouncilMap run={{ ...makeRun(), status: "completed" }} />);
+    expect(screen.queryByRole("button", { name: /^live/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /paused/i })).toBeNull();
+    expect(screen.getByText(/Ended/)).toHaveTextContent("Ended · completed");
+    expect(container.querySelectorAll("[data-pulse]")).toHaveLength(0);
+  });
+
+  it("uses the shared zoom controls in the fixed order and fits back", async () => {
+    render(<CouncilMap run={makeRun()} />);
+    const user = userEvent.setup();
+    expect(screen.getByRole("heading", { name: "Council map" })).toBeInTheDocument();
+    const zoom = screen.getByRole("group", { name: "Zoom" });
+    const order = Array.from(zoom.children).map((el) => el.getAttribute("aria-label"));
+    expect(order).toEqual(["Zoom out", "Zoom level", "Zoom in", "Fit to view"]);
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("100%");
+    expect(within(zoom).getByRole("button", { name: "Fit to view" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(zoom).getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("125%");
+    expect(within(zoom).getByRole("button", { name: "Fit to view" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(within(zoom).getByRole("button", { name: "Fit to view" }));
+    expect(screen.getByTestId("zoom-level")).toHaveTextContent("100%");
+  });
+
   it("has no axe violations", async () => {
     const { container } = render(<CouncilMap run={makeRun()} />);
     const results = await axe.run(container);

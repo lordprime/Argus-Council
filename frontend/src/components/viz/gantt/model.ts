@@ -242,9 +242,11 @@ export function fmtDur(d: number | undefined): string {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-/** Offset label relative to run start: "+12s", "+1:05", "+1:02:03". */
+/** Offset label relative to run start: "+0.4s", "+12s", "+1:05", "+1:02:03" (tenths under 10s, so short runs read). */
 export function fmtOffset(d: number): string {
-  const s = Math.max(0, Math.round(d / 1000));
+  const v = Math.max(0, d);
+  if (v < 9950) return `+${(v / 1000).toFixed(1)}s`;
+  const s = Math.round(v / 1000);
   if (s < 60) return `+${s}s`;
   const h = Math.floor(s / 3600);
   const mm = Math.floor((s % 3600) / 60);
@@ -252,8 +254,52 @@ export function fmtOffset(d: number): string {
   return h ? `+${h}:${String(mm).padStart(2, "0")}:${ss}` : `+${mm}:${ss}`;
 }
 
-const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].map((s) => s * 1000);
+/** Axis label for a tick at offset `t` when ticks are `step` apart (sub-second steps keep their decimals). */
+export function fmtTick(t: number, step: number): string {
+  if (step >= 1000) {
+    const s = Math.round(t / 1000);
+    return s < 60 ? `+${s}s` : fmtOffset(t);
+  }
+  const decimals = step % 100 === 0 ? 1 : 2;
+  return `+${(t / 1000).toFixed(decimals)}s`;
+}
+
+const TICK_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].map((s) => s * 1000);
 /** Pick a tick interval so labels are at least `minPx` apart. */
 export function tickStep(pxPerMs: number, minPx = 72): number {
   return TICK_STEPS.find((t) => t * pxPerMs >= minPx) ?? TICK_STEPS[TICK_STEPS.length - 1]!;
+}
+
+/* ------------------------------------------------------------------ zoom */
+
+/** Shortest span "fit" will stretch across the pane, so a 40ms run does not turn into a wall of colour. */
+export const FIT_MIN_SPAN = 1000;
+/** Right-hand breathing room after the last bar, in px. */
+export const CHART_GUTTER = 24;
+/** Zoom limits, relative to "fit" (1 = the whole run fills the pane). */
+export const ZOOM_MIN = 0.25;
+export const ZOOM_MAX = 64;
+export const ZOOM_STEP = 1.5;
+
+/**
+ * Pixels per millisecond that fit a run of `durationMs` into a chart pane `paneW` px wide.
+ * Short runs (the mock provider finishes in about a second) fill the pane instead of a fixed minimum window.
+ */
+export function fitScale(durationMs: number, paneW: number): number {
+  const span = Math.max(Number.isFinite(durationMs) ? durationMs : 0, FIT_MIN_SPAN);
+  return Math.max(paneW - CHART_GUTTER, 60) / span;
+}
+
+/**
+ * The scale in use: the fitted scale until the user zooms (`manual` is null), then their scale, kept
+ * within ZOOM_MIN..ZOOM_MAX of the current fit.
+ */
+export function effectiveScale(manual: number | null, fit: number): number {
+  if (manual == null || !Number.isFinite(manual) || manual <= 0) return fit;
+  return Math.min(fit * ZOOM_MAX, Math.max(fit * ZOOM_MIN, manual));
+}
+
+/** One zoom step in or out from `scale`, clamped relative to `fit`. */
+export function stepScale(scale: number, fit: number, dir: 1 | -1): number {
+  return effectiveScale(dir > 0 ? scale * ZOOM_STEP : scale / ZOOM_STEP, fit);
 }

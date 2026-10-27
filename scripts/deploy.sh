@@ -9,6 +9,7 @@
 # On first run it copies deploy/.env.example to deploy/.env and generates any empty secret
 # (ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN). Add provider keys there.
 
+# shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 build=1 smoke=0 build_args=()

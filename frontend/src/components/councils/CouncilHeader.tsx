@@ -2,24 +2,22 @@
 
 import { Pencil, Play, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router";
 
 import { NumberField } from "@/components/councils/fields";
 import { ModeBadge } from "@/components/councils/parts";
-import { Button, Callout, Card, Segmented, TextArea, TextField } from "@/components/ui";
+import { Button, ButtonLink, Callout, Card, FormActions, PageHeader, Segmented, TextArea, TextField } from "@/components/ui";
 import { fieldErrorsFrom, MODES, validateBounds, validateName, type FieldErrors } from "@/features/councils/logic";
 import { useUpdateCouncil, type CouncilPatch } from "@/features/councils/queries";
 import { relTime } from "@/lib/format";
 import type { Council, Mode } from "@/lib/types";
 import { toast } from "@/stores/toast";
 
-export function StartRunLink({ className, label = "Start run with this council" }: { className?: string; label?: string }) {
-  return (
-    <Link to="/" className={`inline-flex items-center justify-center gap-2 h-9 px-3 rounded-md text-base font-medium bg-accent text-accent-fg hover:bg-accent-hover shadow-1 whitespace-nowrap ${className ?? ""}`}>
-      <Play className="size-4" aria-hidden />
-      {label}
-    </Link>
-  );
+export function StartRunLink({ className, label = "Start run with this council", variant = "primary" }: {
+  className?: string;
+  label?: string;
+  variant?: "primary" | "secondary";
+}) {
+  return <ButtonLink to="/" variant={variant} icon={Play} className={className}>{label}</ButtonLink>;
 }
 
 export function CouncilHeader({ council, onDelete }: { council: Council; onDelete: () => void }) {
@@ -28,26 +26,21 @@ export function CouncilHeader({ council, onDelete }: { council: Council; onDelet
 
   if (editing) return <HeaderForm council={council} onDone={() => setEditing(false)} />;
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-      <div className="min-w-0 flex-1 basis-72">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl break-words">{council.name}</h1>
-          <ModeBadge mode={council.mode} />
-        </div>
-        <p className="text-sm text-fg-muted mt-1 max-w-2xl whitespace-pre-line">
-          {council.description || <span className="text-fg-subtle">No description.</span>}
-        </p>
-        <p className="text-xs text-fg-subtle mt-2 tabular">
+    <PageHeader title={council.name} badge={<ModeBadge mode={council.mode} />}
+      description={<span className="whitespace-pre-line">{council.description || <span className="text-fg-subtle">No description.</span>}</span>}
+      meta={
+        <p className="text-xs text-fg-subtle tabular">
           {seats} seat{seats === 1 ? "" : "s"} (bounds {council.min_size}–{council.max_size}) · updated{" "}
           <time dateTime={council.updated_at}>{relTime(council.updated_at)}</time>
         </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button icon={Pencil} onClick={() => setEditing(true)}>Edit details</Button>
-        <Button icon={Trash2} variant="danger-ghost" onClick={onDelete}>Delete</Button>
-        <StartRunLink label="Start run" />
-      </div>
-    </div>
+      }
+      actions={
+        <>
+          <Button icon={Pencil} onClick={() => setEditing(true)}>Edit details</Button>
+          <Button icon={Trash2} variant="danger-ghost" onClick={onDelete}>Delete</Button>
+          <StartRunLink label="Start run" />
+        </>
+      } />
   );
 }
 
@@ -115,10 +108,9 @@ function HeaderForm({ council, onDone }: { council: Council; onDone: () => void 
         </div>
         {errors.size && <p className="text-xs text-danger" role="alert">{errors.size}</p>}
         {errors._form && <Callout tone="danger" title="Could not save">{errors._form}</Callout>}
-        <div className="flex gap-2">
+        <FormActions cancel={{ onClick: onDone }}>
           <Button type="submit" variant="primary" loading={update.isPending}>Save details</Button>
-          <Button type="button" onClick={onDone}>Cancel</Button>
-        </div>
+        </FormActions>
       </form>
     </Card>
   );

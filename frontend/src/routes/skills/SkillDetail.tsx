@@ -1,13 +1,13 @@
 import { Copy, Download, FileText, Pencil, SearchX, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 
 import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
 import { Chips, Meta, Switch } from "@/components/connections/parts";
 import { SkillBadges } from "@/components/skills/SkillBadges";
 import { FileViewer } from "@/components/skills/FileViewer";
 import { VersionHistory } from "@/components/skills/VersionHistory";
-import { Button, Callout, Card, EmptyState, ErrorState, PageHeader, Skeleton } from "@/components/ui";
+import { Button, ButtonLink, Callout, Card, CardTitle, EmptyState, ErrorState, Page, PageHeader, SectionTitle, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { exportSkill, useDeleteSkill, useToggleSkill } from "@/features/skills/queries";
 import { demoteHeadings, SKILL_PROSE, stripFrontmatter } from "@/features/skills/skillmd";
@@ -40,19 +40,19 @@ export default function SkillDetail() {
   const [confirm, setConfirm] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  // The way back is the top-bar breadcrumb (Skills › name), not a per-page link (audit C-11).
-  if (q.isLoading) return <div className="p-4 md:p-6 max-w-6xl mx-auto"><DetailSkeleton /></div>;
+  if (q.isLoading) return <Page><DetailSkeleton /></Page>;
   if (q.error || !q.data) {
     const notFound = q.error instanceof ApiError && q.error.status === 404;
     return (
-      <div className="p-4 md:p-6 max-w-6xl mx-auto">
-        <h1 className="text-xl mb-4">{notFound ? "Skill not found" : "Could not load skill"}</h1>
+      <Page>
+        <PageHeader title={notFound ? "Skill not found" : "Could not load skill"} />
         <Card as="div">
           {notFound
-            ? <EmptyState icon={SearchX} title={`There is no skill named “${name}”`} body="It may have been deleted or renamed." action={<Link to="/skills" className="text-accent underline">Back to skills</Link>} />
+            ? <EmptyState icon={SearchX} title={`There is no skill named “${name}”`} body="It may have been deleted or renamed."
+                action={<ButtonLink to="/skills">All skills</ButtonLink>} />
             : <ErrorState error={q.error} onRetry={() => void q.refetch()} />}
         </Card>
-      </div>
+      </Page>
     );
   }
 
@@ -70,10 +70,10 @@ export default function SkillDetail() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <Page>
       <PageHeader title={s.name} description={s.description}
         actions={
-          <div className="flex flex-wrap gap-2">
+          <>
             <Button icon={Download} loading={exporting} onClick={() => void doExport()}>Export .zip</Button>
             {s.builtin ? (
               <Button variant="primary" icon={Copy} onClick={() => navigate(`/skills/new?from=${encodeURIComponent(s.name)}`)}>Customize</Button>
@@ -83,7 +83,7 @@ export default function SkillDetail() {
                 <Button variant="danger-ghost" icon={Trash2} onClick={() => { del.reset(); setConfirm(true); }}>Delete</Button>
               </>
             )}
-          </div>
+          </>
         } />
 
       {s.builtin && (
@@ -104,13 +104,12 @@ export default function SkillDetail() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem] items-start">
         <div className="flex flex-col gap-6 min-w-0">
           <Card className="p-5" aria-labelledby="instructions-h">
-            <h2 id="instructions-h" className="text-lg mb-1">Instructions</h2>
-            <p className="text-xs text-fg-subtle mb-3">Loaded when an agent calls use_skill.</p>
+            <SectionTitle id="instructions-h" description="Loaded when an agent calls use_skill.">Instructions</SectionTitle>
             <Markdown className={SKILL_PROSE} headingOffset={0}>{demoteHeadings(body)}</Markdown>
           </Card>
 
           <Card className="p-5" aria-labelledby="files-h">
-            <h2 id="files-h" className="text-lg mb-3">Bundled files <span className="text-fg-subtle text-sm font-normal">({s.files.length})</span></h2>
+            <SectionTitle id="files-h" count={s.files.length}>Bundled files</SectionTitle>
             {s.files.length ? (
               <FileViewer files={s.file_contents} />
             ) : (
@@ -129,7 +128,7 @@ export default function SkillDetail() {
 
         <aside aria-labelledby="about-h" className="lg:sticky lg:top-4">
         <Card as="div" className="p-4 flex flex-col gap-4">
-          <h2 id="about-h" className="text-base font-semibold">About</h2>
+          <CardTitle as="h2" id="about-h">About</CardTitle>
           <SkillBadges skill={s} align="start" />
           <dl className="grid grid-cols-2 gap-3">
             <Meta label="Version" mono>{s.version}</Meta>
@@ -160,6 +159,6 @@ export default function SkillDetail() {
         onConfirm={() => del.mutate(s.name, {
           onSuccess: () => { toast({ tone: "success", title: `Deleted ${s.name}` }); setConfirm(false); navigate("/skills"); },
         })} />
-    </div>
+    </Page>
   );
 }

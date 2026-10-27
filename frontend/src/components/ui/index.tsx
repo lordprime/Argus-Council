@@ -41,6 +41,9 @@ import { cn } from "@/lib/cn";
 import { useCountdown } from "@/lib/useCountdown";
 import { useToasts } from "@/stores/toast";
 
+// Page-level patterns (ButtonLink, FormActions, FilterBar, titles, Chip/Tag) live in their own module.
+export * from "./patterns";
+
 // ------------------------------------------------------------------ Button
 type Variant = "primary" | "secondary" | "ghost" | "danger" | "danger-ghost";
 type Size = "sm" | "md" | "lg";
@@ -92,6 +95,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     </button>
   );
 });
+
+export type ButtonVariant = Variant;
+export type ButtonSize = Size;
+
+/** Button classes for elements that must not be a <button> (router links styled as buttons, see ButtonLink). */
+export function buttonClass(variant: Variant = "secondary", size: Size = "md") {
+  return cn("inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast min-w-6 min-h-6 whitespace-nowrap",
+    touchTarget, variants[variant], sizes[size]);
+}
 
 export const IconButton = forwardRef<HTMLButtonElement, ButtonProps & { label: string }>(function IconButton(
   { label, icon, size = "sm", variant = "ghost", className, ...rest },

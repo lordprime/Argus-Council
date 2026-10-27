@@ -5,6 +5,7 @@ import { BookmarkPlus, LayoutTemplate, Play } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
+import { ModeLabel } from "@/components/run/ModeLabel";
 import { Badge, Button, Callout, Dialog, EmptyState, ErrorState, Skeleton, TextArea, TextField } from "@/components/ui";
 import { ApiError, errorMessage } from "@/lib/api";
 
@@ -158,7 +159,7 @@ export function TemplatePicker() {
               <li key={t.id}>
                 <button type="button" onClick={() => setChosen(t)}
                   className="w-full text-left px-2 py-2.5 rounded-md hover:bg-surface-2 flex flex-col gap-0.5">
-                  <span className="flex items-center gap-2"><span className="font-medium">{t.name}</span><Badge>{t.mode}</Badge></span>
+                  <span className="flex items-center gap-2"><span className="font-medium">{t.name}</span><ModeLabel mode={t.mode} variant="badge" /></span>
                   <span className="text-xs text-fg-muted truncate">{t.topic}</span>
                 </button>
               </li>

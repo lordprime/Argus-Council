@@ -1,7 +1,10 @@
-import { ChevronDown, Download, ScrollText } from "lucide-react";
-import { Fragment, useState, type FormEvent } from "react";
+import { CheckCircle2, ChevronDown, Download, ScrollText, XCircle } from "lucide-react";
+import { Fragment, useState } from "react";
 
-import { Badge, Button, Card, EmptyState, ErrorState, IconButton, SelectField, Skeleton, TextField, Toggle } from "@/components/ui";
+import { InsightsPage } from "@/components/insights/InsightsPage";
+import {
+  Badge, Button, Card, EmptyState, ErrorState, FilterBar, IconButton, SearchField, SelectField, Skeleton, Toggle, useDebouncedValue,
+} from "@/components/ui";
 import { auditCsv, downloadText } from "@/features/insights/logic";
 import { useAuditLog, type AuditEvent, type AuditFilters } from "@/features/insights/queries";
 import { cn } from "@/lib/cn";
@@ -23,7 +26,10 @@ function Row({ e, showActor }: { e: AuditEvent; showActor: boolean }) {
         <td className="px-3 py-2 text-xs max-w-56 truncate" title={[e.target_type, e.target_id].filter(Boolean).join(" ")}>
           {e.target_type ? <><span className="text-fg-subtle">{e.target_type}</span> <span className="font-mono">{e.target_id}</span></> : <span className="text-fg-subtle">—</span>}
         </td>
-        <td className="px-3 py-2"><Badge tone={e.success ? "success" : "danger"}>{e.success ? "Success" : "Failed"}</Badge></td>
+        <td className="px-3 py-2"><Badge tone={e.success ? "success" : "danger"}>
+          {e.success ? <CheckCircle2 className="size-3" aria-hidden /> : <XCircle className="size-3" aria-hidden />}
+          {e.success ? "Success" : "Failed"}
+        </Badge></td>
         {showActor && <td className="px-3 py-2 font-mono text-xs whitespace-nowrap" title={e.actor_id ?? ""}>{e.actor_id ? e.actor_id.slice(0, 8) : "system"}</td>}
         <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{e.ip ?? "—"}</td>
         <td className="px-1 py-1">
@@ -53,54 +59,52 @@ function Row({ e, showActor }: { e: AuditEvent; showActor: boolean }) {
 export default function Audit() {
   const { user } = useSession();
   const isAdmin = Boolean(user?.is_admin || (user as { role?: string } | null)?.role === "admin");
-  const [draft, setDraft] = useState("");
-  const [filters, setFilters] = useState<AuditFilters>({ action: "", success: "", all: false });
+  const [action, setAction] = useState("");
+  const [result, setResult] = useState<AuditFilters["success"]>("");
+  const [all, setAll] = useState(false);
+  // Filters apply as you type (C-28); the free-text action waits for a pause in typing.
+  const debouncedAction = useDebouncedValue(action.trim());
+  const filters: AuditFilters = { action: debouncedAction, success: result, all };
   const q = useAuditLog(filters);
   const events = q.data?.pages.flat() ?? [];
   const showActor = filters.all;
-
-  const apply = (ev: FormEvent) => {
-    ev.preventDefault();
-    setFilters((f) => ({ ...f, action: draft }));
-  };
+  const filtered = Boolean(action.trim() || result || all);
 
   return (
-    <div className="p-4 md:p-6 max-w-[96rem] mx-auto flex flex-col gap-4 min-w-0">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl">Audit log</h1>
-          <p className="text-sm text-fg-muted mt-1">Sign-ins, key changes, configuration edits and other security-relevant actions, newest first.</p>
-        </div>
-        <Button size="sm" icon={Download} disabled={!events.length}
+    <InsightsPage title="Audit log"
+      description="Sign-ins, key changes, configuration edits and other security-relevant actions, newest first."
+      actions={
+        <Button icon={Download} disabled={!events.length}
           onClick={() => downloadText(`argus-audit-${new Date().toISOString().slice(0, 10)}.csv`, auditCsv(events), "text/csv")}>
           Export CSV
         </Button>
-      </div>
-
-      <Card className="p-3" aria-label="Filters">
-        <form onSubmit={apply} className="flex flex-wrap items-end gap-3">
-          <TextField label="Action contains" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="e.g. auth.login" className="w-full sm:w-64" />
-          <SelectField label="Result" value={filters.success} className="w-full sm:w-40"
-            onChange={(e) => setFilters((f) => ({ ...f, success: e.target.value as AuditFilters["success"] }))}>
-            <option value="">Any</option>
-            <option value="true">Success</option>
-            <option value="false">Failed</option>
-          </SelectField>
-          <Button type="submit" variant="primary">Apply</Button>
-          {isAdmin && (
-            <div className="pb-1.5">
-              <Toggle label="All users" hint="Administrators only" checked={filters.all} onChange={(v) => setFilters((f) => ({ ...f, all: v }))} />
-            </div>
-          )}
-        </form>
-      </Card>
+      }>
+      <FilterBar label="Filter audit events" canClear={filtered}
+        onClear={() => { setAction(""); setResult(""); setAll(false); }}>
+        <SearchField label="Action contains" value={action} onChange={setAction} placeholder="e.g. auth.login" className="w-full sm:w-64" />
+        <SelectField label="Result" value={result} className="w-full sm:w-40"
+          onChange={(e) => setResult(e.target.value as AuditFilters["success"])}>
+          <option value="">Any</option>
+          <option value="true">Success</option>
+          <option value="false">Failed</option>
+        </SelectField>
+        {isAdmin && (
+          <div className="self-end pb-1.5">
+            <Toggle label="All users" hint="Administrators only" checked={all} onChange={setAll} />
+          </div>
+        )}
+      </FilterBar>
 
       {q.isLoading ? (
         <Card as="div" className="p-3 space-y-2" aria-hidden>{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-8" />)}</Card>
       ) : q.error ? (
         <Card><ErrorState error={q.error} onRetry={() => void q.refetch()} /></Card>
       ) : !events.length ? (
-        <Card as="div"><EmptyState icon={ScrollText} title="No audit events match" body="Try a broader action filter or clear the result filter." /></Card>
+        <Card as="div">
+          {filtered
+            ? <EmptyState icon={ScrollText} title="No audit events match" body="Try a broader action filter or clear the filters." />
+            : <EmptyState icon={ScrollText} title="No audit events yet" body="Sign-ins, key changes and configuration edits appear here as they happen." />}
+        </Card>
       ) : (
         <Card as="div" className="overflow-hidden">
           {/* relative: contains the sr-only header label, which would otherwise escape the scroll box and widen the page */}
@@ -128,6 +132,6 @@ export default function Audit() {
           </div>
         </Card>
       )}
-    </div>
+    </InsightsPage>
   );
 }

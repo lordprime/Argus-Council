@@ -18,7 +18,7 @@ export function RunRow({ run, names }: { run: Run; names?: Map<string, string> }
 }
 
 /** A list of stacked run rows that resolves council names once for the whole list. */
-export function RunRowList({ runs }: { runs: Run[] }) {
+export function RunRowList({ runs, label }: { runs: Run[]; label?: string }) {
   const names = useCouncilNames(runs);
-  return <ul className="divide-y divide-border">{runs.map((r) => <RunRow key={r.id} run={r} names={names} />)}</ul>;
+  return <ul className="divide-y divide-border" aria-label={label}>{runs.map((r) => <RunRow key={r.id} run={r} names={names} />)}</ul>;
 }

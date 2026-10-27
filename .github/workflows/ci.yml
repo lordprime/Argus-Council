@@ -34,8 +34,8 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           version: "0.11.32"
           enable-cache: true
@@ -66,8 +66,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -79,14 +79,25 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -x --severity=warning scripts/*.sh scripts/tests/*.sh scripts/tests/stubs/*
+      - name: Deploy script tests (stub docker)
+        run: ./scripts/tests/run.sh
+
   docker:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend, frontend, scripts]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: backend
           load: true
@@ -94,7 +105,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build web image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: frontend
           load: true
@@ -116,14 +127,16 @@ jobs:
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T api python - <<'PY'
           import asyncio, os
           from argus.sandbox.client import RemoteSandbox
-          sb = RemoteSandbox("http://sandbox:8100", os.environ["ARGUS_SANDBOX_TOKEN"])
+          sb = RemoteSandbox(os.environ["ARGUS_SANDBOX_URL"], os.environ["ARGUS_SANDBOX_TOKEN"])
           res = asyncio.run(sb.run({"t.py": "print(6*7)"}, "python3 t.py", 30))
           assert res["exit_code"] == 0 and res["stdout"].strip() == "42", res
           net = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\"", 30))
           assert net["exit_code"] != 0, "sandbox must not reach the internet"
+          api = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('http://api:8000/health/live', timeout=5)\"", 30))
+          assert api["exit_code"] != 0, "sandbox must not reach the API"
           print("sandbox: OK")
           PY
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: UI end-to-end (production build, strict CSP)
@@ -132,6 +145,9 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
           E2E_BASE=http://127.0.0.1:8080 node e2e/ui-smoke.cjs
+      - name: Backup, update, rollback and restore end-to-end (scripts)
+        timeout-minutes: 15
+        run: ./scripts/tests/e2e.sh
       - name: Logs on failure
         if: failure()
         run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color
@@ -149,4 +165,4 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src:ro" aquasec/trivy:0.57.0 \
             fs --scanners secret --exit-code 1 --no-progress --skip-dirs /src/.git --skip-dirs /src/frontend/node_modules \
-            --skip-files /src/deploy/.env /src
+            --skip-dirs /src/backups --skip-files /src/deploy/.env /src

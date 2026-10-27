@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, Download, FileCode2, FileText, FolderTree, PanelRight, Pause, Play, Square, Users } from "lucide-react";
-import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router";
 
 import {
@@ -16,7 +16,7 @@ import {
 } from "@/components/run/parts";
 import { ModeLabel } from "@/components/run/ModeLabel";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
-import { Badge, Button, Callout, EmptyState, ErrorState, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
+import { Badge, Button, Callout, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
 import { Drawer } from "@/components/ui/Drawer";
 import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
@@ -67,38 +67,6 @@ function saveView(v: RunView) {
   } catch {
     /* storage unavailable */
   }
-}
-
-function ViewSwitcher({ value, onChange }: { value: RunView; onChange: (v: RunView) => void }) {
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
-    const i = VIEWS.findIndex((v) => v.value === value);
-    let next = -1;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (i + 1) % VIEWS.length;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (i - 1 + VIEWS.length) % VIEWS.length;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = VIEWS.length - 1;
-    if (next < 0) return;
-    e.preventDefault();
-    onChange(VIEWS[next]!.value);
-    refs.current[next]?.focus();
-  };
-  return (
-    <div role="tablist" aria-label="Run visualisation"
-      className="inline-flex rounded-md bg-surface-2 p-0.5 overflow-x-auto max-w-full">
-      {VIEWS.map((v, i) => {
-        const on = v.value === value;
-        return (
-          <button key={v.value} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`run-view-tab-${v.value}`}
-            aria-selected={on} aria-controls="run-view-panel" tabIndex={on ? 0 : -1} onClick={() => onChange(v.value)} onKeyDown={onKey}
-            className={cn("px-3 h-7 rounded text-sm whitespace-nowrap focus-visible:outline-2 focus-visible:outline-accent",
-              on ? "bg-surface shadow-1 font-medium" : "text-fg-muted hover:text-fg")}>
-            {v.label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 class VizBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
@@ -594,7 +562,7 @@ export default function RunWorkspace() {
             )}
             <div className="flex flex-col min-h-0 min-w-0">
               <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-surface">
-                <ViewSwitcher value={view} onChange={setView} />
+                <SegmentedTabs label="Run visualisation" value={view} onChange={setView} options={VIEWS} idPrefix="run-view" panelId="run-view-panel" />
                 {view === "timeline" && <>
                 <label htmlFor="density" className="text-xs text-fg-subtle">Show</label>
                 <select id="density" value={density} onChange={(e) => setDensity(e.target.value as Density)}

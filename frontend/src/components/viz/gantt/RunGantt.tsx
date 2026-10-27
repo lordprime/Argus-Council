@@ -2,13 +2,16 @@
 // shared time axis. Left: a sticky table (name, status, start, end, duration, cost). Right: bars.
 // Horizontal scroll lives inside the chart region only. Columns collapse by the component's own width
 // (not the viewport): the table is capped at 45% so the bars always keep >= 55% of the pane.
+// Zoom starts at "fit" (the whole run fills the chart pane, however short) and keeps re-fitting as the
+// pane resizes or a live run grows, until the user zooms by hand; the fit button returns to that mode.
 
-import { ChevronDown, ChevronRight, CircleDashed, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDashed } from "lucide-react";
 import {
   Fragment,
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,13 +20,17 @@ import {
   type ReactNode,
 } from "react";
 
-import { EmptyState, IconButton, STATUS, StatusPill } from "@/components/ui";
+import { Badge, EmptyState, Segmented, STATUS, StatusPill } from "@/components/ui";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { cn } from "@/lib/cn";
 import { usd } from "@/lib/format";
 import { isTerminal, type RunState } from "@/stores/run";
 
-import { buildGantt, fmtDur, fmtOffset, tickStep, type Row, type Seg } from "./model";
+import { RunStateBadge, VizPane, VizToolbar, ZoomControls } from "../VizToolbar";
+import {
+  buildGantt, CHART_GUTTER, effectiveScale, fitScale, fmtDur, fmtOffset, fmtTick, stepScale, tickStep, ZOOM_MAX, ZOOM_MIN,
+  type Row, type Seg,
+} from "./model";
 
 export interface RunGanttProps {
   run: RunState;
@@ -34,9 +41,8 @@ type View = "all" | "steps" | "agents";
 type Sort = "roster" | "start";
 
 const ROW_H = 36;
-const MIN_SPAN = 10_000;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 64;
+/** Every bar gets a hit area at least this wide (WCAG 2.5.8), however short its span. */
+export const BAR_HIT_MIN = 24;
 const HATCH = "repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 6px)";
 const STRIPE = "repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 7px)";
 
@@ -79,11 +85,11 @@ function StatusIcon({ status }: { status: string }) {
   );
 }
 
-/** Observed clientWidth of an element (0 until measured, e.g. in jsdom). */
+/** Observed clientWidth of an element (0 until measured). Measured before paint so the first frame already fits. */
 function useWidth<T extends HTMLElement>(): [(el: T | null) => void, number] {
   const [el, setEl] = useState<T | null>(null);
   const [w, setW] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!el) return;
     const measure = () => setW(el.clientWidth);
     measure();
@@ -118,7 +124,8 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const tipId = `gantt-tip-${uid}`;
 
-  const [zoom, setZoom] = useState(1);
+  /** px per ms chosen by the user; null = follow "fit". */
+  const [manual, setManual] = useState<number | null>(null);
   const [view, setView] = useState<View>("all");
   const [sort, setSort] = useState<Sort>("roster");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -134,12 +141,35 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
   const narrow = cols.length === 0;
   const viewW = Math.max((scrollW > 0 ? scrollW : containerW - 2) - tableW, 120);
 
-  const spanMs = Math.max(model.tEnd - model.t0, MIN_SPAN);
-  const pxPerMs = (Math.max(viewW - 24, 120) / spanMs) * zoom;
-  const chartW = Math.max(viewW, Math.ceil(spanMs * pxPerMs) + 24);
+  const durationMs = Math.max(0, model.tEnd - model.t0);
+  const fit = fitScale(durationMs, viewW);
+  const pxPerMs = effectiveScale(manual, fit);
+  const zoom = pxPerMs / fit;
+  // Rounded (not ceiled) so a fitted chart is exactly the pane width and never scrolls by 1px.
+  const chartW = Math.max(viewW, Math.round(durationMs * pxPerMs) + CHART_GUTTER);
   const x = useCallback((t: number) => (t - model.t0) * pxPerMs, [model.t0, pxPerMs]);
   const step = tickStep(pxPerMs);
   const nowX = live ? x(Math.max(now, model.t0)) : null;
+
+  // Zooming keeps the time at the centre of the visible chart where it was.
+  const pendingCenter = useRef<number | null>(null);
+  const zoomBy = (dir: 1 | -1) => {
+    const el = scrollRef.current;
+    if (el) pendingCenter.current = (el.scrollLeft + viewW / 2) / pxPerMs;
+    setManual(stepScale(pxPerMs, fit, dir));
+  };
+  const fitToPane = () => {
+    pendingCenter.current = null;
+    setManual(null);
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const c = pendingCenter.current;
+    if (!el || c == null) return;
+    pendingCenter.current = null;
+    el.scrollLeft = Math.max(0, c * pxPerMs - viewW / 2);
+  }, [pxPerMs, viewW]);
 
   const agents = useMemo(() => {
     if (sort === "roster") return model.agents;
@@ -208,7 +238,8 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
   };
 
   const ticks: number[] = [];
-  for (let t = 0; t <= spanMs + step && ticks.length < 400; t += step) ticks.push(t);
+  // Stop before the right edge so the last label never pushes the chart into a horizontal scroll.
+  for (let t = 0; t * pxPerMs <= chartW - 44 && ticks.length < 400; t += step) ticks.push(t);
 
   const renderRow = (row: Row, opts: { indent?: boolean; toggle?: ReactNode; extra?: ReactNode } = {}) => {
     const idx = rowIndex++;
@@ -245,7 +276,7 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
           {opts.extra}
           {row.segs.length === 0 && <span className="sr-only">No activity</span>}
           {row.segs.map((seg) => (
-            <Bar key={seg.id} seg={seg} row={idx} left={x(seg.start)} width={Math.max(4, (seg.end - seg.start) * pxPerMs)}
+            <Bar key={seg.id} seg={seg} row={idx} left={x(seg.start)} width={Math.max(3, (seg.end - seg.start) * pxPerMs)}
               t0={model.t0} live={live} describedBy={tip?.seg.id === seg.id ? tipId : undefined}
               onActivate={select} onShow={showTip} onHide={() => setTip(null)} onKey={onBarKey} />
           ))}
@@ -305,19 +336,18 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
     </div>
   );
 
+  const titleId = `gantt-title-${uid}`;
   return (
-    <section ref={boxRef} aria-label="Run Gantt chart" data-cols={narrow ? "narrow" : cols.length < 5 ? "mid" : "wide"}
-      className="flex w-full min-w-0 flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <div role="group" aria-label="Rows to show" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">
-          {(["all", "steps", "agents"] as const).map((v) => (
-            <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)}
-              className={cn("h-7 rounded-md px-2.5 text-sm capitalize transition-colors duration-fast",
-                view === v ? "bg-surface text-fg shadow-1 font-medium" : "text-fg-muted hover:text-fg")}>
-              {v}
-            </button>
-          ))}
-        </div>
+    <VizPane labelledBy={titleId}>
+      <VizToolbar titleId={titleId} title="Gantt chart"
+        meta={<>
+          <RunStateBadge status={run.status} testId="gantt-status" />
+          <Badge>Span {fmtDur(durationMs)}</Badge>
+        </>}
+        zoom={<ZoomControls value={zoom} min={ZOOM_MIN} max={ZOOM_MAX} onZoomOut={() => zoomBy(-1)} onZoomIn={() => zoomBy(1)}
+          onFit={fitToPane} fitLabel="Fit run to width" fitted={manual == null} />}>
+        <Segmented label="Rows to show" hideLabel size="sm" value={view} onChange={setView}
+          options={[{ value: "all", label: "All" }, { value: "steps", label: "Steps" }, { value: "agents", label: "Agents" }]} />
         <label className="flex items-center gap-1.5 text-sm text-fg-muted">
           <span>Sort</span>
           <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}
@@ -326,73 +356,69 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
             <option value="start">First activity</option>
           </select>
         </label>
-        <div className="ml-auto flex items-center gap-1">
-          <IconButton label="Zoom out" icon={ZoomOut} onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z / 1.5))} disabled={zoom <= ZOOM_MIN} />
-          <span className="w-12 text-center text-xs tabular-nums text-fg-muted" aria-live="polite">{Math.round(zoom * 100)}%</span>
-          <IconButton label="Zoom in" icon={ZoomIn} onClick={() => setZoom((z) => Math.min(ZOOM_MAX, z * 1.5))} disabled={zoom >= ZOOM_MAX} />
-          <IconButton label="Fit to width" icon={Maximize2} onClick={() => setZoom(1)} />
-        </div>
-      </div>
+      </VizToolbar>
 
-      {empty ? (
-        <EmptyState title="No activity yet" body="Bars appear here as members think, call tools and complete plan steps." />
-      ) : (
-        <div ref={setScrollRef} role="region" aria-label="Timeline, scroll horizontally" tabIndex={0}
-          className="relative max-h-[70vh] w-full min-w-0 overflow-auto rounded-lg border border-border bg-surface">
-          <div role="table" aria-label="Run activity timeline" aria-describedby={`gantt-legend-${uid}`} style={{ width: "max-content", minWidth: "100%" }}>
-            <div role="rowgroup" className="sticky top-0 z-rail">
-              <div role="row" className="flex border-b border-border bg-surface" style={{ height: 32 }}>
-                <div className="sticky left-0 z-rail flex shrink-0 bg-surface border-r border-border border-l-[3px] border-l-transparent text-2xs uppercase tracking-wide text-fg-subtle"
-                  style={{ width: tableW }}>
-                  <div role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: nameW }}>Name</div>
-                  {cols.map((c) => (
-                    <div key={c} role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: COL_W[c] }}>{COL_LABEL[c]}</div>
-                  ))}
-                </div>
-                <div role="columnheader" data-testid="gantt-timeline" className="relative shrink-0 bg-surface" style={{ width: chartW }}>
-                  <span className="sr-only">Timeline</span>
-                  {ticks.map((t) => (
-                    <span key={t} aria-hidden className="absolute top-0 flex h-full items-end pb-1 pl-1 text-2xs tabular-nums text-fg-subtle border-l border-border"
-                      style={{ left: t * pxPerMs }}>
-                      {fmtOffset(t)}
-                    </span>
-                  ))}
-                  {nowX != null && (
-                    <span data-testid="gantt-now" className="absolute top-1 z-sticky -translate-x-1/2 whitespace-nowrap rounded-full bg-danger px-2 text-2xs leading-5 text-danger-fg shadow-1"
-                      style={{ left: nowX }}>
-                      Now <span className="tabular-nums">{fmtOffset(now - model.t0)}</span>
-                    </span>
-                  )}
+      <div ref={boxRef} data-cols={narrow ? "narrow" : cols.length < 5 ? "mid" : "wide"} className="flex w-full min-w-0 flex-col gap-2">
+        {empty ? (
+          <EmptyState title="No activity yet" body="Bars appear here as members think, call tools and complete plan steps." />
+        ) : (
+          <div ref={setScrollRef} role="region" aria-label="Timeline, scroll horizontally" tabIndex={0}
+            className="relative max-h-[70vh] w-full min-w-0 overflow-auto rounded-lg border border-border bg-surface">
+            <div role="table" aria-label="Run activity timeline" aria-describedby={`gantt-legend-${uid}`} style={{ width: "max-content", minWidth: "100%" }}>
+              <div role="rowgroup" className="sticky top-0 z-rail">
+                <div role="row" className="flex border-b border-border bg-surface" style={{ height: 32 }}>
+                  <div className="sticky left-0 z-rail flex shrink-0 bg-surface border-r border-border border-l-[3px] border-l-transparent text-2xs uppercase tracking-wide text-fg-subtle"
+                    style={{ width: tableW }}>
+                    <div role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: nameW }}>Name</div>
+                    {cols.map((c) => (
+                      <div key={c} role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: COL_W[c] }}>{COL_LABEL[c]}</div>
+                    ))}
+                  </div>
+                  <div role="columnheader" data-testid="gantt-timeline" className="relative shrink-0 bg-surface" style={{ width: chartW }}>
+                    <span className="sr-only">Timeline</span>
+                    {ticks.map((t) => (
+                      <span key={t} aria-hidden className="absolute top-0 flex h-full items-end pb-1 pl-1 text-2xs tabular-nums text-fg-subtle border-l border-border"
+                        style={{ left: t * pxPerMs }}>
+                        {fmtTick(t, step)}
+                      </span>
+                    ))}
+                    {nowX != null && (
+                      <span data-testid="gantt-now" className="absolute top-1 z-sticky -translate-x-1/2 whitespace-nowrap rounded-full bg-danger px-2 text-2xs leading-5 text-danger-fg shadow-1"
+                        style={{ left: nowX }}>
+                        Now <span className="tabular-nums">{fmtOffset(now - model.t0)}</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
+
+              {showSteps && section("steps", `Plan · ${model.steps.length} steps`, "border-l-accent",
+                model.steps.map((r, i) => renderRow(r, { extra: i === 0 ? stepArrows() : undefined })))}
+              {showAgents && section("agents", `Agents · ${agents.length}`, "border-l-info", agents.map((r) => renderRow(r)))}
+              {showSubs && section("subs", `Sub-councils · ${model.groups.length}`, "border-l-warning",
+                model.groups.map((g) => {
+                  const isOpen = !collapsed.has(g.row.id);
+                  return (
+                    <Fragment key={g.row.id}>
+                      {renderRow(g.row, {
+                        toggle: (
+                          <button type="button" aria-expanded={isOpen} onClick={() => toggleGroup(g.row.id)}
+                            aria-label={`${isOpen ? "Collapse" : "Expand"} sub-council ${g.row.label}`}
+                            className="-ml-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-2">
+                            {isOpen ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
+                          </button>
+                        ),
+                      })}
+                      {isOpen && g.members.map((m) => renderRow(m, { indent: true }))}
+                    </Fragment>
+                  );
+                }))}
             </div>
-
-            {showSteps && section("steps", `Plan · ${model.steps.length} steps`, "border-l-accent",
-              model.steps.map((r, i) => renderRow(r, { extra: i === 0 ? stepArrows() : undefined })))}
-            {showAgents && section("agents", `Agents · ${agents.length}`, "border-l-info", agents.map((r) => renderRow(r)))}
-            {showSubs && section("subs", `Sub-councils · ${model.groups.length}`, "border-l-warning",
-              model.groups.map((g) => {
-                const isOpen = !collapsed.has(g.row.id);
-                return (
-                  <Fragment key={g.row.id}>
-                    {renderRow(g.row, {
-                      toggle: (
-                        <button type="button" aria-expanded={isOpen} onClick={() => toggleGroup(g.row.id)}
-                          aria-label={`${isOpen ? "Collapse" : "Expand"} sub-council ${g.row.label}`}
-                          className="-ml-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-2">
-                          {isOpen ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
-                        </button>
-                      ),
-                    })}
-                    {isOpen && g.members.map((m) => renderRow(m, { indent: true }))}
-                  </Fragment>
-                );
-              }))}
           </div>
-        </div>
-      )}
+        )}
 
-      <Legend id={`gantt-legend-${uid}`} live={live} />
+        <Legend id={`gantt-legend-${uid}`} live={live} />
+      </div>
 
       {tip && (
         <div id={tipId} role="tooltip"
@@ -401,7 +427,7 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
           <TipBody seg={tip.seg} t0={model.t0} live={live} />
         </div>
       )}
-    </section>
+    </VizPane>
   );
 }
 
@@ -419,30 +445,39 @@ function Bar({ seg, row, left, width, t0, live, describedBy, onActivate, onShow,
 }) {
   const rs = roleStyle(seg.role);
   const failed = seg.status === "error" || seg.status === "failed" || seg.status === "timeout" || seg.status === "blocked";
-  const base = "absolute flex items-center overflow-hidden text-left transition-[left,width] duration-base ease-out";
+  // The button is the (transparent) hit area: at least BAR_HIT_MIN wide and centred on the bar, so a 3px
+  // span is still easy to point at. The visible bar is drawn inside it at its true position and width.
+  const hit = Math.max(BAR_HIT_MIN, width);
+  const hitLeft = Math.max(0, left - (hit - width) / 2);
+  const move = "transition-[left,width] duration-base ease-out";
   const look: Record<Seg["kind"], string> = {
-    think: cn("top-2 h-5 rounded-md text-surface", rs.bar),
-    tool: cn("top-2 h-5 rounded-md border-[1.5px] border-current bg-surface", rs.fg),
-    wait: "top-2 h-5 rounded-md border border-dashed border-warning bg-warning-subtle text-warning",
-    step: cn("top-1.5 h-6 rounded-full border border-current", rs.bg, rs.fg),
-    span: "top-2 h-5 rounded-md border border-dashed border-border-strong bg-surface-3 text-fg-muted",
+    think: cn("top-1 h-5 rounded-md text-surface", rs.bar),
+    tool: cn("top-1 h-5 rounded-md border-[1.5px] border-current bg-surface", rs.fg),
+    wait: "top-1 h-5 rounded-md border border-dashed border-warning bg-warning-subtle text-warning",
+    step: cn("top-0.5 h-6 rounded-full border border-current", rs.bg, rs.fg),
+    span: "top-1 h-5 rounded-md border border-dashed border-border-strong bg-surface-3 text-fg-muted",
   };
   const pattern = seg.kind === "tool" ? STRIPE : seg.kind === "wait" || seg.kind === "span" ? HATCH : null;
   return (
     <button type="button" data-bar="" data-row={row} aria-label={barLabel(seg, t0, live)} aria-describedby={describedBy}
-      className={cn(base, look[seg.kind], failed && "ring-2 ring-danger ring-offset-1 ring-offset-surface")}
-      style={{ left, width }}
+      className={cn("absolute top-1 h-7 rounded-md bg-transparent", move)}
+      style={{ left: hitLeft, width: hit }}
       onClick={() => onActivate(seg)}
       onMouseEnter={(e) => onShow(seg, e.currentTarget)} onMouseLeave={onHide}
       onFocus={(e) => onShow(seg, e.currentTarget)} onBlur={onHide}
       onKeyDown={onKey}>
-      {pattern && <span aria-hidden className="absolute inset-0 opacity-25" style={{ backgroundImage: pattern }} />}
-      {width >= 56 && (
-        <span aria-hidden className="relative truncate px-1.5 text-2xs">
-          {seg.kind === "think" ? "thinking" : seg.kind === "tool" ? seg.title.replace(/^Tool · /, "") : seg.kind === "wait" ? "waiting" : seg.title}
-        </span>
-      )}
-      {seg.open && <span aria-hidden className="absolute inset-y-0 right-0 w-1 bg-current opacity-60 motion-safe:animate-pulse" />}
+      <span aria-hidden data-bar-visual=""
+        className={cn("absolute flex items-center overflow-hidden text-left", move, look[seg.kind],
+          failed && "ring-2 ring-danger ring-offset-1 ring-offset-surface")}
+        style={{ left: left - hitLeft, width }}>
+        {pattern && <span className="absolute inset-0 opacity-25" style={{ backgroundImage: pattern }} />}
+        {width >= 56 && (
+          <span className="relative truncate px-1.5 text-2xs">
+            {seg.kind === "think" ? "thinking" : seg.kind === "tool" ? seg.title.replace(/^Tool · /, "") : seg.kind === "wait" ? "waiting" : seg.title}
+          </span>
+        )}
+        {seg.open && <span className="absolute inset-y-0 right-0 w-1 bg-current opacity-60 motion-safe:animate-pulse" />}
+      </span>
     </button>
   );
 }
