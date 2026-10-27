@@ -18,3 +18,9 @@ dist/
 
 # Runtime data (artifact blobs) written by local runs and tests
 data/
+
+# Deployment state written by scripts/
+deploy/.version
+deploy/.previous-version
+deploy/.built-version
+backups/

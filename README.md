@@ -37,6 +37,16 @@ guardrail breaches, and you can step in and correct the council at any point.
 ## Quick start (Docker)
 
 ```bash
+./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, starts, waits, smoke-tests
+./scripts/update.sh           # git pull, back up DB + artifacts to backups/, rebuild, restart; rolls back if unhealthy
+./scripts/update.sh --rollback
+./scripts/build.sh [--version TAG] [--ca corp-ca.crt] [api|web]   # images only
+```
+
+Add provider keys to `deploy/.env`, then re-run `./scripts/deploy.sh`. Each script has `--help`. The
+manual steps the scripts automate:
+
+```bash
 cp deploy/.env.example deploy/.env
 # fill ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN, e.g.
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
