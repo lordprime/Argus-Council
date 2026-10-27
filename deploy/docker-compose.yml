@@ -1,0 +1,85 @@
+# Argus Council: production-style stack.
+#   cp deploy/.env.example deploy/.env   # then fill in secrets
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+name: argus
+
+x-hardening: &hardening
+  restart: unless-stopped
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:17-alpine
+    user: "70:70" # postgres user in the alpine image; avoids granting chown/setuid capabilities
+    environment:
+      POSTGRES_DB: argus
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256m
+
+  redis:
+    <<: *hardening
+    image: redis:7-alpine
+    command: >
+      redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+      --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+      --rename-command FLUSHALL "" --rename-command CONFIG ""
+    user: "999:1000" # redis user in the alpine image
+    volumes: ["redisdata:/data"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  api:
+    <<: *hardening
+    build:
+      context: ../backend
+    image: argus-council/api:${ARGUS_VERSION:-latest}
+    read_only: true
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    environment:
+      ARGUS_ENV: production
+      ARGUS_SECRET_KEY: ${ARGUS_SECRET_KEY:?set ARGUS_SECRET_KEY (>=32 chars)}
+      ARGUS_DATABASE_URL: postgresql+asyncpg://argus:${POSTGRES_PASSWORD}@postgres:5432/argus
+      ARGUS_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ARGUS_CORS_ORIGINS: ${ARGUS_CORS_ORIGINS:-http://localhost:8080}
+      ARGUS_ALLOW_REGISTRATION: ${ARGUS_ALLOW_REGISTRATION:-true}
+      ARGUS_BOOTSTRAP_ADMIN_EMAIL: ${ARGUS_BOOTSTRAP_ADMIN_EMAIL:-}
+      ARGUS_BOOTSTRAP_ADMIN_PASSWORD: ${ARGUS_BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes: ["argusdata:/data"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend, frontend]
+    ports: ["${ARGUS_API_BIND:-127.0.0.1}:${ARGUS_API_PORT:-8000}:8000"]
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1g }
+
+volumes:
+  pgdata:
+  redisdata:
+  argusdata:
+
+networks:
+  backend:
+    internal: true
+  frontend:
