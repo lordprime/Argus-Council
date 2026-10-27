@@ -46,7 +46,8 @@ setup() {
   echo a1 >"$STUB_STATE/artifacts"
   echo v1 >"$R/deploy/.version"
   unset STUB_BUILD_HEAD STUB_BUILD_HEALTHY STUB_BUILD_FAIL STUB_PGDUMP_FAIL STUB_TAR_FAIL \
-    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP
+    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
+  export ARGUS_READY_TIMEOUT=20 # a broken version is given up on after 20 polls, not 240
 }
 
 # run SCRIPT ARGS...: run a copied script with the stubs first on PATH; output goes to $T/out.
@@ -173,6 +174,25 @@ if begin update_failed_after_migration_restores_db_and_old_image; then
   end
 fi
 
+if begin update_failed_after_an_earlier_update_keeps_its_rollback; then
+  export STUB_BUILD_HEAD=2
+  run update.sh --no-pull
+  good="$(cat "$R/deploy/.built-version")"
+  good_id="$(tag_id "argus-council/api:$good")"
+  # Same commit again, so the broken build overwrites the tag "$good" (M13).
+  export STUB_BUILD_HEAD=3 STUB_BUILD_HEALTHY=0
+  check "the second update fails" fails run update.sh --no-pull
+  check "the build reused the tag" eq "$(cat "$R/deploy/.built-version")" "$good"
+  check "the good image runs at revision 2" eq "$(running_api):$(st ct/api.status):$(st db/rev)" "$good_id:healthy:2"
+  check "the first update's record is back" contains "$R/deploy/.rollback-state" "db_revision=1"
+  from="$(sed -n 's/^from=//p' "$R/deploy/.rollback-state")"
+  check "its 'from' names the running images, not the overwritten tag" eq "$(tag_id "argus-council/api:$from")" "$good_id"
+  unset STUB_BUILD_HEAD STUB_BUILD_HEALTHY
+  check "--rollback still reaches v1" ok run update.sh --rollback
+  check "v1 runs at revision 1" eq "$(running_api):$(st ct/api.status):$(st db/rev)" sha256:v1-api:healthy:1
+  end
+fi
+
 if begin update_failed_without_migration_does_not_restore; then
   export STUB_BUILD_HEAD=1 STUB_BUILD_HEALTHY=0
   check "update.sh fails" fails run update.sh --no-pull
@@ -225,6 +245,24 @@ if begin update_build_reusing_tag_rolls_back_to_old_image; then
   check "the tag was overwritten by the build" ok bash -c "grep -q built '$STUB_STATE/tags/argus-council_api_$sha'"
   check "but the old image runs again" eq "$(running_api)" sha256:v1-api
   check "and it is healthy" eq "$(st ct/api.status)" healthy
+  end
+fi
+
+if begin update_with_prebuilt_images_and_their_rollback; then
+  # What CI does against real containers: deploy existing images (no build) that migrate and fail.
+  printf 'head=2\nhealthy=0\n' >"$STUB_STATE/ids/sha256:broken-api"
+  echo sha256:broken-api >"$STUB_STATE/tags/argus-council_api_broken"
+  echo sha256:v1-web >"$STUB_STATE/tags/argus-council_web_broken"
+  export ARGUS_READY_TIMEOUT=5
+  check "update.sh fails" fails run update.sh --no-pull --images broken
+  check "nothing was built" fails test -f "$STUB_STATE/build_counter"
+  check "the images were tagged as the version" eq "$(tag_id "argus-council/api:$(cat "$R/deploy/.built-version")")" sha256:broken-api
+  check "the new version got 5s" contains "$T/out" "up to 5s"
+  check "the dump was restored" eq "$(count restores.log)" 1
+  check "the old image runs at revision 1" eq "$(running_api):$(st ct/api.status):$(st db/rev)" sha256:v1-api:healthy:1
+  check "--images with a missing tag fails" fails run update.sh --no-pull --images missing
+  check "with a clear error" contains "$T/out" "no image argus-council/api:missing"
+  unset ARGUS_READY_TIMEOUT
   end
 fi
 

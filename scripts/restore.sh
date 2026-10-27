@@ -97,7 +97,7 @@ log "stopping api and web"
 dc stop api web
 restart() {
   log "starting api and web"
-  ARGUS_VERSION="$(current_version)" dc up -d --no-build api web
+  ARGUS_VERSION="$(current_version)" dc_timeout 240 up -d --no-build api web
 }
 add_exit_hook restart
 

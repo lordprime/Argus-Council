@@ -5,21 +5,23 @@
 #   ./scripts/build.sh --version 1.2.0     # explicit tag
 #   ./scripts/build.sh --ca corp-ca.crt    # trust an extra CA during the build (egress proxies)
 #   ./scripts/build.sh --no-cache --pull web
+#   ./scripts/build.sh --from-images ci    # no build: tag existing images (built elsewhere, pulled)
 #
-# Options: --version TAG, --ca FILE (or ARGUS_EXTRA_CA), --no-cache, --pull, and the services to
-# build (api, web; default both).
+# Options: --version TAG, --ca FILE (or ARGUS_EXTRA_CA), --no-cache, --pull, --from-images TAG,
+# and the services to build (api, web; default both).
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-version="" ca="${ARGUS_EXTRA_CA:-}" services=() opts=()
+version="" ca="${ARGUS_EXTRA_CA:-}" from="" services=() opts=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) version="${2:?--version needs a tag}"; shift 2 ;;
     --ca) ca="${2:?--ca needs a file}"; shift 2 ;;
+    --from-images) from="${2:?--from-images needs a tag}"; shift 2 ;;
     --no-cache | --pull) opts+=("$1"); shift ;;
     api | web) services+=("$1"); shift ;;
-    -h | --help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -33,6 +35,17 @@ for svc in "${services[@]}"; do
     warn "argus-council/$svc:$version exists and will point at the new build"
   fi
 done
+
+if [ -n "$from" ]; then
+  for svc in "${services[@]}"; do
+    image_exists "argus-council/$svc:$from" || die "no image argus-council/$svc:$from"
+    log "tagging argus-council/$svc:$from as $version"
+    docker tag "argus-council/$svc:$from" "argus-council/$svc:$version"
+    docker tag "argus-council/$svc:$from" "argus-council/$svc:latest"
+  done
+  echo "$version" >"$ROOT/deploy/.built-version"
+  exit 0
+fi
 
 if [ -n "$ca" ]; then
   [ -f "$ca" ] || die "CA file not found: $ca"

@@ -64,6 +64,17 @@ require_env() {
 # dc ...: docker compose for this stack (project "argus", see the compose file).
 dc() { docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"; }
 
+# dc_timeout SECONDS ...: dc, killed after SECONDS when `timeout` exists. `up` waits for
+# depends_on health and can wait indefinitely on an API that crash-loops.
+dc_timeout() {
+  local t="$1"; shift
+  if command -v timeout >/dev/null; then
+    timeout "$t" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+  else
+    dc "$@"
+  fi
+}
+
 # envval KEY DEFAULT: a value from deploy/.env, or DEFAULT when unset or empty.
 envval() {
   local v=""

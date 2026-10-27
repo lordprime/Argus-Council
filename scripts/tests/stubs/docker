@@ -22,7 +22,6 @@ resolve() { # NAME or id -> id
 }
 idprop() { grep -E "^$2=" "$S/ids/$1" | cut -d= -f2-; }
 rev() { cat "$S/db/rev"; }
-revname() { local r; r="$(rev)"; [ "$r" = 0 ] && printf 'base' || printf '%s' "$r"; }
 num() { [ "$1" = base ] && printf 0 || printf '%s' "$1"; }
 pg_up() { [ -f "$S/postgres_up" ]; }
 

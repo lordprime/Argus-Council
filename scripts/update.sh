@@ -4,6 +4,7 @@
 #   ./scripts/update.sh                         # git pull, back up, build, restart, wait until ready
 #   ./scripts/update.sh --no-pull               # deploy the code already checked out
 #   ./scripts/update.sh --no-backup             # skip the backup (rollback then uses alembic downgrade)
+#   ./scripts/update.sh --images TAG            # deploy existing images TAG instead of building
 #   ./scripts/update.sh --rollback              # go back to the version that ran before the last update
 #   ./scripts/update.sh --rollback --restore-db # ...and load the pre-update backup instead of downgrading
 #
@@ -12,6 +13,7 @@
 # not become ready, the API is stopped, the pre-update backup is restored when the schema changed
 # (alembic downgrade when there is no backup), and the previous images are started again.
 # --rollback downgrades the schema with the newer image; --restore-db loses data written since.
+# ARGUS_READY_TIMEOUT (default 240) is how many seconds the new version gets to become ready.
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -24,7 +26,8 @@ while [ $# -gt 0 ]; do
     --rollback) rollback=1; shift ;;
     --restore-db) restore_mode=restore; shift ;;
     --ca) build_args+=(--ca "${2:?--ca needs a file}"); shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --images) build_args+=(--from-images "${2:?--images needs a tag}"); shift 2 ;;
+    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -34,9 +37,10 @@ require_env
 lock_deploy
 current="$(current_version)"
 
+# start VERSION SECONDS: start VERSION; fails if Compose has not finished within SECONDS.
 start() {
   log "starting version $1"
-  ARGUS_VERSION="$1" dc up -d --no-build --remove-orphans
+  ARGUS_VERSION="$1" dc_timeout "$2" up -d --no-build --remove-orphans
 }
 
 # revert_schema NEWER REVISION DUMP MODE: bring the database back to REVISION before an older
@@ -84,7 +88,7 @@ rollback_to() {
   log "rolling back to $target"
   dc stop api web || true
   revert_schema "$2" "$3" "$4" "$5" || return 1
-  start "$target" && wait_healthy 180
+  start "$target" 180 && wait_healthy 180
 }
 
 if [ "$rollback" = 1 ]; then
@@ -142,7 +146,8 @@ next="$(cat "$ROOT/deploy/.built-version")"
 if [ -f "$STATE_FILE" ]; then cp -f "$STATE_FILE" "$STATE_FILE.before-update"; fi
 write_state "version=$prev" "from=$next" "db_revision=$pre_rev" "db_dump=$dump"
 
-if start "$next" && wait_healthy 240; then
+ready_timeout="${ARGUS_READY_TIMEOUT:-240}"
+if start "$next" "$ready_timeout" && wait_healthy "$ready_timeout"; then
   rm -f "$STATE_FILE.before-update"
   echo "$prev" >"$PREV_FILE"
   echo "$next" >"$VERSION_FILE"
@@ -155,7 +160,11 @@ warn "version $next is not healthy: rolling back to $current ($prev)"
 if rollback_to "$prev" "$next" "$pre_rev" "$dump" restore; then
   echo "$prev" >"$VERSION_FILE"
   if [ -f "$STATE_FILE.before-update" ]; then
+    # The earlier record again, but its "from" tag may have been overwritten by this build:
+    # name the snapshot of the images that run now instead.
     mv -f "$STATE_FILE.before-update" "$STATE_FILE"
+    write_state "version=$(stateval version)" "from=$prev" \
+      "db_revision=$(stateval db_revision)" "db_dump=$(stateval db_dump)"
   else
     rm -f "$STATE_FILE"
   fi
