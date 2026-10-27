@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Request, status
 from sqlalchemy import func, select
@@ -32,6 +33,12 @@ from argus.db.models import ApiKey, User
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+class AccountOut(UserOut):
+    """UserOut plus the RBAC role ("admin" | "member" | "viewer"); `is_admin` mirrors role == "admin"."""
+
+    role: Literal["admin", "member", "viewer"]
+
+
 class InvalidPassword(ArgusError):
     code = "invalid_password"
 
@@ -54,7 +61,7 @@ async def _throttle(cache, request: Request, bucket: str, limit: int = 10) -> No
         raise RateLimited("Too many attempts, slow down")
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 async def register(data: RegisterIn, request: Request, db: DbDep, settings: SettingsDep, cache: CacheDep):
     await _throttle(cache, request, "register", 5)
     user_count = (await db.execute(select(func.count(User.id)))).scalar_one()
@@ -68,7 +75,7 @@ async def register(data: RegisterIn, request: Request, db: DbDep, settings: Sett
         email=email,
         display_name=data.display_name,
         password_hash=hash_password(data.password),
-        is_admin=user_count == 0,
+        role="admin" if user_count == 0 else "member",
     )
     db.add(user)
     await db.flush()
@@ -86,6 +93,7 @@ async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDe
     if not verify_password(data.password, user.password_hash) or not user.is_active:
         raise Unauthorized("Invalid credentials")
     request.state.actor_id = user.id
+    user.last_login_at = datetime.now(UTC)
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(data.password)
     return _tokens(settings, user)
@@ -106,12 +114,12 @@ async def refresh(data: RefreshIn, db: DbDep, settings: SettingsDep, cache: Cach
     return _tokens(settings, user)
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=AccountOut)
 async def me(principal: CurrentPrincipal):
     return principal.user
 
 
-@router.patch("/me", response_model=UserOut)
+@router.patch("/me", response_model=AccountOut)
 async def update_me(data: ProfilePatch, request: Request, principal: CurrentPrincipal, cache: CacheDep):
     user = principal.user
     if data.new_password is not None and principal.via != "jwt":
@@ -137,6 +145,8 @@ async def list_keys(principal: CurrentPrincipal, db: DbDep):
 
 @router.post("/api-keys", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
 async def create_key(data: ApiKeyIn, principal: SessionPrincipal, db: DbDep):
+    if principal.is_viewer and set(data.scopes) - {"read"}:
+        raise Forbidden('Viewers have read-only access: API keys must use scopes ["read"]')
     plaintext, prefix, digest = generate_api_key()
     key = ApiKey(
         user_id=principal.id,

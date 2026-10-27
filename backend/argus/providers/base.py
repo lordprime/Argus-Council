@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import random
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from argus.providers.types import CompletionRequest, CompletionResponse, StreamEvent
@@ -45,6 +46,8 @@ class Provider(abc.ABC):
     """One configured connection to a model backend."""
 
     kind: str = "base"
+    # Set by the router for providers built from a user's ProviderConfig (health tracking).
+    config_id: uuid.UUID | None = None
 
     def __init__(self, name: str | None = None) -> None:
         self.name = name or self.kind

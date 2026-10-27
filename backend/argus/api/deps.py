@@ -21,6 +21,8 @@ from argus.db.models import ApiKey, User
 
 _bearer = HTTPBearer(auto_error=False)
 
+VIEWER_READ_ONLY = "Viewers have read-only access"
+
 
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings
@@ -52,7 +54,22 @@ class Principal:
     def id(self) -> uuid.UUID:
         return self.user.id
 
+    @property
+    def role(self) -> str:
+        return self.user.role or "member"
+
+    @property
+    def is_viewer(self) -> bool:
+        return self.role == "viewer"
+
+    def require_writer(self) -> None:
+        """Viewers are read-only everywhere, whatever their API key's scopes say."""
+        if self.is_viewer:
+            raise Forbidden(VIEWER_READ_ONLY)
+
     def require_scope(self, scope: str) -> None:
+        if scope != "read":
+            self.require_writer()
         if "*" not in self.scopes and scope not in self.scopes:
             raise Forbidden(f"Missing scope: {scope}")
 
@@ -121,6 +138,7 @@ def write_scope(scope: str, *, exempt: tuple[str, ...] = ()) -> object:
 
     Reads are left to the endpoint's own auth (some, like the SSE stream, use a ticket instead).
     `exempt` lists route-path suffixes for POSTs that change nothing, such as validation.
+    Viewers are rejected here with 403 regardless of scope.
     """
 
     async def check(
@@ -135,6 +153,7 @@ def write_scope(scope: str, *, exempt: tuple[str, ...] = ()) -> object:
         if exempt and getattr(request.scope.get("route"), "path", "").endswith(exempt):
             return
         principal = await get_principal(request, db, settings, cache, creds)
+        principal.require_writer()
         principal.require_scope(scope)
 
     return Depends(check)

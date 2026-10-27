@@ -22,6 +22,7 @@ from argus.providers.types import (
 # Models that accept the server-side refusal fallback ("default" routing form).
 _FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
+DEFAULT_BASE_URL = "https://api.anthropic.com"
 
 _STOP_MAP: dict[str, FinishReason] = {
     "end_turn": "stop",
@@ -88,8 +89,15 @@ class AnthropicProvider(Provider):
     ) -> None:
         super().__init__(name)
         self.refusal_fallback = refusal_fallback
+        # Credentials and endpoint are always explicit: otherwise the SDK falls back to ambient
+        # ANTHROPIC_* env vars / credential profiles (e.g. a JWT-based proxy), so a user's
+        # provider could silently talk to a different endpoint with a different credential type
+        # for some calls. One client is shared by completions, streaming and model listing.
         self.client = client or anthropic.AsyncAnthropic(
-            api_key=api_key, base_url=base_url, timeout=timeout, max_retries=2
+            api_key=api_key or "",
+            base_url=base_url or DEFAULT_BASE_URL,
+            timeout=timeout,
+            max_retries=2,
         )
 
     def _params(self, req: CompletionRequest) -> dict[str, Any]:
@@ -190,9 +198,9 @@ class AnthropicProvider(Provider):
         yield StreamEvent(type="done", response=response)
 
     async def list_models(self) -> list[str]:
+        # Same client (endpoint + auth) as completions; auto-paginates.
         try:
-            page = await self.client.models.list(limit=100)
-            return [m.id for m in page.data]
+            return [m.id async for m in self.client.models.list(limit=100)]
         except anthropic.AnthropicError as exc:
             raise self._wrap(exc) from exc
 

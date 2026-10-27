@@ -9,15 +9,17 @@ Resolution order for a provider name:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import socket
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.cache.store import Cache
@@ -28,6 +30,7 @@ from argus.core.logging import get_logger
 from argus.db.models import ProviderConfig
 from argus.providers.base import Provider, ProviderError, with_retries
 from argus.providers.catalog import KINDS, build_provider
+from argus.providers.health import HealthResult, failure
 from argus.providers.mock import MockProvider
 from argus.providers.pricing import register_pricing
 from argus.providers.types import CompletionRequest, CompletionResponse, StreamEvent, Usage
@@ -95,7 +98,33 @@ class UsageLedger:
         self.by_model[key] = self.by_model.get(key, Usage()) + response.usage
 
 
+async def persist_health(session: AsyncSession, config_id: uuid.UUID, result: HealthResult) -> None:
+    """Write a health result onto a ProviderConfig without bumping ``updated_at``.
+
+    ``updated_at`` versions the router's client cache, so health writes must not touch it.
+    """
+    await session.execute(
+        update(ProviderConfig)
+        .where(ProviderConfig.id == config_id)
+        .values(
+            health_status=result.status,
+            health_detail=result.detail[:300] if result.detail else None,
+            health_checked_at=result.checked_at,
+            health_latency_ms=result.latency_ms,
+            updated_at=ProviderConfig.updated_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _elapsed_ms(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)
+
+
 class LLMRouter:
+    # Passive health: re-write an unchanged status at most this often (seconds).
+    HEALTH_WRITE_INTERVAL = 60.0
+
     def __init__(
         self,
         settings: Settings,
@@ -109,6 +138,10 @@ class LLMRouter:
         self.system = system if system is not None else system_providers_from_env()
         self.box = SecretBox(settings)
         self._user_providers: dict[tuple[uuid.UUID, str, str], Provider] = {}
+        self._health_tasks: set[asyncio.Task[None]] = set()
+        self._health_last: dict[uuid.UUID, tuple[str, float]] = {}
+        # Failures of background health writes (logged too); tests assert this stays empty.
+        self.health_errors: list[BaseException] = []
         for model, p in settings.model_pricing.items():
             register_pricing(
                 model,
@@ -148,10 +181,55 @@ class LLMRouter:
             for stale in [k for k in self._user_providers if k[:2] == key[:2]]:
                 self._user_providers.pop(stale)
             api_key = self.box.decrypt(cfg.api_key_enc) if cfg.api_key_enc else None
-            self._user_providers[key] = build_provider(
+            provider = build_provider(
                 cfg.kind, name=cfg.name, api_key=api_key, base_url=cfg.base_url, options=cfg.options
             )
+            provider.config_id = cfg.id
+            self._user_providers[key] = provider
         return self._user_providers[key]
+
+    def provider_for_config(self, cfg: ProviderConfig) -> Provider:
+        """Build (or reuse) the client for a config regardless of ``enabled`` (connection tests)."""
+        return self._from_config(cfg)
+
+    # ------------------------------------------------------------ passive health
+    def note_health(self, provider: Provider, result: HealthResult) -> None:
+        """Best-effort, non-blocking health update for user-configured providers."""
+        config_id = provider.config_id
+        if config_id is None or self.sessionmaker is None:
+            return
+        now = time.monotonic()
+        last = self._health_last.get(config_id)
+        if last and last[0] == result.status and now - last[1] < self.HEALTH_WRITE_INTERVAL:
+            return
+        self._health_last[config_id] = (result.status, now)
+        task = asyncio.create_task(self._write_health(config_id, result))
+        self._health_tasks.add(task)
+        task.add_done_callback(self._health_done)
+
+    def remember_health(self, config_id: uuid.UUID, result: HealthResult) -> None:
+        """Record a health result persisted elsewhere (e.g. an explicit test) for throttling."""
+        self._health_last[config_id] = (result.status, time.monotonic())
+
+    async def _write_health(self, config_id: uuid.UUID, result: HealthResult) -> None:
+        assert self.sessionmaker is not None
+        async with self.sessionmaker() as session:
+            await persist_health(session, config_id, result)
+            await session.commit()
+
+    def _health_done(self, task: asyncio.Task[None]) -> None:
+        self._health_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self.health_errors.append(exc)
+            log.warning("llm.health_write_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+
+    async def flush_health(self) -> None:
+        """Wait for pending background health writes (shutdown, tests)."""
+        while self._health_tasks:
+            await asyncio.gather(*list(self._health_tasks), return_exceptions=True)
 
     def available_system_providers(self) -> list[str]:
         return sorted(self.system)
@@ -189,11 +267,18 @@ class LLMRouter:
                     if ledger:
                         ledger.calls += 1
                     return resp
+            provider: Provider | None = None
             try:
                 provider = await self.resolve(db, owner_id, r.provider)
-                resp = await with_retries(
-                    lambda p=provider, q=request: p.complete(q), attempts=self.settings.llm_max_retries
-                )
+                start = time.perf_counter()
+                try:
+                    resp = await with_retries(
+                        lambda p=provider, q=request: p.complete(q), attempts=self.settings.llm_max_retries
+                    )
+                except ProviderError as exc:
+                    self.note_health(provider, failure(exc, _elapsed_ms(start)))
+                    raise
+                self.note_health(provider, HealthResult("ok", latency_ms=_elapsed_ms(start)))
             except (ProviderError, NotFound) as exc:
                 last_error = exc
                 log.warning("llm.route_failed", provider=r.provider, model=r.model, error=str(exc)[:200])
@@ -218,14 +303,22 @@ class LLMRouter:
     ) -> AsyncIterator[StreamEvent]:
         provider = await self.resolve(db, owner_id, route.provider)
         request = req.model_copy(update={"model": route.model})
-        async for event in provider.stream(request):
-            if event.type == "done" and event.response and ledger:
-                ledger.record(event.response)
-            if on_event:
-                on_event(event)
-            yield event
+        start = time.perf_counter()
+        try:
+            async for event in provider.stream(request):
+                if event.type == "done":
+                    self.note_health(provider, HealthResult("ok", latency_ms=_elapsed_ms(start)))
+                    if event.response and ledger:
+                        ledger.record(event.response)
+                if on_event:
+                    on_event(event)
+                yield event
+        except ProviderError as exc:
+            self.note_health(provider, failure(exc, _elapsed_ms(start)))
+            raise
 
     async def aclose(self) -> None:
+        await self.flush_health()
         for p in [*self.system.values(), *self._user_providers.values()]:
             try:
                 await p.aclose()

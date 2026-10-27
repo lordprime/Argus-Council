@@ -7,9 +7,13 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql.elements import ColumnElement
 
 from argus.db.base import Base, IdMixin, TimestampMixin
+
+USER_ROLES = ("admin", "member", "viewer")
 
 
 class User(IdMixin, TimestampMixin, Base):
@@ -18,10 +22,29 @@ class User(IdMixin, TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(120), default="")
     password_hash: Mapped[str] = mapped_column(String(255))
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "admin" | "member" | "viewer" (see USER_ROLES). Source of truth for authorization.
+    role: Mapped[str] = mapped_column(String(16), default="member", server_default="member", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     api_keys: Mapped[list[ApiKey]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    @hybrid_property
+    def is_admin(self) -> bool:
+        """Compatibility view of `role`; assigning True promotes, False demotes an admin to member."""
+        return self.role == "admin"
+
+    @is_admin.inplace.setter
+    def _is_admin_setter(self, value: bool) -> None:
+        if value:
+            self.role = "admin"
+        elif self.role == "admin":
+            self.role = "member"
+
+    @is_admin.inplace.expression
+    @classmethod
+    def _is_admin_expression(cls) -> ColumnElement[bool]:
+        return cls.role == "admin"
 
 
 class ApiKey(IdMixin, TimestampMixin, Base):
@@ -96,6 +119,13 @@ class ProviderConfig(IdMixin, TimestampMixin, Base):
     default_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     options: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # Masked, display-only fragment of the API key (e.g. "sk-…abcd"); never the key itself.
+    key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Last known connection health: unknown|ok|unreachable|auth_failed|rate_limited|error.
+    health_status: Mapped[str] = mapped_column(String(16), default="unknown", server_default="unknown")
+    health_detail: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    health_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Run(IdMixin, TimestampMixin, Base):

@@ -17,7 +17,18 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
 from argus import __version__
-from argus.api.v1 import auth, connections, councils, health, observability, providers, runs, skills, webhooks
+from argus.api.v1 import (
+    admin,
+    auth,
+    connections,
+    councils,
+    health,
+    observability,
+    providers,
+    runs,
+    skills,
+    webhooks,
+)
 from argus.cache.store import RedisBackend, build_cache
 from argus.core.config import Settings, get_settings
 from argus.core.errors import install_error_handlers
@@ -198,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     api = "/api/v1"
     app.include_router(auth.router, prefix=api)
+    app.include_router(admin.router, prefix=api)
     app.include_router(councils.router, prefix=api)
     app.include_router(providers.router, prefix=api)
     app.include_router(runs.router, prefix=api)
