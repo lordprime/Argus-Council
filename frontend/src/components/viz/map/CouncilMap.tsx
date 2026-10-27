@@ -12,8 +12,8 @@ import { cn } from "@/lib/cn";
 import type { RunState } from "@/stores/run";
 
 import { MAX_PULSES, usePulses, useReducedMotion, useThrottledAnnouncement } from "./hooks";
-import { computeLayout, iso, layoutKey, pointAt, polyline, route, toPath, type Polyline } from "./layout";
-import { MapNode, clip, glyphFor, money, statusLabel, type GraphNode, type Ledger } from "./MapNode";
+import { boxWithCards, computeLayout, iso, layoutKey, placeCards, pointAt, polyline, route, toPath, type Polyline } from "./layout";
+import { MapNode, cardLines, cardSize, clip, glyphFor, money, statusLabel, type GraphNode, type Ledger } from "./MapNode";
 import { EDGE_CLASS, EDGE_DASH, GROUPS, GROUP_OF, KIND_LABEL, SWATCH_CLASS, type GroupId } from "./style";
 
 export interface CouncilMapProps {
@@ -62,7 +62,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   const lastInteract = useRef(0);
 
   const comms = commsOf(view);
-  const subs = subsOf(view);
+  const subs = useMemo(() => subsOf(view), [view]);
   const graph = useMemo(() => buildGraph(view), [view]);
 
   // Layout depends only on the node set, not on traffic, so it stays put while messages flow.
@@ -181,6 +181,25 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   );
   const raisedId = hover ?? focused ?? selected;
 
+  // Collision-avoiding card placement, most important first: selection, the latest exchange, the
+  // chair, overseers, members, then peers (user, tools, MCP, remote agents, sub-councils).
+  const latestFrom = latest?.from.id;
+  const latestTo = latest?.to.id;
+  const cards = useMemo(() => {
+    const rank = (n: GraphNode) =>
+      n.id === selected ? 0
+      : n.id === latestFrom || n.id === latestTo ? 1
+      : n.role === "chair" && (n.kind === "member" || n.kind === "system") ? 2
+      : n.kind === "overseer" ? 3
+      : n.kind === "member" ? 4
+      : 5;
+    return placeCards(layout, ordered.map((n) => {
+      const full = !compact || n.id === selected || n.id === latestFrom || n.id === latestTo;
+      const lines = full ? cardLines({ node: n, cost: byMemberCost?.[n.id]?.usd, ledger: ledgers.get(n.id), sub: subs[n.id] }).length : 0;
+      return { id: n.id, ...cardSize(n.label, lines), priority: rank(n) };
+    }));
+  }, [layout, ordered, compact, selected, latestFrom, latestTo, byMemberCost, ledgers, subs]);
+
   const activate = useCallback(
     (id: string) => {
       setSelected(id);
@@ -205,7 +224,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   }, [selected]);
 
   /* ---------------------------------------------------------------- zoom & pan */
-  const [bx, by, bw, bh] = layout.box;
+  const [bx, by, bw, bh] = useMemo(() => boxWithCards(layout, cards.values()), [layout, cards]);
   const zoomAt = useCallback(
     (factor: number, cx = bx + bw / 2, cy = by + bh / 2) => {
       lastInteract.current = Date.now();
@@ -411,6 +430,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
                   ledger={ledgers.get(n.id)}
                   sub={subs[n.id]}
                   zone={zones.get(n.id)}
+                  card={cards.get(n.id)!}
                   compact={compact}
                   selected={n.id === selected}
                   focused={n.id === focused}
@@ -426,6 +446,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
               <MapNode
                 overlay
                 p={layout.nodes.get(raisedId)!}
+                card={cards.get(raisedId)!}
                 node={nodeById.get(raisedId)!}
                 cost={byMemberCost?.[raisedId]?.usd}
                 ledger={ledgers.get(raisedId)}

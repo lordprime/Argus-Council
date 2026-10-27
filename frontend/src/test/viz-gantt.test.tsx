@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { describe, expect, it, vi } from "vitest";
 
-import RunGantt from "@/components/viz/gantt/RunGantt";
+import RunGantt, { ganttColumns } from "@/components/viz/gantt/RunGantt";
 import { buildGantt, fmtDur, tickStep } from "@/components/viz/gantt/model";
 import type { Member } from "@/lib/types";
 import { emptyRun, type RunState } from "@/stores/run";
@@ -98,6 +98,30 @@ describe("RunGantt", () => {
     await userEvent.click(screen.getByRole("button", { name: "steps" }));
     expect(screen.queryByRole("rowheader", { name: /Ada/ })).toBeNull();
     expect(screen.getByRole("rowheader", { name: /Draft report/ })).toBeInTheDocument();
+  });
+
+  it("collapses columns by its own width so the bars keep at least 55%", () => {
+    for (const w of [360, 590, 899, 900, 1199, 1200, 1600]) {
+      const { cols, tableW } = ganttColumns(w);
+      expect(tableW / w).toBeLessThanOrEqual(0.45);
+      expect(cols.includes("start")).toBe(w >= 1200);
+      expect(cols.length === 0).toBe(w < 900);
+    }
+  });
+
+  it("in a narrow container shows only the name column and still renders the bars", () => {
+    const spy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(590);
+    render(<RunGantt run={synthetic("completed")} />);
+    const table = screen.getByRole("table", { name: "Run activity timeline" });
+    const headers = within(table).getAllByRole("columnheader").map((h) => h.querySelector(".sr-only")?.textContent ?? h.textContent);
+    expect(headers).toEqual(["Name", "Timeline"]);
+    expect(within(table).queryByRole("columnheader", { name: /Status|Start|End|Duration|Cost/ })).toBeNull();
+    expect(screen.getByTestId("gantt-timeline")).toBeInTheDocument();
+    expect(parseFloat(screen.getByTestId("gantt-timeline").style.width)).toBeGreaterThanOrEqual(590 * 0.55);
+    expect(screen.getByRole("button", { name: /Tool · web_search, Ada/ })).toBeInTheDocument();
+    // Status survives as an icon inside the name cell.
+    expect(within(table).getByRole("rowheader", { name: /Gather sources.*completed/ })).toBeInTheDocument();
+    spy.mockRestore();
   });
 
   it("has no axe violations", async () => {

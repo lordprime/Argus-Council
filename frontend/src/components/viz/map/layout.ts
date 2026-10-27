@@ -249,3 +249,121 @@ export function sides(gx: number, gy: number, s: number, z0: number, z1: number)
   const right = f([iso(gx + s, gy + s, z1), iso(gx + s, gy - s, z1), iso(gx + s, gy - s, z0), iso(gx + s, gy + s, z0)]);
   return [left, right];
 }
+
+/* ------------------------------------------------------------------ card placement */
+
+export type CardAnchor = "upright" | "above" | "upleft" | "right" | "left" | "below";
+
+export interface CardSpec {
+  id: string;
+  /** Full card size. */
+  w: number;
+  h: number;
+  /** Name-only fallback size. */
+  cw: number;
+  ch: number;
+  /** Lower = placed first (gets the best spot). */
+  priority: number;
+}
+
+export interface CardPlacement {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  anchor: CardAnchor;
+  /** True when the card had to shrink to its name-only form to avoid overlapping a neighbour. */
+  compact: boolean;
+  /** Leader line end (nearest point on the card to the platform). */
+  lx: number;
+  ly: number;
+}
+
+interface Rect { x: number; y: number; w: number; h: number }
+
+const ANCHORS: CardAnchor[] = ["upright", "above", "upleft", "right", "left", "below"];
+const CARD_GAP = 6;
+
+function overlapArea(a: Rect, b: Rect): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+/** Screen-space box of a platform's visible body (top face + sides), slightly inset from the rhombus corners. */
+export function platformRect(p: Placed): Rect {
+  const hw = p.size * UNIT * 1.6;
+  const hh = p.size * UNIT * 0.8;
+  return { x: p.sx - hw, y: p.sy - hh, w: 2 * hw, h: 2 * hh + p.h };
+}
+
+function anchorAt(p: Placed, a: CardAnchor, w: number, h: number): Rect {
+  const s = p.size * UNIT;
+  switch (a) {
+    case "upright": return { x: p.sx + s * 0.9 + 6, y: p.sy - 34 - h / 2, w, h };
+    case "upleft": return { x: p.sx - s * 0.9 - 6 - w, y: p.sy - 34 - h / 2, w, h };
+    case "above": return { x: p.sx - w / 2, y: p.sy - s - 12 - h, w, h };
+    case "right": return { x: p.sx + s * 2 + 4, y: p.sy - h / 2, w, h };
+    case "left": return { x: p.sx - s * 2 - 4 - w, y: p.sy - h / 2, w, h };
+    case "below": return { x: p.sx - w / 2, y: p.sy + s + p.h + 8, w, h };
+  }
+}
+
+/**
+ * Greedy, deterministic card placement. Cards are placed in `priority` order; each tries the anchor
+ * positions around its platform and keeps the one with the least overlap with cards already placed
+ * (weighted heavily) and with other platforms. A card that still collides falls back to its
+ * name-only size, and if that collides too it takes the least-bad compact spot.
+ */
+export function placeCards(layout: Layout, specs: CardSpec[]): Map<string, CardPlacement> {
+  const out = new Map<string, CardPlacement>();
+  const platforms = [...layout.nodes.values()].map((p) => ({ id: p.id, r: platformRect(p) }));
+  const placed: Rect[] = [];
+  const order = [...specs].filter((s) => layout.nodes.has(s.id))
+    .sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  const pad = (r: Rect): Rect => ({ x: r.x - CARD_GAP / 2, y: r.y - CARD_GAP / 2, w: r.w + CARD_GAP, h: r.h + CARD_GAP });
+  const best = (p: Placed, w: number, h: number) => {
+    let pick: { r: Rect; a: CardAnchor; cards: number; score: number } | null = null;
+    ANCHORS.forEach((a, i) => {
+      const r = anchorAt(p, a, w, h);
+      const pr = pad(r);
+      let cards = 0;
+      for (const q of placed) cards += overlapArea(pr, q);
+      let plats = 0;
+      for (const q of platforms) plats += overlapArea(r, q.r) * (q.id === p.id ? 0.6 : 1);
+      const score = cards * 10 + plats + i * 40; // small bias keeps the familiar up-right default
+      if (!pick || score < pick.score) pick = { r, a, cards, score };
+    });
+    return pick!;
+  };
+
+  for (const s of order) {
+    const p = layout.nodes.get(s.id)!;
+    let choice = best(p, s.w, s.h);
+    let compact = false;
+    if (choice.cards > 0) {
+      choice = best(p, s.cw, s.ch);
+      compact = true;
+    }
+    const r = choice.r;
+    placed.push(r);
+    out.set(s.id, {
+      ...r, anchor: choice.a, compact,
+      lx: Math.min(r.x + r.w, Math.max(r.x, p.sx)),
+      ly: Math.min(r.y + r.h, Math.max(r.y, p.sy - 4)),
+    });
+  }
+  return out;
+}
+
+/** Bounding box [x, y, w, h] covering the layout box and every placed card. */
+export function boxWithCards(layout: Layout, cards: Iterable<CardPlacement>): [number, number, number, number] {
+  const [bx, by, bw, bh] = layout.box;
+  let x0 = bx, y0 = by, x1 = bx + bw, y1 = by + bh;
+  for (const c of cards) {
+    x0 = Math.min(x0, c.x - 12); y0 = Math.min(y0, c.y - 12);
+    x1 = Math.max(x1, c.x + c.w + 12); y1 = Math.max(y1, c.y + c.h + 12);
+  }
+  return [x0, y0, x1 - x0, y1 - y0];
+}

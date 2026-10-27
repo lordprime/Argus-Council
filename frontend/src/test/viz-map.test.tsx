@@ -4,7 +4,8 @@ import axe from "axe-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import CouncilMap from "@/components/viz/map/CouncilMap";
-import { computeLayout } from "@/components/viz/map/layout";
+import { computeLayout, placeCards } from "@/components/viz/map/layout";
+import { cardSize } from "@/components/viz/map/MapNode";
 import type { CommEvent, NodeRef, SubCouncilInfo } from "@/features/viz/types";
 import type { Member } from "@/lib/types";
 import { emptyRun, type RunState } from "@/stores/run";
@@ -172,6 +173,33 @@ describe("CouncilMap", () => {
       for (let i = 0; i < ps.length; i++)
         for (let j = i + 1; j < ps.length; j++)
           expect(Math.hypot(ps[i]!.gx - ps[j]!.gx, ps[i]!.gy - ps[j]!.gy)).toBeGreaterThan(ps[i]!.size + ps[j]!.size - 0.2);
+    }
+  });
+
+  it("places cards for a 5-member council + 3 peers without any two overlapping", () => {
+    const nodes = [
+      { id: "m_chair", kind: "member" as const, role: "chair" },
+      { id: "m_res", kind: "member" as const, role: "researcher" },
+      { id: "m_cri", kind: "member" as const, role: "critic" },
+      { id: "m_wri", kind: "member" as const, role: "writer" },
+      { id: "m_cod", kind: "member" as const, role: "coder" },
+      { id: "user", kind: "user" as const },
+      { id: "tool:web_search", kind: "tool" as const },
+      { id: "mcp:github", kind: "mcp" as const },
+    ];
+    const layout = computeLayout(nodes);
+    for (const selected of [undefined, "m_cri", "user"]) {
+      const cards = placeCards(layout, nodes.map((n) => ({
+        id: n.id, ...cardSize(n.id, 2), priority: n.id === selected ? 0 : n.role === "chair" ? 2 : n.kind === "member" ? 4 : 5,
+      })));
+      const rects = [...cards.values()];
+      expect(rects).toHaveLength(nodes.length);
+      for (let i = 0; i < rects.length; i++)
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i]!, b = rects[j]!;
+          const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+          expect(overlap, `${[...cards.keys()][i]} vs ${[...cards.keys()][j]}`).toBe(false);
+        }
     }
   });
 });

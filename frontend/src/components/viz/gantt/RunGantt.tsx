@@ -1,8 +1,9 @@
 // Run Gantt: plan steps, per-agent activity (thinking / tool calls / waiting) and sub-councils on a
 // shared time axis. Left: a sticky table (name, status, start, end, duration, cost). Right: bars.
-// Horizontal scroll lives inside the chart region only; on narrow screens the table collapses to names.
+// Horizontal scroll lives inside the chart region only. Columns collapse by the component's own width
+// (not the viewport): the table is capped at 45% so the bars always keep >= 55% of the pane.
 
-import { ChevronDown, ChevronRight, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDashed, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import {
   Fragment,
   useCallback,
@@ -16,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { EmptyState, IconButton, StatusPill } from "@/components/ui";
+import { EmptyState, IconButton, STATUS, StatusPill } from "@/components/ui";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { cn } from "@/lib/cn";
 import { usd } from "@/lib/format";
@@ -39,14 +40,63 @@ const ZOOM_MAX = 64;
 const HATCH = "repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 6px)";
 const STRIPE = "repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 7px)";
 
-const COL = {
-  name: "w-[148px] sm:w-[220px]",
-  status: "hidden sm:flex w-[112px]",
-  start: "hidden lg:flex w-[64px]",
-  end: "hidden lg:flex w-[64px]",
-  dur: "hidden sm:flex w-[72px]",
-  cost: "hidden md:flex w-[64px]",
+type ColKey = "status" | "start" | "end" | "dur" | "cost";
+const COL_W: Record<ColKey, number> = { status: 112, start: 64, end: 64, dur: 72, cost: 64 };
+const COL_LABEL: Record<ColKey, string> = { status: "Status", start: "Start", end: "End", dur: "Duration", cost: "Cost" };
+/** Container width below which only the name (+ status icon) column remains. */
+export const GANTT_NARROW = 900;
+/** Container width below which start / end are hidden. */
+export const GANTT_MID = 1200;
+/** The table never takes more than this share of the component width. */
+const TABLE_MAX = 0.45;
+const NAME_MIN = 96;
+const NAME_MAX = 220;
+const TABLE_BORDER = 4; // 3px role accent + 1px divider
+
+/** Pure column layout for a given component width (exported for tests). */
+export function ganttColumns(containerW: number): { cols: ColKey[]; nameW: number; tableW: number } {
+  const cols: ColKey[] = containerW < GANTT_NARROW ? []
+    : containerW < GANTT_MID ? ["status", "dur", "cost"]
+    : ["status", "start", "end", "dur", "cost"];
+  const other = cols.reduce((n, c) => n + COL_W[c], 0);
+  const nameW = Math.round(Math.min(NAME_MAX, Math.max(NAME_MIN, containerW * TABLE_MAX - TABLE_BORDER - other)));
+  return { cols, nameW, tableW: nameW + other + TABLE_BORDER };
+}
+
+const TONE_TEXT: Record<string, string> = {
+  neutral: "text-neutral", info: "text-info", success: "text-success",
+  warning: "text-warning", danger: "text-danger", accent: "text-accent",
 };
+
+function StatusIcon({ status }: { status: string }) {
+  const s = STATUS[status];
+  const Icon = s?.icon ?? CircleDashed;
+  return (
+    <span className={cn("inline-flex shrink-0", TONE_TEXT[s?.tone ?? "neutral"])} title={s?.label ?? status}>
+      <Icon className={cn("size-3.5", s?.spin && "motion-safe:animate-spin")} aria-hidden />
+      <span className="sr-only">{s?.label ?? status}</span>
+    </span>
+  );
+}
+
+/** Observed clientWidth of an element (0 until measured, e.g. in jsdom). */
+function useWidth<T extends HTMLElement>(): [(el: T | null) => void, number] {
+  const [el, setEl] = useState<T | null>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!el) return;
+    const measure = () => setW(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [setEl, w];
+}
 
 function useNow(live: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -74,21 +124,15 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [tip, setTip] = useState<Tip | null>(null);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const leftRef = useRef<HTMLDivElement>(null);
-  const [viewW, setViewW] = useState(640);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const measure = () => {
-      const w = el.clientWidth - (leftRef.current?.offsetWidth ?? 0);
-      if (w > 0) setViewW(w);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [boxRef, boxW] = useWidth<HTMLElement>();
+  const [scrollEl, scrollW] = useWidth<HTMLDivElement>();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const setScrollRef = useCallback((el: HTMLDivElement | null) => { scrollRef.current = el; scrollEl(el); }, [scrollEl]);
+  // jsdom / first paint: fall back to the window width when the box has not been measured.
+  const containerW = boxW > 0 ? boxW : (typeof window !== "undefined" && window.innerWidth) || 1024;
+  const { cols, nameW, tableW } = ganttColumns(containerW);
+  const narrow = cols.length === 0;
+  const viewW = Math.max((scrollW > 0 ? scrollW : containerW - 2) - tableW, 120);
 
   const spanMs = Math.max(model.tEnd - model.t0, MIN_SPAN);
   const pxPerMs = (Math.max(viewW - 24, 120) / spanMs) * zoom;
@@ -174,30 +218,28 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
     return (
       <div key={row.id} role="row" className="flex border-b border-border/60 hover:bg-surface-2/50" style={{ height: ROW_H }}>
         <div className={cn("sticky left-0 z-sticky flex shrink-0 items-stretch bg-surface border-r border-border border-l-[3px]",
-          row.kind === "group" ? "border-l-warning" : rs.border)}>
-          <div role="rowheader" className={cn(COL.name, "flex min-w-0 items-center gap-2 px-2 text-sm", opts.indent && "pl-6")}>
+          row.kind === "group" ? "border-l-warning" : rs.border)} style={{ width: tableW }}>
+          <div role="rowheader" className={cn("flex min-w-0 shrink-0 items-center gap-2 px-2 text-sm", opts.indent && "pl-6")} style={{ width: nameW }}>
             {opts.toggle}
             {row.kind === "group"
               ? null
               : <RoleAvatar role={row.role} overseer={row.overseer} size={20}
                   label={row.kind === "step" ? `assignee role ${row.role ?? "none"}` : `${row.role ?? "agent"}${row.overseer ? " overseer" : ""}`} />}
-            <span className="truncate" title={row.label}>{row.label}</span>
+            <span className="min-w-0 flex-1 truncate" title={row.label}>{row.label}</span>
+            {narrow && row.status && <StatusIcon status={row.status} />}
           </div>
-          <div role="cell" className={cn(COL.status, "items-center px-2 min-w-0")}>
-            {row.kind === "agent" || row.kind === "submember"
-              ? <span className="truncate text-xs text-fg-muted">{row.status}</span>
-              : <StatusPill status={row.status} className="max-w-full truncate" />}
-          </div>
-          <div role="cell" className={cn(COL.start, "items-center px-2 text-xs tabular-nums text-fg-muted")}>
-            {row.start != null ? fmtOffset(row.start - model.t0) : "—"}
-          </div>
-          <div role="cell" className={cn(COL.end, "items-center px-2 text-xs tabular-nums text-fg-muted")}>
-            {row.end == null ? "—" : open && live ? "now" : fmtOffset(row.end - model.t0)}
-          </div>
-          <div role="cell" className={cn(COL.dur, "items-center px-2 text-xs tabular-nums")}>{fmtDur(dur)}</div>
-          <div role="cell" className={cn(COL.cost, "items-center px-2 text-xs tabular-nums text-fg-muted")}>
-            {row.costUsd ? usd(row.costUsd) : "—"}
-          </div>
+          {cols.map((c) => (
+            <div key={c} role="cell" className={cn("flex min-w-0 shrink-0 items-center px-2 text-xs tabular-nums", c !== "dur" && "text-fg-muted")}
+              style={{ width: COL_W[c] }}>
+              {c === "status" ? (row.kind === "agent" || row.kind === "submember"
+                ? <span className="truncate">{row.status}</span>
+                : <StatusPill status={row.status} className="max-w-full truncate" />)
+                : c === "start" ? (row.start != null ? fmtOffset(row.start - model.t0) : "—")
+                : c === "end" ? (row.end == null ? "—" : open && live ? "now" : fmtOffset(row.end - model.t0))
+                : c === "dur" ? fmtDur(dur)
+                : row.costUsd ? usd(row.costUsd) : "—"}
+            </div>
+          ))}
         </div>
         <div role="cell" className="relative shrink-0" style={gridStyle}>
           {opts.extra}
@@ -264,7 +306,8 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
   );
 
   return (
-    <section aria-label="Run Gantt chart" className="flex w-full min-w-0 flex-col gap-2">
+    <section ref={boxRef} aria-label="Run Gantt chart" data-cols={narrow ? "narrow" : cols.length < 5 ? "mid" : "wide"}
+      className="flex w-full min-w-0 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <div role="group" aria-label="Rows to show" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">
           {(["all", "steps", "agents"] as const).map((v) => (
@@ -294,20 +337,19 @@ export default function RunGantt({ run, onSelect }: RunGanttProps) {
       {empty ? (
         <EmptyState title="No activity yet" body="Bars appear here as members think, call tools and complete plan steps." />
       ) : (
-        <div ref={scrollRef} role="region" aria-label="Timeline, scroll horizontally" tabIndex={0}
+        <div ref={setScrollRef} role="region" aria-label="Timeline, scroll horizontally" tabIndex={0}
           className="relative max-h-[70vh] w-full min-w-0 overflow-auto rounded-lg border border-border bg-surface">
           <div role="table" aria-label="Run activity timeline" aria-describedby={`gantt-legend-${uid}`} style={{ width: "max-content", minWidth: "100%" }}>
             <div role="rowgroup" className="sticky top-0 z-rail">
               <div role="row" className="flex border-b border-border bg-surface" style={{ height: 32 }}>
-                <div ref={leftRef} className="sticky left-0 z-rail flex shrink-0 bg-surface border-r border-border border-l-[3px] border-l-transparent text-2xs uppercase tracking-wide text-fg-subtle">
-                  <div role="columnheader" className={cn(COL.name, "flex items-center px-2")}>Name</div>
-                  <div role="columnheader" className={cn(COL.status, "items-center px-2")}>Status</div>
-                  <div role="columnheader" className={cn(COL.start, "items-center px-2")}>Start</div>
-                  <div role="columnheader" className={cn(COL.end, "items-center px-2")}>End</div>
-                  <div role="columnheader" className={cn(COL.dur, "items-center px-2")}>Duration</div>
-                  <div role="columnheader" className={cn(COL.cost, "items-center px-2")}>Cost</div>
+                <div className="sticky left-0 z-rail flex shrink-0 bg-surface border-r border-border border-l-[3px] border-l-transparent text-2xs uppercase tracking-wide text-fg-subtle"
+                  style={{ width: tableW }}>
+                  <div role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: nameW }}>Name</div>
+                  {cols.map((c) => (
+                    <div key={c} role="columnheader" className="flex shrink-0 items-center px-2" style={{ width: COL_W[c] }}>{COL_LABEL[c]}</div>
+                  ))}
                 </div>
-                <div role="columnheader" className="relative shrink-0 bg-surface" style={{ width: chartW }}>
+                <div role="columnheader" data-testid="gantt-timeline" className="relative shrink-0 bg-surface" style={{ width: chartW }}>
                   <span className="sr-only">Timeline</span>
                   {ticks.map((t) => (
                     <span key={t} aria-hidden className="absolute top-0 flex h-full items-end pb-1 pl-1 text-2xs tabular-nums text-fg-subtle border-l border-border"
