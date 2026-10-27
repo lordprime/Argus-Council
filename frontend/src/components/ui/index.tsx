@@ -21,7 +21,9 @@ import {
 } from "lucide-react";
 import {
   forwardRef,
+  useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -34,8 +36,9 @@ import {
 } from "react";
 import { Link, NavLink } from "react-router";
 
-import { ApiError } from "@/lib/api";
+import { ApiError, retryAfterSeconds } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useCountdown } from "@/lib/useCountdown";
 import { useToasts } from "@/stores/toast";
 
 // ------------------------------------------------------------------ Button
@@ -428,12 +431,29 @@ export function EmptyState({ icon: Icon, title, body, action, titleAs: Title = "
   );
 }
 
-export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+/**
+ * Error with the envelope's message, code and details. A `rate_limited` error (spec §3.1) also gets a
+ * countdown: Retry stays disabled until the limiter's window has passed, and `autoRetry` retries then.
+ */
+export function ErrorState({ error, onRetry, title, autoRetry }: { error: unknown; onRetry?: () => void; title?: string; autoRetry?: boolean }) {
   const e = error instanceof ApiError ? error : null;
+  // Computed once per error: the window-based fallback depends on the clock, and the countdown runs from it.
+  const retryIn = useMemo(() => retryAfterSeconds(error), [error]);
+  const limited = retryIn != null;
+  const wait = useCountdown(retryIn, error);
+  const retryRef = useRef(onRetry);
+  retryRef.current = onRetry;
+  useEffect(() => {
+    if (limited && autoRetry && wait === 0) retryRef.current?.();
+  }, [limited, autoRetry, wait]);
+  const offline = !e && error instanceof TypeError;
   return (
     <div role="alert" className="flex flex-col items-center text-center gap-2 py-10 px-4">
       <XCircle className="size-8 text-danger" aria-hidden />
-      <p className="text-lg">{e ? e.message : "Something went wrong"}</p>
+      {title && <p className="text-lg">{title}</p>}
+      <p className={title ? "text-sm text-fg-muted max-w-md" : "text-lg"}>
+        {e ? e.message : offline ? "Could not reach the server. Check your connection." : "Something went wrong"}
+      </p>
       {e && <p className="text-xs text-fg-subtle font-mono">{e.code} · HTTP {e.status}</p>}
       {e && Object.keys(e.details).length > 0 && (
         <details className="text-xs text-fg-muted max-w-lg text-left">
@@ -441,7 +461,12 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
           <pre className="whitespace-pre-wrap font-mono">{JSON.stringify(e.details, null, 2)}</pre>
         </details>
       )}
-      {onRetry && <Button onClick={onRetry} size="sm">Retry</Button>}
+      {limited && wait > 0 && (
+        <p className="text-sm text-fg-muted tabular">
+          {autoRetry ? "Retrying" : "You can retry"} in <span>{wait}</span> s
+        </p>
+      )}
+      {onRetry && <Button onClick={onRetry} size="sm" disabled={limited && wait > 0}>Retry</Button>}
     </div>
   );
 }
