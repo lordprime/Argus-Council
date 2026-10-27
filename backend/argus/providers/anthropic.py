@@ -86,6 +86,7 @@ class AnthropicProvider(Provider):
         refusal_fallback: bool = True,
         timeout: float = 600.0,
         client: Any | None = None,
+        http_client: Any | None = None,
     ) -> None:
         super().__init__(name)
         self.refusal_fallback = refusal_fallback
@@ -98,6 +99,8 @@ class AnthropicProvider(Provider):
             base_url=base_url or DEFAULT_BASE_URL,
             timeout=timeout,
             max_retries=2,
+            # SSRF-guarded transport for user-configured endpoints (argus.core.netguard).
+            http_client=http_client,
         )
 
     def _params(self, req: CompletionRequest) -> dict[str, Any]:

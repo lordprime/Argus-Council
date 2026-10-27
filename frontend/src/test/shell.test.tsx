@@ -316,4 +316,41 @@ describe("Login page", () => {
     expect(screen.getByText(/then try again/)).toHaveTextContent("Wait 30 s, then try again.");
     expect(screen.getByRole("button", { name: "Sign in" })).toBeDisabled();
   });
+
+  it("asks for the second factor when the account has one, then signs in", async () => {
+    const verified: unknown[] = [];
+    mockApi({
+      "POST /api/v1/auth/login": () => json({ mfa_required: true, mfa_token: "challenge", expires_in: 300 }),
+      "POST /api/v1/auth/mfa/verify": (init) => {
+        verified.push(JSON.parse(String(init.body)));
+        return json({ access_token: "a", refresh_token: "r", expires_in: 3600 });
+      },
+      "GET /api/v1/auth/me": () => json(ADA),
+    });
+    const { container } = renderAuth("/login");
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "correct horse battery");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("heading", { name: "Two-factor authentication" })).toBeInTheDocument();
+    await noAxeViolations(container);
+    await userEvent.type(screen.getByLabelText("Authentication code"), "123456");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+    expect(await screen.findByText("Home page")).toBeInTheDocument();
+    expect(verified).toEqual([{ mfa_token: "challenge", code: "123456" }]);
+  });
+
+  it("sends an expired second-factor step back to the password", async () => {
+    mockApi({
+      "POST /api/v1/auth/login": () => json({ mfa_required: true, mfa_token: "challenge", expires_in: 300 }),
+      "POST /api/v1/auth/mfa/verify": () => json({ error: { code: "unauthorized", message: "Too many wrong codes; sign in again", details: {} } }, 401),
+    });
+    renderAuth("/login");
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "correct horse battery");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.type(await screen.findByLabelText("Authentication code"), "000000");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+    expect(await screen.findByText("Too many wrong codes; sign in again")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
 });

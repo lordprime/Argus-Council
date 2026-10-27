@@ -140,7 +140,9 @@ export async function request<T = unknown>(path: string, opts: RequestOptions = 
     headers,
     body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
   });
-  if (resp.status === 401 && !retried && !path.startsWith("/api/v1/auth/login")) {
+  // Sign-in steps answer 401 for wrong credentials or an expired challenge: never refresh on those.
+  const signIn = path.startsWith("/api/v1/auth/login") || path.startsWith("/api/v1/auth/mfa/verify");
+  if (resp.status === 401 && !retried && !signIn) {
     if (await refreshOnce()) return request<T>(path, opts, true);
     onAuthLost?.();
   }

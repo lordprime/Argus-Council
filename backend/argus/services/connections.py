@@ -21,14 +21,14 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.crypto import SecretBox
 from argus.core.logging import get_logger
 from argus.core.netguard import guarded_client
-from argus.db.models import McpServer, RemoteAgent
+from argus.db.models import McpServer, RemoteAgent, User
 from argus.protocols.mcp_client import HttpMcpClient, McpClient, StdioMcpClient
 from argus.services import ledger
 from argus.tools.base import ToolRegistry
@@ -135,6 +135,22 @@ async def ledgered[T](
 
 
 # ---------------------------------------------------------------- MCP
+def stdio_permitted(owner: User | None, settings: Settings) -> bool:
+    """stdio MCP servers run commands on the API host: allowed only for active admins."""
+    return bool(settings.mcp_allow_stdio and owner is not None and owner.is_active and owner.is_admin)
+
+
+async def disable_stdio_servers(db: AsyncSession, owner_id: uuid.UUID) -> int:
+    """Switch off a user's stdio MCP servers (on demotion or deactivation); returns how many."""
+    result = await db.execute(
+        update(McpServer)
+        .where(McpServer.owner_id == owner_id, McpServer.transport == "stdio", McpServer.enabled.is_(True))
+        .values(enabled=False)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
 def mcp_peer(server: McpServer) -> str:
     return server.url or f"stdio:{(server.command or ['?'])[0]}"
 
@@ -160,7 +176,9 @@ def build_mcp_client(server: McpServer, settings: Settings, box: SecretBox) -> M
 def outbound_client(settings: Settings, timeout: float) -> httpx.AsyncClient:
     """SSRF-guarded client for user-configured peers (MCP servers, remote agents)."""
     return guarded_client(
-        settings.connections_allow_private_urls, timeout=httpx.Timeout(timeout, connect=10.0)
+        settings.connections_allow_private_urls,
+        max_response_bytes=settings.protocol_max_response_bytes,
+        timeout=httpx.Timeout(timeout, connect=10.0),
     )
 
 
@@ -240,8 +258,21 @@ async def attach_connections(
                 )
             ).scalars()
         )
+        owner = await s.get(User, owner_id)
     # Blocked servers are never contacted, so their tools never reach a run.
     servers = [srv for srv in servers if mcp_settings(srv)[0] != "blocked"]
+    # stdio servers spawn local processes: only while their owner is still an active admin.
+    if not stdio_permitted(owner, settings):
+        for srv in [srv for srv in servers if srv.transport == "stdio"]:
+            servers.remove(srv)
+            await emit(
+                "error",
+                {
+                    "code": "mcp_stdio_not_permitted",
+                    "message": f"MCP server '{srv.name}' runs a local command and needs an admin owner",
+                    "details": {"server": srv.name},
+                },
+            )
 
     async def one(server: McpServer) -> None:
         try:
@@ -278,6 +309,7 @@ async def attach_connections(
                 "token": box.decrypt(a.token_enc) if a.token_enc else None,
                 "requires_approval": agent_requires_approval(a),
                 "allow_private": settings.connections_allow_private_urls,
+                "max_response_bytes": settings.protocol_max_response_bytes,
             }
         registry.register(GatedRemoteAgentTool(table, timeout_s=settings.remote_agent_timeout_s))
     return closers

@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     protocol_max_blocking_waits: int = Field(default=100, ge=0)
     protocol_max_wait_s: float = Field(default=600.0, gt=0, le=3600)
     remote_agent_timeout_s: float = 600.0
+    # Largest response body read from an MCP server, A2A/ACP agent or webhook receiver (bytes).
+    protocol_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
 
     # Runs
     approval_timeout_s: float = Field(default=3600.0, gt=0)  # a pending approval expires after this

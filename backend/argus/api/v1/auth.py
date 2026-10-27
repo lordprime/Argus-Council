@@ -19,6 +19,7 @@ from argus.api.schemas import (
     TokenOut,
     UserOut,
 )
+from argus.api.v1 import mfa
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound, RateLimited, Unauthorized
 from argus.core.security import (
     create_token,
@@ -38,6 +39,7 @@ class AccountOut(UserOut):
     """UserOut plus the RBAC role ("admin" | "member" | "viewer"); `is_admin` mirrors role == "admin"."""
 
     role: Literal["admin", "member", "viewer"]
+    mfa_enabled: bool = False
 
 
 class InvalidPassword(ArgusError):
@@ -48,7 +50,7 @@ class InvalidPassword(ArgusError):
 _DUMMY_HASH = hash_password("argus-timing-equaliser-password")
 
 
-def _tokens(settings, user: User, sid: str | None = None) -> TokenOut:
+def issue_tokens(settings, user: User, sid: str | None = None) -> TokenOut:
     # Access and refresh tokens of one sign-in share a session id, kept across refresh rotation,
     # so logout or refresh-token reuse can end the whole session server-side.
     sid = sid or uuid.uuid4().hex
@@ -86,7 +88,7 @@ async def register(data: RegisterIn, request: Request, db: DbDep, settings: Sett
     return user
 
 
-@router.post("/login", response_model=TokenOut)
+@router.post("/login", response_model=TokenOut | mfa.MfaChallengeOut)
 async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDep, cache: CacheDep):
     await _throttle(cache, request, "login")
     # Per-account limit as well: client IPs can be spread or spoofed, the target account cannot.
@@ -100,10 +102,13 @@ async def login(data: LoginIn, request: Request, db: DbDep, settings: SettingsDe
     if not verify_password(data.password, user.password_hash) or not user.is_active:
         raise Unauthorized("Invalid credentials")
     request.state.actor_id = user.id
-    user.last_login_at = datetime.now(UTC)
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(data.password)
-    return _tokens(settings, user)
+    if user.totp_enabled:
+        # Password is right; the session only starts once the second factor is checked.
+        return mfa.challenge(settings, user)
+    user.last_login_at = datetime.now(UTC)
+    return issue_tokens(settings, user)
 
 
 @router.post("/refresh", response_model=TokenOut)
@@ -122,7 +127,7 @@ async def refresh(data: RefreshIn, db: DbDep, settings: SettingsDep, cache: Cach
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:
         raise Unauthorized("Inactive user")
-    return _tokens(settings, user, payload.get("sid"))
+    return issue_tokens(settings, user, payload.get("sid"))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

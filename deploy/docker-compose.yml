@@ -67,7 +67,8 @@ services:
       ARGUS_DATABASE_URL: postgresql+asyncpg://argus:${POSTGRES_PASSWORD}@postgres:5432/argus
       ARGUS_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ARGUS_CORS_ORIGINS: ${ARGUS_CORS_ORIGINS:-http://localhost:8080}
-      ARGUS_ALLOW_REGISTRATION: ${ARGUS_ALLOW_REGISTRATION:-true}
+      # Off unless enabled: the first account can always register (and becomes admin).
+      ARGUS_ALLOW_REGISTRATION: ${ARGUS_ALLOW_REGISTRATION:-false}
       ARGUS_BOOTSTRAP_ADMIN_EMAIL: ${ARGUS_BOOTSTRAP_ADMIN_EMAIL:-}
       ARGUS_BOOTSTRAP_ADMIN_PASSWORD: ${ARGUS_BOOTSTRAP_ADMIN_PASSWORD:-}
       ARGUS_ENCRYPTION_KEY: ${ARGUS_ENCRYPTION_KEY:-}
@@ -76,6 +77,9 @@ services:
       # the agents' web_fetch tool, are refused unless enabled. Link-local is always refused.
       ARGUS_CONNECTIONS_ALLOW_PRIVATE_URLS: ${ARGUS_CONNECTIONS_ALLOW_PRIVATE_URLS:-false}
       ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS: ${ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS:-false}
+      # LLM providers users add themselves (Ollama, vLLM, LM Studio on your network need true).
+      # Providers configured here through ARGUS_*_BASE_URL are not affected.
+      ARGUS_PROVIDER_ALLOW_PRIVATE_URLS: ${ARGUS_PROVIDER_ALLOW_PRIVATE_URLS:-false}
       ARGUS_METRICS_TOKEN: ${ARGUS_METRICS_TOKEN:-}
       # Retention (0 = keep forever). The ledger is never pruned by default: pruning breaks verification.
       ARGUS_RETENTION_RUN_DAYS: ${ARGUS_RETENTION_RUN_DAYS:-0}
@@ -140,15 +144,24 @@ services:
     <<: *hardening
     image: argus-council/api:${ARGUS_VERSION:-latest}
     command: ["uvicorn", "argus.sandbox.server:app", "--uds", "/run/argus-sandbox/sandbox.sock", "--no-server-header"]
+    # Per-execution isolation (argus/sandbox/isolation.py): the server starts as root holding only
+    # the capabilities to switch uid and hand files over; every command runs as its own uid from
+    # ARGUS_SANDBOX_UID_POOL, so concurrent runs cannot see or touch each other's workspaces or
+    # processes. No CAP_DAC_OVERRIDE / CAP_KILL / CAP_SYS_*: commands end up with no capabilities.
+    user: "0:0"
+    cap_add: ["SETUID", "SETGID", "CHOWN"]
     stop_grace_period: 30s
     read_only: true
     tmpfs:
-      - "/work:size=512m,mode=1777"
+      # 0711: commands can enter their own 0700 workspace but cannot list or create in /work.
+      - "/work:size=512m,mode=0711"
       - "/tmp:size=128m,mode=1777"
     environment:
       ARGUS_RUN_MIGRATIONS: "false"
       ARGUS_SANDBOX_TOKEN: ${ARGUS_SANDBOX_TOKEN}
       ARGUS_SANDBOX_WORKDIR: /work
+      ARGUS_SANDBOX_UID_POOL: "20000-20999"
+      ARGUS_SANDBOX_SOCKET_DIR: /run/argus-sandbox
     # No network at all: agent code can reach neither the internet nor the API, database or cache.
     # The API talks to the sandbox over a Unix socket on the shared sandboxsock volume.
     network_mode: none

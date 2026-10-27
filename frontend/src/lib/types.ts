@@ -10,11 +10,20 @@ export interface User {
   display_name: string;
   is_admin: boolean;
   created_at: string;
+  /** Two-factor authentication (TOTP) is on for this account. */
+  mfa_enabled?: boolean;
 }
 
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
+  expires_in: number;
+}
+
+/** POST /auth/login answer when the account has two-factor authentication on. */
+export interface MfaChallenge {
+  mfa_required: true;
+  mfa_token: string;
   expires_in: number;
 }
 

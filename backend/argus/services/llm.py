@@ -212,7 +212,13 @@ class LLMRouter:
                 self._user_providers.pop(stale)
             api_key = self.box.decrypt(cfg.api_key_enc) if cfg.api_key_enc else None
             provider = build_provider(
-                cfg.kind, name=cfg.name, api_key=api_key, base_url=cfg.base_url, options=cfg.options
+                cfg.kind,
+                name=cfg.name,
+                api_key=api_key,
+                base_url=cfg.base_url,
+                options=cfg.options,
+                # User-configured endpoint: re-check the address on every connect (DNS rebinding).
+                guard_private=self.settings.provider_allow_private_urls,
             )
             provider.config_id = cfg.id
             self._user_providers[key] = provider

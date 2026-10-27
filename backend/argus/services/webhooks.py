@@ -101,7 +101,11 @@ class WebhookDispatcher:
         self.sessionmaker = sessionmaker
         self.box = SecretBox(settings)
         self.client_factory = client_factory or (
-            lambda: guarded_client(settings.connections_allow_private_urls, timeout=ATTEMPT_TIMEOUT)
+            lambda: guarded_client(
+                settings.connections_allow_private_urls,
+                max_response_bytes=64 * 1024,  # the body is never used; only the status code
+                timeout=ATTEMPT_TIMEOUT,
+            )
         )
         self.now = now
         # Enqueue tasks (and, shared by the run manager, in-app notification tasks).

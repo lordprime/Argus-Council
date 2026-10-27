@@ -86,7 +86,7 @@ class Fake(MockProvider):
 
 @pytest.fixture
 def fake_build(monkeypatch):
-    def build(kind, *, name=None, api_key=None, base_url=None, options=None):
+    def build(kind, *, name=None, api_key=None, base_url=None, options=None, guard_private=None):
         return Fake(name or kind, fail=(options or {}).get("fail"))
 
     monkeypatch.setattr(llm_mod, "build_provider", build)

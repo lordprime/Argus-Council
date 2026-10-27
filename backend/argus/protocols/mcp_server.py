@@ -317,7 +317,7 @@ async def mcp_endpoint(request: Request) -> Response:
         )
     async with state.db.sessionmaker() as db:
         try:
-            principal = await resolve_principal(db, state.settings, token)
+            principal = await resolve_principal(db, state.settings, token, state.cache)
         except ArgusError:
             return JSONResponse(
                 err(None, -32001, "Invalid credentials"),

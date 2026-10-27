@@ -43,11 +43,12 @@ COPY --from=build --chown=root:root /opt/venv /opt/venv
 COPY --chown=root:root alembic.ini ./
 COPY --chown=root:root alembic ./alembic
 COPY --chown=root:root --chmod=0755 docker/entrypoint.sh /usr/local/bin/argus-entrypoint
-# /run/argus-sandbox seeds the shared volume that carries the sandbox Unix socket (owned by argus).
+# /run/argus-sandbox seeds the shared volume for the sandbox Unix socket. Root-owned 0755: the
+# sandbox server (root) creates the socket, the API (argus) connects, sandboxed uids cannot replace it.
 # /run/argus-runner (CLI agents) is shared with the runner image's own user: sticky and writable so
 # whichever container seeds the volume first, the runner can create its token-protected socket.
-RUN mkdir -p /data /run/argus-sandbox /run/argus-runner && chown argus:argus /data /run/argus-sandbox \
- && chmod 1777 /run/argus-runner
+RUN mkdir -p /data /run/argus-sandbox /run/argus-runner && chown argus:argus /data \
+ && chmod 0755 /run/argus-sandbox && chmod 1777 /run/argus-runner
 
 USER 10001:10001
 EXPOSE 8000

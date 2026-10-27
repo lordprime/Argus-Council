@@ -107,16 +107,82 @@ function useAuthForm<F extends Record<string, string>>(form: F, validate: (f: F)
   };
 }
 
+/** Second sign-in step for accounts with two-factor authentication on. */
+function MfaStep({ challenge, onDone, onRestart }: {
+  challenge: string;
+  onDone: () => void;
+  onRestart: (message: string) => void;
+}) {
+  const { verifyMfa } = useSession();
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const [limited, setLimited] = useState<{ err: unknown; seconds: number | null }>({ err: null, seconds: null });
+  const wait = useCountdown(limited.seconds, limited.err);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const value = code.trim();
+    if (value.length < 6) {
+      setError("Enter the 6-digit code from your authenticator app, or a recovery code.");
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      await verifyMfa(challenge, value);
+      onDone();
+    } catch (err) {
+      const seconds = retryAfterSeconds(err);
+      if (seconds != null) setLimited({ err, seconds });
+      else if (err instanceof ApiError && err.status === 401) onRestart(err.message || "Sign in again.");
+      else setError(err instanceof ApiError ? err.message : "Could not verify the code.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <AuthCard title="Two-factor authentication">
+      <form onSubmit={submit} className="flex flex-col gap-4" noValidate aria-labelledby="auth-title">
+        {wait > 0 && (
+          <Callout tone="danger" title="Too many attempts">
+            Wait <span className="tabular">{wait}</span> s, then try again.
+          </Callout>
+        )}
+        <p className="text-sm text-fg-muted">Enter the code your authenticator app shows for Argus Council.</p>
+        <TextField label="Authentication code" autoComplete="one-time-code" required autoFocus spellCheck={false}
+          hint="Lost your device? Use one of your recovery codes instead." maxLength={32}
+          value={code} error={error} onChange={(e) => { setCode(e.target.value); setError(undefined); }} />
+        <Button type="submit" variant="primary" loading={busy} disabled={wait > 0}>Verify</Button>
+        <button type="button" className="text-sm text-accent underline self-start" onClick={() => onRestart("")}>
+          Use a different account
+        </button>
+      </form>
+    </AuthCard>
+  );
+}
+
 export function LoginPage() {
   const { login, status } = useSession();
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: "", password: "" });
   const [busy, setBusy] = useState(false);
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
   const f = useAuthForm(form, validateLogin);
   const next = params.get("next");
   const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
   if (status === "authenticated") return <Navigate to={target} replace />;
+  if (challenge) {
+    return (
+      <MfaStep challenge={challenge} onDone={() => navigate(target, { replace: true })}
+        onRestart={(message) => {
+          setChallenge(null);
+          setNotice(message);
+          setForm((s) => ({ ...s, password: "" }));
+        }} />
+    );
+  }
 
   const set = (k: "email" | "password", v: string) => {
     setForm((s) => ({ ...s, [k]: v }));
@@ -126,9 +192,11 @@ export function LoginPage() {
     e.preventDefault();
     if (!f.begin()) return;
     setBusy(true);
+    setNotice("");
     try {
-      await login(form.email.trim(), form.password);
-      navigate(target, { replace: true });
+      const mfa = await login(form.email.trim(), form.password);
+      if (mfa) setChallenge(mfa.mfa_token);
+      else navigate(target, { replace: true });
     } catch (err) {
       f.fail(err);
     } finally {
@@ -138,6 +206,7 @@ export function LoginPage() {
   return (
     <AuthCard title="Sign in">
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate aria-labelledby="auth-title">
+        {notice && <Callout tone="warning" title="Sign in again">{notice}</Callout>}
         <Summary errors={f.errors} verb="sign in" wait={f.wait} summaryRef={f.summaryRef} />
         <TextField label="Email" type="email" autoComplete="email" inputMode="email" required autoFocus
           value={form.email} error={f.errors.email} onChange={(e) => set("email", e.target.value)} />

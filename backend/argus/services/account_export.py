@@ -67,7 +67,11 @@ class ExportTooLarge(ArgusError):
 
 
 def _secret(column: str) -> bool:
-    return column.endswith("_enc") or column in {"password_hash", "key_hash"} or "secret" in column
+    return (
+        column.endswith("_enc")
+        or column in {"password_hash", "key_hash", "totp_recovery"}
+        or "secret" in column
+    )
 
 
 def _default(obj: Any) -> Any:

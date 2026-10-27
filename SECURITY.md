@@ -70,4 +70,5 @@ See `docs/security/audit.md` and `docs/security/threat-model.md`. In short:
   `ARGUS_BOOTSTRAP_ADMIN_*` variables.
 - Terminate TLS in front of the web container.
 - Leave the private-network switches off unless you need them.
-- Treat the shared code sandbox as one trust domain: see SEC-08 in the audit.
+- Keep the sandbox per-execution isolation on (`ARGUS_SANDBOX_UID_POOL`, see SEC-08 in the audit).
+- Turn on two-factor authentication for admin accounts (Settings, then Profile).
