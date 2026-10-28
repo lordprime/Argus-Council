@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 # Optional extra CA (corporate / egress proxies): docker build --secret id=extra_ca,src=ca.crt
