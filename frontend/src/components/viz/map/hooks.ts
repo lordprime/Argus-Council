@@ -59,6 +59,28 @@ export function usePulses(opts: {
   const lastSeq = useRef<number | null>(null);
   const frame = useRef<number | null>(null);
 
+  function tick(now: number) {
+    const els = pool.current ?? [];
+    pulses.current = pulses.current.filter((p) => now - p.start < DURATION);
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      if (!el) continue;
+      const p = pulses.current[i];
+      if (!p || now < p.start) {
+        el.setAttribute("visibility", "hidden");
+        continue;
+      }
+      const t = (now - p.start) / DURATION;
+      const [x, y] = pointAt(p.pl, p.reverse ? 1 - t : t);
+      el.setAttribute("cx", x.toFixed(1));
+      el.setAttribute("cy", y.toFixed(1));
+      el.setAttribute("class", p.cls);
+      el.setAttribute("opacity", String(t < 0.85 ? 1 : (1 - t) / 0.15));
+      el.setAttribute("visibility", "visible");
+    }
+    frame.current = pulses.current.length ? raf(tick) : null;
+  }
+
   // Enqueue pulses for events we have not seen yet. The first pass only records the high-water
   // mark so a page load / replay does not fire the whole backlog at once.
   useEffect(() => {
@@ -82,27 +104,6 @@ export function usePulses(opts: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comms, enabled]);
 
-  function tick(now: number) {
-    const els = pool.current ?? [];
-    pulses.current = pulses.current.filter((p) => now - p.start < DURATION);
-    for (let i = 0; i < els.length; i++) {
-      const el = els[i];
-      if (!el) continue;
-      const p = pulses.current[i];
-      if (!p || now < p.start) {
-        el.setAttribute("visibility", "hidden");
-        continue;
-      }
-      const t = (now - p.start) / DURATION;
-      const [x, y] = pointAt(p.pl, p.reverse ? 1 - t : t);
-      el.setAttribute("cx", x.toFixed(1));
-      el.setAttribute("cy", y.toFixed(1));
-      el.setAttribute("class", p.cls);
-      el.setAttribute("opacity", String(t < 0.85 ? 1 : (1 - t) / 0.15));
-      el.setAttribute("visibility", "visible");
-    }
-    frame.current = pulses.current.length ? raf(tick) : null;
-  }
 
   // Pausing or switching to reduced motion drops in-flight pulses immediately.
   useEffect(() => {

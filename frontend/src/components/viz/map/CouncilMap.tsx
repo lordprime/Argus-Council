@@ -45,6 +45,23 @@ function subsOf(run: RunState): Record<string, SubCouncilInfo> {
   return Array.isArray(s) ? Object.fromEntries(s.map((x) => [x.id, x])) : s;
 }
 
+/** Conduit polyline between two laid-out nodes, routed once per pair and cached for this layout. */
+function router(layout: ReturnType<typeof computeLayout>) {
+  const cache = new Map<string, Polyline>();
+  return (a: string, b: string): Polyline | undefined => {
+    const k = pairKey(a, b);
+    let pl = cache.get(k);
+    if (!pl) {
+      const pa = layout.nodes.get(a < b ? a : b);
+      const pb = layout.nodes.get(a < b ? b : a);
+      if (!pa || !pb || pa === pb) return undefined;
+      pl = polyline(route(pa, pb));
+      cache.set(k, pl);
+    }
+    return pl;
+  };
+}
+
 function time(ts: string) {
   const d = new Date(ts);
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleTimeString([], { hour12: false });
@@ -74,26 +91,10 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
 
   // Layout depends only on the node set, not on traffic, so it stays put while messages flow.
   const lkey = layoutKey(graph.nodes);
-  const nodesRef = useRef(graph.nodes);
-  nodesRef.current = graph.nodes;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const layout = useMemo(() => computeLayout(nodesRef.current), [lkey]);
+  const layout = useMemo(() => computeLayout(graph.nodes), [lkey]);
 
-  const routes = useMemo(() => {
-    const cache = new Map<string, Polyline>();
-    return (a: string, b: string): Polyline | undefined => {
-      const k = pairKey(a, b);
-      let pl = cache.get(k);
-      if (!pl) {
-        const pa = layout.nodes.get(a < b ? a : b);
-        const pb = layout.nodes.get(a < b ? b : a);
-        if (!pa || !pb || pa === pb) return undefined;
-        pl = polyline(route(pa, pb));
-        cache.set(k, pl);
-      }
-      return pl;
-    };
-  }, [layout]);
+  const routes = useMemo(() => router(layout), [layout]);
   const routeFor = useCallback(
     (from: string, to: string) => {
       const pl = routes(from, to);

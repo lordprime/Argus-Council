@@ -71,7 +71,7 @@ export function Breadcrumbs({ className }: { className?: string }) {
           className={cn("md:hidden inline-flex items-center gap-0.5 min-w-0 h-8 pr-2 rounded-md text-sm text-fg-muted hover:text-fg",
             "[@media(pointer:coarse)]:min-h-11")}>
           <ChevronLeft className="size-4 shrink-0" aria-hidden />
-          <span className="sr-only">Back to </span>
+          <span className="sr-only">Back to</span>{" "}
           <span className="truncate">{parent.label}</span>
         </Link>
       )}
