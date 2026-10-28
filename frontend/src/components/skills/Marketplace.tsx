@@ -43,11 +43,11 @@ function MarketplaceCard({ skill: s }: { skill: MarketplaceSkill }) {
         <div className="flex-1" />
         {s.installed ? (
           <Link to={`/skills/${encodeURIComponent(s.name)}`} className="text-sm text-accent underline underline-offset-2">
-            Open<span className="sr-only"> {s.name}</span>
+            Open <span className="sr-only">{s.name}</span>
           </Link>
         ) : (
           <Button size="sm" variant="primary" icon={Download} loading={install.isPending} onClick={onInstall}>
-            Install<span className="sr-only"> {s.name}</span>
+            Install <span className="sr-only">{s.name}</span>
           </Button>
         )}
       </div>

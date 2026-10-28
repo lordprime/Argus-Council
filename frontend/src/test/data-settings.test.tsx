@@ -63,7 +63,7 @@ describe("Settings → Data & privacy", () => {
     useSession.setState({ user: MEMBER });
     const fetchMock = mockFetch((url, init) => {
       if (url === "/api/v1/me/export" && init.method === "POST")
-        return new Response(new Blob(["PK zip"]), {
+        return new Response(new TextEncoder().encode("PK zip"), {
           status: 200,
           headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="argus-export-20261027.zip"' },
         });

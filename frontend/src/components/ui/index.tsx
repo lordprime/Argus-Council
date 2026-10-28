@@ -165,7 +165,7 @@ export function PasswordField({ label, hint, error, className, ...rest }: FieldS
           className={cn("absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 h-7 px-2 rounded-sm text-xs font-medium",
             "text-fg-muted hover:bg-surface-2 hover:text-fg", "[@media(pointer:coarse)]:h-10")}>
           {visible ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
-          {visible ? "Hide" : "Show"}<span className="sr-only"> {label.toLowerCase()}</span>
+          {visible ? "Hide" : "Show"} <span className="sr-only">{label.toLowerCase()}</span>
         </button>
       </div>
       <span className="sr-only" aria-live="polite">{visible ? `${label} is visible` : ""}</span>

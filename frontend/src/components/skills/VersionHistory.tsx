@@ -108,10 +108,10 @@ export function VersionHistory({ name, current, onRestored }: {
                   {!isCurrent && (
                     <div className="flex flex-wrap gap-1.5">
                       <Button size="sm" variant="ghost" aria-pressed={on} onClick={() => setSelected(v.number)}>
-                        {on ? "Comparing" : "Compare"}<span className="sr-only"> version {v.number}</span>
+                        {on ? "Comparing" : "Compare"} <span className="sr-only">version {v.number}</span>
                       </Button>
                       <Button size="sm" icon={RotateCcw} onClick={() => { restore.reset(); setConfirm(v.number); }}>
-                        Restore<span className="sr-only"> version {v.number}</span>
+                        Restore <span className="sr-only">version {v.number}</span>
                       </Button>
                     </div>
                   )}
