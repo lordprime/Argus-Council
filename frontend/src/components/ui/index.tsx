@@ -454,7 +454,9 @@ export function ErrorState({ error, onRetry, title, autoRetry }: { error: unknow
   const limited = retryIn != null;
   const wait = useCountdown(retryIn, error);
   const retryRef = useRef(onRetry);
-  retryRef.current = onRetry;
+  useEffect(() => {
+    retryRef.current = onRetry;
+  });
   useEffect(() => {
     if (limited && autoRetry && wait === 0) retryRef.current?.();
   }, [limited, autoRetry, wait]);
