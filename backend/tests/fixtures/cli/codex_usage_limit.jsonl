@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"0199b000-1111-7222-8333-444455556666"}
+{"type":"turn.started"}
+{"type":"error","message":"You've hit your usage limit. Upgrade to Pro or try again in 2 hours."}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Upgrade to Pro or try again in 2 hours."}}

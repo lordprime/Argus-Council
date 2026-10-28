@@ -1,6 +1,7 @@
 import { Monitor, Moon, Rows3, Rows4, ShieldCheck, Sun } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
+import { MfaSection } from "@/components/settings/MfaSection";
 import { SettingsLayout, SettingsSection } from "@/components/settings/SettingsNav";
 import { Badge, Button, Callout, ErrorState, Kbd, Segmented, Skeleton, TextField, Toggle } from "@/components/ui";
 import { ApiError, errorMessage } from "@/lib/api";
@@ -181,7 +182,7 @@ function ProfileSkeleton() {
 export default function Profile() {
   const me = useMe();
   return (
-    <SettingsLayout title="Profile" description="Your account, password and how Argus looks on this device.">
+    <SettingsLayout form title="Profile" description="Your account, password, two-factor authentication and how Argus looks on this device.">
       {me.data ? (
         <AccountSection key={me.data.id} user={me.data} />
       ) : me.error ? (
@@ -190,6 +191,7 @@ export default function Profile() {
         <div role="status" aria-label="Loading profile"><ProfileSkeleton /></div>
       )}
       <PasswordSection />
+      {me.data && <MfaSection user={me.data} />}
       <AppearanceSection />
       <KeyboardSection />
     </SettingsLayout>

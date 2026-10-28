@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from argus.api.deps import AdminPrincipal, CacheDep, DbDep, SessionPrincipal, SettingsDep
+from argus.api.deps import AdminPrincipal, AdminWriter, CacheDep, DbDep, SessionPrincipal, SettingsDep
 from argus.core.errors import ArgusError, Conflict, RateLimited
 from argus.core.security import verify_password
 from argus.services.account_export import (
@@ -105,6 +105,10 @@ async def delete_me(
             except Exception:  # noqa: S112 - best effort; deletion proceeds regardless
                 continue
     stats = await delete_account(db, user, blob_root(settings))
+    cli = getattr(request.app.state, "cli_agents", None)
+    if cli is not None and cli.transport is not None:
+        # Remove the user's runner HOME too: their CLI logins and vendor session stores.
+        stats["cli_home_purged"] = int(await cli.purge_user(user.id))
     # The audit row must not reference the deleted user (FK); record the id in the detail instead.
     request.state.actor_id = None
     request.state.audit_detail = {"deleted_user_id": str(user.id), **stats}
@@ -124,7 +128,7 @@ async def get_retention(request: Request, _: AdminPrincipal, settings: SettingsD
 
 @router.post("/admin/retention/run")
 async def run_retention(
-    request: Request, _: AdminPrincipal, data: RetentionRunIn | None = None
+    request: Request, _: AdminWriter, data: RetentionRunIn | None = None
 ) -> dict[str, Any]:
     """Apply the policy now. With ``dry_run`` nothing is deleted and the counts are returned."""
     dry_run = bool(data and data.dry_run)

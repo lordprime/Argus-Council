@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in Argus Council does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems go through [SECURITY.md](https://github.com/lordprime/Argus-Council/blob/main/SECURITY.md), not here.**
+        Remove API keys, tokens, passwords and personal data from everything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, including any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps, API calls or a run configuration that shows the problem.
+      placeholder: |
+        1. Create a council with ...
+        2. Start a run with ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Council runtime (planning, oversight, approvals, votes)
+        - Providers and models
+        - Tools, sandbox or web research
+        - Skills or marketplace
+        - Knowledge bases or memory
+        - Protocols (MCP, A2A, ACP) or ledger
+        - Web UI or run views
+        - API, webhooks or auth
+        - Deployment, scripts or Docker
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit (`git rev-parse --short HEAD`) or the version in `deploy/.version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How you run it
+      options:
+        - Docker stack (scripts/deploy.sh or docker compose)
+        - Local development (uv and npm)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and events
+      description: Relevant API logs (`docker compose -f deploy/docker-compose.yml logs api`), browser console output, or the run's events.
+      render: text

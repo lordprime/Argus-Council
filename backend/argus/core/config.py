@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./argus.db"
     redis_url: str | None = None
     cache_default_ttl: int = 300
+    # Bound every cache/rate-limit Redis command so a hung Redis degrades instead of stalling requests.
+    # (Run event pub/sub uses its own connection without a read timeout: subscribers idle for minutes.)
+    redis_socket_timeout_s: float = Field(default=2.0, gt=0)
+    redis_connect_timeout_s: float = Field(default=2.0, gt=0)
+    # Per-dependency timeout for /health/ready.
+    health_check_timeout_s: float = Field(default=2.0, gt=0)
 
     # Auth
     secret_key: SecretStr = SecretStr(_INSECURE_DEFAULT_SECRET)
@@ -48,6 +54,12 @@ class Settings(BaseSettings):
     llm_cache_ttl: int = 3600
     llm_max_retries: int = 3
     provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
+    # Webhooks, HTTP MCP servers and remote A2A/ACP agents: private/loopback targets are refused
+    # unless the operator opts in. Link-local (cloud metadata) addresses are refused regardless.
+    connections_allow_private_urls: bool = False
+    # web_fetch (driven by model output, so by whatever content the agents read): a run's guardrails
+    # can only tighten this, never open private networks on their own.
+    web_fetch_allow_private_urls: bool = False
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     # Research tools
@@ -60,11 +72,29 @@ class Settings(BaseSettings):
     sandbox_token: SecretStr | None = None
     sandbox_local: bool = False
 
+    # CLI agents: the vendors' official CLIs (claude, codex, gemini) run as council agents in the
+    # separate agent runner service. Off unless the operator opts in. Each vendor's terms govern its
+    # CLI; subscription logins are for the account owner's own use (multi-user: use API keys).
+    cli_agents_enabled: bool = False
+    cli_agents_allowed: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["claude", "codex", "gemini"]
+    )
+    # false: a CLI agent runs only with the user's own API key, never a subscription login.
+    cli_agents_allow_subscription: bool = True
+    cli_agents_timeout_s: int = Field(default=600, ge=30, le=3600)
+    runner_url: str | None = None
+    runner_token: SecretStr | None = None
+    runner_local: bool = False  # development only: run the CLIs on this host; refused in production
+
     # Observability: when set, /metrics requires "Authorization: Bearer <token>"
     metrics_token: SecretStr | None = None
 
     # Storage
     data_dir: str = "./data"
+
+    # Webhooks: on shutdown, wait at most this long for in-flight deliveries (the rest stay queued
+    # in the outbox and are resumed by the next process). Keep it below the container stop grace.
+    webhook_shutdown_grace_s: float = Field(default=5.0, ge=0, le=60)
 
     # Data retention (days; 0 = keep forever). See argus/services/retention.py.
     retention_run_days: int = Field(default=0, ge=0)  # finished runs + events + artifacts + blobs
@@ -72,6 +102,8 @@ class Settings(BaseSettings):
     retention_audit_days: int = Field(default=365, ge=0)
     # The hash-chained ledger is never pruned by default: verification replays it from genesis.
     retention_ledger_days: int = Field(default=0, ge=0)
+    retention_webhook_delivery_days: int = Field(default=30, ge=0)  # webhook delivery log
+    retention_notification_days: int = Field(default=90, ge=0)  # in-app notifications, read or not
     retention_batch_size: int = Field(default=500, ge=1, le=10_000)
     retention_interval_s: int = Field(default=3600, ge=60)
     retention_enabled: bool = True  # run the periodic retention task in this process
@@ -80,7 +112,17 @@ class Settings(BaseSettings):
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
+    # Inbound blocking calls (MCP start_run wait_seconds, A2A blocking, ACP sync) waiting at once in
+    # this process; beyond it, calls return the run's current state and the client polls.
+    protocol_max_blocking_waits: int = Field(default=100, ge=0)
+    protocol_max_wait_s: float = Field(default=600.0, gt=0, le=3600)
     remote_agent_timeout_s: float = 600.0
+    # Largest response body read from an MCP server, A2A/ACP agent or webhook receiver (bytes).
+    protocol_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+
+    # Runs
+    approval_timeout_s: float = Field(default=3600.0, gt=0)  # a pending approval expires after this
+    run_start_timeout_s: float = Field(default=60.0, gt=0)  # bound on preparing a run (connections etc.)
 
     # Rate limiting (requests per minute per principal / IP)
     rate_limit_per_minute: int = 120
@@ -95,6 +137,8 @@ class Settings(BaseSettings):
         "searxng_url",
         "sandbox_url",
         "sandbox_token",
+        "runner_url",
+        "runner_token",
         "metrics_token",
         mode="before",
     )
@@ -102,6 +146,17 @@ class Settings(BaseSettings):
     def _empty_is_unset(cls, v: object) -> object:
         # docker compose passes unset variables as empty strings
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("cli_agents_allowed", mode="before")
+    @classmethod
+    def _split_clis(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = [c.strip().lower() for c in v.split(",") if c.strip()]
+        if isinstance(v, list):
+            unknown = sorted({str(c) for c in v} - {"claude", "codex", "gemini"})
+            if unknown:
+                raise ValueError(f"unknown CLI agents: {', '.join(unknown)}")
+        return v
 
     @field_validator("cors_origins", mode="before")
     @classmethod

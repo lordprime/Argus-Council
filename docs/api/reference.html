@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>API reference · Argus Council</title>
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+    <style>
+      body { margin: 0; background: #ffffff; }
+      .argus-bar {
+        display: flex; align-items: center; gap: 12px; padding: 10px 20px;
+        background: #4338ca; color: #ffffff;
+        font: 600 15px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      .argus-bar a { color: #ffffff; text-decoration: none; }
+      .argus-bar a:hover, .argus-bar a:focus-visible { text-decoration: underline; }
+      .argus-bar img { width: 28px; height: 28px; }
+      .argus-bar .back { margin-left: auto; font-weight: 400; }
+      noscript { display: block; padding: 24px; font: 16px/1.5 sans-serif; }
+    </style>
+  </head>
+  <body>
+    <header class="argus-bar">
+      <img src="../assets/logo.svg" alt="" />
+      <span>Argus Council API</span>
+      <a class="back" href="../">Back to the documentation</a>
+    </header>
+    <noscript>
+      The interactive reference needs JavaScript. The raw document is
+      <a href="openapi.json">openapi.json</a>.
+    </noscript>
+    <div id="redoc"></div>
+    <script
+      src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js"
+      integrity="sha384-w447zOpYfw/1Tv/5AK9NfHTlQIqE3RVR6KY62jCyy9zNDgO64cMwGGP1Fj0zJVf5"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      Redoc.init(
+        "openapi.json",
+        {
+          hideDownloadButton: false,
+          expandResponses: "200,201",
+          pathInMiddlePanel: true,
+          theme: {
+            colors: { primary: { main: "#4338ca" } },
+            typography: { fontFamily: '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' },
+            sidebar: { backgroundColor: "#f6f7fc" },
+            rightPanel: { backgroundColor: "#1b1d3a" },
+          },
+        },
+        document.getElementById("redoc"),
+      );
+    </script>
+  </body>
+</html>

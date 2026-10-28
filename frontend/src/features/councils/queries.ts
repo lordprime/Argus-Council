@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { api, V1 } from "@/lib/api";
+import { MOCK_PROVIDER, MOCK_PROVIDER_LABEL } from "@/lib/providers";
 import { keys, useProviderKinds, useProviders } from "@/lib/queries";
 import type { Council, Member, Mode } from "@/lib/types";
 
@@ -143,7 +144,15 @@ export interface ProviderOption {
   value: string;
   label: string;
   models: string[];
+  /** "account": a CLI agent signed in with the user's vendor account (or CLI key); "api_key": an API provider. */
+  auth?: "account" | "api_key";
 }
+
+const CLI_OPTION: Record<string, { label: string; models: string[] }> = {
+  "claude-cli": { label: "Claude Code CLI (account)", models: ["sonnet", "opus", "haiku", "default"] },
+  "codex-cli": { label: "Codex CLI (account)", models: ["default"] },
+  "gemini-cli": { label: "Gemini CLI (account)", models: ["default", "gemini-2.5-pro", "gemini-2.5-flash"] },
+};
 
 /**
  * Providers a seat can use: the user's enabled provider configs plus system providers
@@ -159,15 +168,20 @@ export function useProviderOptions(): { options: ProviderOption[]; isLoading: bo
       if (!p.enabled) continue;
       const suggested = kindOf(p.kind)?.suggested_models ?? [];
       const models = [...new Set([...(p.default_model ? [p.default_model] : []), ...suggested])];
-      out.push({ value: p.name, label: `${p.name} (${kindOf(p.kind)?.label ?? p.kind})`, models });
+      out.push({ value: p.name, label: `${p.name} (${kindOf(p.kind)?.label ?? p.kind})`, models, auth: "api_key" });
     }
     for (const sys of kinds.data?.system_providers ?? []) {
       if (out.some((o) => o.value === sys)) continue;
       const k = kindOf(sys);
       const models = k?.suggested_models.length ? k.suggested_models : sys === "mock" ? ["mock-1"] : [];
-      out.push({ value: sys, label: sys === "mock" ? "Offline demo (mock)" : `${k?.label ?? sys} (system)`, models });
+      out.push({ value: sys, label: sys === MOCK_PROVIDER ? MOCK_PROVIDER_LABEL : `${k?.label ?? sys} (system)`, models,
+        auth: sys === MOCK_PROVIDER ? undefined : "api_key" });
     }
-    if (!out.some((o) => o.value === "mock")) out.push({ value: "mock", label: "Offline demo (mock)", models: ["mock-1"] });
+    for (const cli of kinds.data?.cli_providers ?? []) {
+      const known = CLI_OPTION[cli];
+      out.push({ value: cli, label: known?.label ?? `${cli} (account)`, models: known?.models ?? ["default"], auth: "account" });
+    }
+    if (!out.some((o) => o.value === MOCK_PROVIDER)) out.push({ value: MOCK_PROVIDER, label: MOCK_PROVIDER_LABEL, models: ["mock-1"] });
     return out;
   }, [providers.data, kinds.data]);
   return { options, isLoading: providers.isLoading || kinds.isLoading };

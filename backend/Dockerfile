@@ -43,7 +43,12 @@ COPY --from=build --chown=root:root /opt/venv /opt/venv
 COPY --chown=root:root alembic.ini ./
 COPY --chown=root:root alembic ./alembic
 COPY --chown=root:root --chmod=0755 docker/entrypoint.sh /usr/local/bin/argus-entrypoint
-RUN mkdir -p /data && chown argus:argus /data
+# /run/argus-sandbox seeds the shared volume for the sandbox Unix socket. Root-owned 0755: the
+# sandbox server (root) creates the socket, the API (argus) connects, sandboxed uids cannot replace it.
+# /run/argus-runner (CLI agents) is shared with the runner image's own user: sticky and writable so
+# whichever container seeds the volume first, the runner can create its token-protected socket.
+RUN mkdir -p /data /run/argus-sandbox /run/argus-runner && chown argus:argus /data \
+ && chmod 0755 /run/argus-sandbox && chmod 1777 /run/argus-runner
 
 USER 10001:10001
 EXPOSE 8000
@@ -51,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=4).status == 200 else 1)"]
 
 ENTRYPOINT ["argus-entrypoint"]
-CMD ["uvicorn", "argus.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--no-server-header"]
+CMD ["uvicorn", "argus.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--no-server-header", "--timeout-graceful-shutdown", "10"]

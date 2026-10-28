@@ -1,0 +1,11 @@
+{
+  "name": "argus-agent-runner-clis",
+  "private": true,
+  "description": "Pinned vendor CLIs run by the Argus agent runner. Bump versions deliberately and re-check flags (see argus/runner/specs.py).",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.308",
+    "@google/gemini-cli": "0.65.0",
+    "@openai/codex": "0.163.0"
+  }
+}

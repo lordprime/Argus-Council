@@ -30,7 +30,10 @@ WRITE_SCOPES = (
 )
 API_KEY_PREFIX = "argus_"
 
-TokenType = Literal["access", "refresh"]
+# "mfa": a short-lived proof that the password was right, exchanged for real tokens at
+# POST /auth/mfa/verify together with a second-factor code. It authenticates nothing else.
+TokenType = Literal["access", "refresh", "mfa"]
+MFA_TOKEN_TTL = timedelta(minutes=5)
 
 
 def hash_password(password: str) -> str:
@@ -50,11 +53,11 @@ def needs_rehash(password_hash: str) -> bool:
 
 def create_token(settings: Settings, subject: str, token_type: TokenType, **claims: Any) -> str:
     now = datetime.now(UTC)
-    ttl = (
-        timedelta(minutes=settings.access_token_ttl_minutes)
-        if token_type == "access"  # noqa: S105
-        else timedelta(days=settings.refresh_token_ttl_days)
-    )
+    ttl = {
+        "access": timedelta(minutes=settings.access_token_ttl_minutes),
+        "refresh": timedelta(days=settings.refresh_token_ttl_days),
+        "mfa": MFA_TOKEN_TTL,
+    }[token_type]
     payload = {
         "sub": subject,
         "typ": token_type,

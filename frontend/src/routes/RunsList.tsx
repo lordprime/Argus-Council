@@ -1,11 +1,12 @@
 import { History, Plus, RefreshCw, SearchX, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
-import { MODE_META } from "@/components/run/ModeLabel";
-import { Button, Card, Dialog, EmptyState, ErrorState, PageHeader, SelectField, Skeleton, TextField } from "@/components/ui";
+import {
+  Button, ButtonLink, Card, Dialog, EmptyState, ErrorState, FilterBar, Page, PageHeader, SearchField, SelectField, Skeleton,
+} from "@/components/ui";
 import { errorMessage } from "@/lib/api";
-import { cn } from "@/lib/cn";
+import { MODE_META } from "@/lib/modes";
 import { useRunsList } from "@/lib/queries";
 import type { Run } from "@/lib/types";
 import { TERMINAL, useDeleteRuns } from "@/features/runs/queries";
@@ -18,10 +19,6 @@ const PAGE = 100;
 const MAX_LIMIT = 200; // backend cap for GET /runs?limit=
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-const linkBase = "inline-flex items-center gap-2 h-9 px-3 text-base rounded-md font-medium transition-colors duration-fast";
-const primaryLink = `${linkBase} bg-accent text-accent-fg shadow-1 hover:bg-accent-hover`;
-const secondaryLink = `${linkBase} bg-surface text-fg border border-border-strong hover:bg-surface-2`;
 
 function TableSkeleton() {
   return (
@@ -117,29 +114,29 @@ export default function RunsList() {
     setSelected(on ? new Set(runs.filter((r) => TERMINAL.has(r.status)).map((r) => r.id)) : new Set());
 
   return (
-    <div className="max-w-6xl mx-auto p-4 md:p-6">
+    <Page>
       <PageHeader title="Runs" description="Every council run you've started, newest first."
         actions={
           <>
             <Button icon={RefreshCw} loading={q.isFetching && !q.isLoading} onClick={() => void q.refetch()}>Refresh</Button>
-            <Link to="/" className={primaryLink}><Plus className="size-4" aria-hidden />New run</Link>
+            <ButtonLink to="/" variant="primary" icon={Plus}>New run</ButtonLink>
           </>
         } />
 
-      {showFilters && <div role="search" aria-label="Filter runs" className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_11rem_11rem_auto] items-end mb-4">
-        <TextField label="Search topics" type="search" className="col-span-2 sm:col-span-1" placeholder="Filter by topic…" value={search}
-          onChange={(e) => setParam("q", e.target.value)} />
-        <SelectField label="Status" value={status} onChange={(e) => setParam("status", e.target.value)}>
-          <option value="">All statuses</option>
-          {STATUSES.map((s) => <option key={s} value={s}>{s[0]!.toUpperCase() + s.slice(1)}</option>)}
-        </SelectField>
-        <SelectField label="Mode" value={mode} onChange={(e) => setParam("mode", e.target.value)}>
-          <option value="">All modes</option>
-          {Object.entries(MODE_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
-        </SelectField>
-        <Button variant="ghost" icon={X} onClick={clearFilters} disabled={!filtered}
-          className={cn("justify-self-start", !filtered && "hidden sm:inline-flex")}>Clear</Button>
-      </div>}
+      {showFilters && (
+        <FilterBar label="Filter runs" className="mb-4" onClear={clearFilters} canClear={filtered}>
+          <SearchField label="Search topics" className="w-full sm:w-auto sm:flex-1 sm:min-w-56" placeholder="Filter by topic…" value={search}
+            onChange={(v) => setParam("q", v)} />
+          <SelectField label="Status" value={status} onChange={(e) => setParam("status", e.target.value)} className="flex-1 sm:flex-none sm:w-44">
+            <option value="">All statuses</option>
+            {STATUSES.map((s) => <option key={s} value={s}>{s[0]!.toUpperCase() + s.slice(1)}</option>)}
+          </SelectField>
+          <SelectField label="Mode" value={mode} onChange={(e) => setParam("mode", e.target.value)} className="flex-1 sm:flex-none sm:w-44">
+            <option value="">All modes</option>
+            {Object.entries(MODE_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
+          </SelectField>
+        </FilterBar>
+      )}
 
       <div className="flex flex-wrap items-center gap-3 min-h-9 mb-2">
         {!wide && runs.some((r) => TERMINAL.has(r.status)) && (
@@ -171,7 +168,7 @@ export default function RunsList() {
               action={<Button onClick={clearFilters} icon={X}>Clear filters</Button>} />
           ) : (
             <EmptyState icon={History} title="No runs yet" body="Start a run from Home and it will show up here."
-              action={<Link to="/" className={secondaryLink}><Plus className="size-4" aria-hidden />Start a run</Link>} />
+              action={<ButtonLink to="/" icon={Plus}>Start a run</ButtonLink>} />
           )
         ) : wide ? (
           <RunsTable runs={runs} selected={selected} onToggle={toggle} onToggleAll={toggleAll} />
@@ -192,6 +189,6 @@ export default function RunsList() {
 
       <DeleteDialog runs={chosen} open={confirming && chosen.length > 0} onOpenChange={setConfirming}
         onDeleted={(ids) => setSelected((s) => new Set([...s].filter((id) => !ids.includes(id))))} />
-    </div>
+    </Page>
   );
 }

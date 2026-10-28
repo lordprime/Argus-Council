@@ -37,6 +37,24 @@ export const auth = {
       /* ignore */
     }
   },
+  /** End the session server-side (its refresh and access tokens stop working), then forget it. */
+  revoke() {
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem(REFRESH_KEY);
+    } catch {
+      stored = null;
+    }
+    if (stored) {
+      void fetch("/api/v1/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: stored }),
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+    auth.clear();
+  },
   hasSession() {
     try {
       return Boolean(accessToken || sessionStorage.getItem(REFRESH_KEY));
@@ -65,15 +83,18 @@ async function refresh(): Promise<boolean> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: stored }),
   });
-  if (!resp.ok) {
+  // Only a rejected refresh token ends the session. A rate limit, a server error or (thrown by fetch) a
+  // network failure leaves the stored token alone and surfaces as an error, so the caller can retry.
+  if ([400, 401, 403, 422].includes(resp.status)) {
     auth.clear();
     return false;
   }
+  if (!resp.ok) throw await toError(resp);
   auth.setTokens((await resp.json()) as TokenPair);
   return true;
 }
 
-/** Single-flight refresh: concurrent 401s share one refresh request. */
+/** Single-flight refresh: concurrent 401s share one refresh request. Rejects on a non-auth failure (429, 5xx, offline). */
 export function refreshOnce(): Promise<boolean> {
   refreshing ??= refresh().finally(() => {
     refreshing = null;
@@ -89,7 +110,12 @@ async function toError(resp: Response): Promise<ApiError> {
     /* non-JSON error */
   }
   const env = (body as { error?: { code?: string; message?: string; details?: Record<string, unknown> } })?.error;
-  if (env) return new ApiError(resp.status, env.code ?? "error", env.message ?? resp.statusText, env.details);
+  const retryAfter = Number(resp.headers.get("retry-after"));
+  if (env) {
+    const details = { ...(env.details ?? {}) };
+    if (Number.isFinite(retryAfter) && retryAfter > 0 && details.retry_after == null) details.retry_after = retryAfter;
+    return new ApiError(resp.status, env.code ?? "error", env.message ?? resp.statusText, details);
+  }
   const detail = (body as { detail?: unknown })?.detail;
   if (Array.isArray(detail)) {
     const msg = detail.map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc ?? []).slice(1).join(".")}: ${d.msg}`).join("; ");
@@ -114,7 +140,9 @@ export async function request<T = unknown>(path: string, opts: RequestOptions = 
     headers,
     body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
   });
-  if (resp.status === 401 && !retried && !path.startsWith("/api/v1/auth/login")) {
+  // Sign-in steps answer 401 for wrong credentials or an expired challenge: never refresh on those.
+  const signIn = path.startsWith("/api/v1/auth/login") || path.startsWith("/api/v1/auth/mfa/verify");
+  if (resp.status === 401 && !retried && !signIn) {
     if (await refreshOnce()) return request<T>(path, opts, true);
     onAuthLost?.();
   }
@@ -134,6 +162,22 @@ export const api = {
 };
 
 export const V1 = "/api/v1";
+
+/** The 401 that means the session itself is gone (as opposed to a rate limit, outage or network error). */
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
+/**
+ * Seconds to wait before retrying a `rate_limited` (429) error: the server's `retry_after` when it sends
+ * one, else the time left in the limiter's fixed one-minute window (backend cache.hit_rate_limit).
+ */
+export function retryAfterSeconds(err: unknown, now = Date.now()): number | null {
+  if (!(err instanceof ApiError) || (err.status !== 429 && err.code !== "rate_limited")) return null;
+  const hinted = Number(err.details.retry_after);
+  if (Number.isFinite(hinted) && hinted > 0) return Math.ceil(hinted);
+  return Math.max(1, 60 - Math.floor(now / 1000) % 60);
+}
 
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message;

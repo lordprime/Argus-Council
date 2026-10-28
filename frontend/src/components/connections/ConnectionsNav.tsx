@@ -1,11 +1,11 @@
-import { Bot, Cpu, ScrollText, Server, type LucideIcon } from "lucide-react";
+import { Bot, Cpu, ScrollText, Server, Terminal } from "lucide-react";
 import type { ReactNode } from "react";
-import { NavLink } from "react-router";
 
-import { cn } from "@/lib/cn";
+import { Page, PageHeader, SectionNav, type SectionLink } from "@/components/ui";
 
-const TABS: { to: string; label: string; icon: LucideIcon }[] = [
+const TABS: SectionLink[] = [
   { to: "/connections/providers", label: "Providers", icon: Cpu },
+  { to: "/connections/cli-agents", label: "CLI agents", icon: Terminal },
   { to: "/connections/mcp", label: "MCP servers", icon: Server },
   { to: "/connections/agents", label: "Remote agents", icon: Bot },
   { to: "/connections/ledger", label: "Ledger", icon: ScrollText },
@@ -13,36 +13,24 @@ const TABS: { to: string; label: string; icon: LucideIcon }[] = [
 
 /** Sub-navigation shared by every Connections page: links styled as tabs; the current one has aria-current="page". */
 export function ConnectionsNav() {
-  return (
-    <nav aria-label="Connections" className="mb-5 -mx-4 md:mx-0 border-b border-border overflow-x-auto">
-      <ul className="flex gap-1 px-4 md:px-0 min-w-max">
-        {TABS.map((t) => (
-          <li key={t.to}>
-            <NavLink
-              to={t.to}
-              className={({ isActive }) =>
-                cn(
-                  "inline-flex items-center gap-1.5 h-10 px-3 -mb-px text-sm border-b-2 whitespace-nowrap transition-colors duration-fast",
-                  isActive ? "border-accent text-fg font-medium" : "border-transparent text-fg-muted hover:text-fg hover:border-border-strong",
-                )
-              }
-            >
-              <t.icon className="size-4" aria-hidden />
-              {t.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
+  return <SectionNav label="Connections" links={TABS} />;
 }
 
-/** Page frame for Connections screens: sub-nav above the page content, consistent gutters. */
-export function ConnectionsPage({ children }: { children: ReactNode }) {
+/**
+ * Page frame for Connections screens, in the shared section order (C-10): eyebrow, the page's single h1
+ * with description and actions, the section tabs, then the content.
+ */
+export function ConnectionsPage({ title, description, actions, children }: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <Page>
+      <PageHeader eyebrow="Connections" title={title} description={description} actions={actions} />
       <ConnectionsNav />
       {children}
-    </div>
+    </Page>
   );
 }

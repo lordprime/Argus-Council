@@ -24,8 +24,10 @@ from argus.services.connections import (
     encode_mcp_risk,
     ledgered,
     mcp_settings,
+    outbound_client,
     public_card,
     set_agent_card,
+    stdio_permitted,
 )
 from argus.services.llm import validate_base_url
 
@@ -115,7 +117,7 @@ async def create_mcp(
     else:
         if not data.url:
             raise ArgusError("url is required for HTTP MCP servers")
-        url = validate_base_url(data.url, settings.provider_allow_private_urls)
+        url = validate_base_url(data.url, settings.connections_allow_private_urls, require_dns=False)
     box = SecretBox(settings)
     server = McpServer(
         owner_id=principal.id,
@@ -140,11 +142,19 @@ async def update_mcp(
     server = await _get(db, McpServer, principal.id, server_id)
     box = SecretBox(settings)
     values = data.model_dump(exclude_unset=True)
+    if (
+        values.get("enabled")
+        and server.transport == "stdio"
+        and not stdio_permitted(principal.user, settings)
+    ):
+        raise Forbidden("Only administrators can enable stdio MCP servers")
     if "headers" in values:
         h = values.pop("headers")
         server.headers_enc = box.encrypt(json.dumps(h)) if h else None
     if values.get("url"):
-        values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+        values["url"] = validate_base_url(
+            values["url"], settings.connections_allow_private_urls, require_dns=False
+        )
     trust, require_approval, risk = mcp_settings(server)
     if {"risk", "trust", "require_approval"} & values.keys():
         new = {k: values.pop(k, None) for k in ("risk", "trust", "require_approval")}
@@ -169,6 +179,8 @@ async def discover_mcp(
     server_id: uuid.UUID, request: Request, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ) -> dict:
     server = await _get(db, McpServer, principal.id, server_id)
+    if server.transport == "stdio" and not stdio_permitted(principal.user, settings):
+        raise Forbidden("stdio MCP servers need an administrator and ARGUS_MCP_ALLOW_STDIO")
     box = SecretBox(settings)
     try:
         client, tools = await connect_mcp(
@@ -201,7 +213,7 @@ async def create_agent(
         owner_id=principal.id,
         name=data.name,
         protocol=data.protocol,
-        url=validate_base_url(data.url, settings.provider_allow_private_urls),
+        url=validate_base_url(data.url, settings.connections_allow_private_urls, require_dns=False),
         agent_name=data.agent_name,
         token_enc=SecretBox(settings).encrypt(data.token) if data.token else None,
         description=data.description,
@@ -223,7 +235,9 @@ async def update_agent(
         t = values.pop("token")
         agent.token_enc = SecretBox(settings).encrypt(t) if t else None
     if values.get("url"):
-        values["url"] = validate_base_url(values["url"], settings.provider_allow_private_urls)
+        values["url"] = validate_base_url(
+            values["url"], settings.connections_allow_private_urls, require_dns=False
+        )
     if "requires_approval" in values:
         set_agent_card(agent, requires_approval=bool(values.pop("requires_approval")))
     if "agent_name" in values:
@@ -257,7 +271,12 @@ async def refresh_agent(
     detail = {"agent": agent.name, "purpose": "refresh"}
     try:
         if agent.protocol == "a2a":
-            client = A2AClient(agent.url, token, timeout=settings.protocol_timeout_s)
+            client = A2AClient(
+                agent.url,
+                token,
+                timeout=settings.protocol_timeout_s,
+                client=outbound_client(settings, settings.protocol_timeout_s),
+            )
             try:
                 base = agent.url.rsplit("/", 1)[0] if agent.url.rstrip("/").endswith("/a2a") else agent.url
                 card = await ledgered(
@@ -273,7 +292,12 @@ async def refresh_agent(
             finally:
                 await client.aclose()
         else:
-            client2 = AcpClient(agent.url, token, timeout=settings.protocol_timeout_s)
+            client2 = AcpClient(
+                agent.url,
+                token,
+                timeout=settings.protocol_timeout_s,
+                client=outbound_client(settings, settings.protocol_timeout_s),
+            )
             try:
                 listing = await ledgered(
                     maker,
@@ -308,18 +332,23 @@ async def list_ledger(
     db: DbDep,
     protocol: str | None = None,
     run_id: uuid.UUID | None = None,
+    purpose: ledger.Purpose | None = None,
     before_seq: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
+    """Newest first. Every filter is applied before ``limit``; page with ``next_before_seq``."""
     q = select(LedgerEntry).where(LedgerEntry.owner_id == principal.id)
     if protocol:
         q = q.where(LedgerEntry.protocol == protocol)
     if run_id:
         q = q.where(LedgerEntry.run_id == run_id)
+    if purpose:
+        q = q.where(ledger.purpose_is(purpose))
     if before_seq:
         q = q.where(LedgerEntry.seq < before_seq)
-    rows = await db.execute(q.order_by(LedgerEntry.seq.desc()).limit(limit))
+    entries = list((await db.execute(q.order_by(LedgerEntry.seq.desc()).limit(limit))).scalars())
     return {
+        "next_before_seq": entries[-1].seq if len(entries) == limit else None,
         "entries": [
             {
                 "seq": e.seq,
@@ -337,8 +366,8 @@ async def list_ledger(
                 "prev_hash": e.prev_hash,
                 "detail": e.detail,
             }
-            for e in rows.scalars()
-        ]
+            for e in entries
+        ],
     }
 
 

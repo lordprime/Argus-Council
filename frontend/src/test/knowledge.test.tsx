@@ -112,7 +112,7 @@ describe("Knowledge page", () => {
     mockFetch((url, init) => (url === "/api/v1/knowledge-bases/kb1/documents" && !init.method ? json({ documents: docs }) : baseHandler(url, init)));
     xhrReply = (file) => {
       if (file.name === "huge.txt") return { status: 413, body: { error: { code: "limit_exceeded", message: "Knowledge base would exceed 2000 chunks" } } };
-      const doc = { ...DOC, id: "d2", filename: file.name, chunk_count: 2 };
+      const doc = { ...DOC, id: `d-${file.name}`, filename: file.name, chunk_count: 2 };
       docs = [doc, ...docs];
       return { status: 201, body: doc };
     };
@@ -124,15 +124,16 @@ describe("Knowledge page", () => {
         files: [
           new File(["# Notes\nhello"], "notes.md", { type: "text/markdown" }),
           new File(["%PDF"], "paper.pdf", { type: "application/pdf" }),
+          new File(["png"], "photo.png", { type: "image/png" }),
           new File(["a b c"], "huge.txt", { type: "text/plain" }),
         ],
       },
     });
     const uploads = screen.getByRole("list", { name: "Uploads" });
-    expect(within(uploads).getByText(/PDF is not supported/)).toBeInTheDocument();
-    expect(await within(uploads).findByText("Uploaded · 2 chunks")).toBeInTheDocument();
+    expect(within(uploads).getByText(/Unsupported file type/)).toBeInTheDocument();
+    expect(await within(uploads).findAllByText("Uploaded · 2 chunks")).toHaveLength(2);
     expect(await within(uploads).findByText("Knowledge base would exceed 2000 chunks")).toBeInTheDocument();
-    expect(sent.map((s) => s.file.name).sort()).toEqual(["huge.txt", "notes.md"]);
+    expect(sent.map((s) => s.file.name).sort()).toEqual(["huge.txt", "notes.md", "paper.pdf"]);
     expect(sent[0]?.url).toBe("/api/v1/knowledge-bases/kb1/documents");
     expect(await screen.findByRole("cell", { name: /notes\.md/ })).toBeInTheDocument();
   });

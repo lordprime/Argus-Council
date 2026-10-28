@@ -6,7 +6,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    false,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.elements import ColumnElement
@@ -26,8 +38,17 @@ class User(IdMixin, TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(16), default="member", server_default="member", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Optional TOTP second factor (argus/core/totp.py): the shared secret is encrypted with SecretBox
+    # and only counts once ``totp_enabled`` is set by a verified code; recovery codes are SHA-256.
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    totp_recovery: Mapped[list[Any]] = mapped_column(default=list)
 
     api_keys: Mapped[list[ApiKey]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def mfa_enabled(self) -> bool:
+        return bool(self.totp_enabled)
 
     @hybrid_property
     def is_admin(self) -> bool:
@@ -132,8 +153,11 @@ class Run(IdMixin, TimestampMixin, Base):
     """One autonomous council session working on a topic."""
 
     __tablename__ = "runs"
+    # Serves the run list and insights (owner, top-level, newest first, id as tie-breaker) and any
+    # owner_id lookup, so owner_id needs no index of its own.
+    __table_args__ = (Index("ix_runs_owner_parent_created", "owner_id", "parent_run_id", "created_at", "id"),)
 
-    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"))
     council_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -159,13 +183,15 @@ class RunEvent(Base):
     """Append-only, durable event log for a run (ephemeral deltas are not stored)."""
 
     __tablename__ = "run_events"
+    # The unique (run_id, seq) index serves every lookup by run; no separate run_id or type index
+    # (the hottest table, so each extra index is write cost on every durable event).
     __table_args__ = (UniqueConstraint("run_id", "seq"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="CASCADE"))
     seq: Mapped[int] = mapped_column(Integer)
     event_id: Mapped[str] = mapped_column(String(40))
-    type: Mapped[str] = mapped_column(String(40), index=True)
+    type: Mapped[str] = mapped_column(String(40))
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
@@ -336,6 +362,27 @@ class WebhookDelivery(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class WebhookOutbox(Base):
+    """A webhook delivery not yet final: waiting for its first attempt, a retry, or a lease to expire.
+
+    Rows survive restarts and are removed once the delivery succeeds or gives up (the attempts are
+    logged in ``webhook_deliveries``). ``attempts`` doubles as an optimistic lock when claiming.
+    """
+
+    __tablename__ = "webhook_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), index=True
+    )
+    event: Mapped[str] = mapped_column(String(60))
+    delivery_id: Mapped[str] = mapped_column(String(40))
+    body: Mapped[str] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RunTemplate(IdMixin, TimestampMixin, Base):
     """A saved run configuration whose topic/description may contain ``{{variables}}``."""
 
@@ -434,3 +481,36 @@ class MemoryItem(IdMixin, TimestampMixin, Base):
         Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )
     created_by: Mapped[str] = mapped_column(String(120), default="")
+
+
+class CliCredential(IdMixin, TimestampMixin, Base):
+    """A user's API key for one vendor CLI (claude, codex, gemini), encrypted at rest.
+
+    Injected only into that user's own CLI processes in the agent runner; never returned by the
+    API and never included in account exports.
+    """
+
+    __tablename__ = "cli_credentials"
+    __table_args__ = (UniqueConstraint("owner_id", "cli"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cli: Mapped[str] = mapped_column(String(16))
+    api_key_enc: Mapped[str] = mapped_column(Text)
+    key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class CliSession(IdMixin, TimestampMixin, Base):
+    """A vendor CLI session a user's council seat ran in (resumable by that user only)."""
+
+    __tablename__ = "cli_sessions"
+    __table_args__ = (UniqueConstraint("owner_id", "cli", "session_id"),)
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cli: Mapped[str] = mapped_column(String(16))
+    session_id: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    member_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

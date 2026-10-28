@@ -154,6 +154,13 @@ class Shell(Tool):
     def __init__(self, sandbox: Sandbox) -> None:
         self.sandbox = sandbox
 
+    def timeout_for(self, args: BaseModel | None) -> float | None:
+        # The command's own limit plus room to sync the workspace before and after.
+        limit = (
+            args.timeout_s if isinstance(args, Shell.Args) else self.Args.model_fields["timeout_s"].default
+        )
+        return float(limit) + 60
+
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         files = await ctx.run.workspace.text_files()
         try:

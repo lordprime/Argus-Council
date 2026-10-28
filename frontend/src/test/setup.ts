@@ -11,3 +11,6 @@ window.matchMedia ??= ((query: string) => ({
 })) as typeof window.matchMedia;
 Element.prototype.scrollIntoView ??= function () {};
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+// axe-core probes icon-font ligatures through a 2D canvas, which jsdom does not implement; without
+// this it logs a "Not implemented: HTMLCanvasElement.prototype.getContext" error for every check.
+HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;

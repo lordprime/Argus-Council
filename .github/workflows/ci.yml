@@ -34,8 +34,10 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.11.32"
           enable-cache: true
@@ -66,8 +68,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -79,14 +83,29 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -x --severity=warning scripts/*.sh scripts/tests/*.sh scripts/tests/stubs/*
+      - name: Deploy script tests (stub docker)
+        run: ./scripts/tests/run.sh
+
   docker:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend, frontend, scripts]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: backend
           load: true
@@ -94,13 +113,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build web image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: frontend
           load: true
           tags: argus-council/web:ci
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+      - name: Build agent runner image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: backend
+          file: backend/docker/runner.Dockerfile
+          load: true
+          tags: argus-council/runner:ci
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,mode=max,scope=runner
+      - name: Agent runner smoke test (CLI versions, non-root, deny-all Gemini policy)
+        run: |
+          for cli in claude codex gemini; do
+            docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp --cap-drop ALL --security-opt no-new-privileges:true \
+              --network none argus-council/runner:ci "$cli" --version
+          done
+          test "$(docker run --rm argus-council/runner:ci id -u)" = 10002
+          docker run --rm argus-council/runner:ci python -c "import os,stat; p='/etc/gemini-cli/policies/argus-deny-all.toml'; s=os.stat(p); assert s.st_uid == 0 and not s.st_mode & stat.S_IWOTH; print(open(p).read())"
       - name: Compose smoke test
         run: |
           cat > deploy/.env <<ENV
@@ -109,6 +145,8 @@ jobs:
           REDIS_PASSWORD=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")
           ARGUS_SANDBOX_TOKEN=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")
           ARGUS_VERSION=ci
+          # The smoke, UI and backup tests register several accounts.
+          ARGUS_ALLOW_REGISTRATION=true
           ENV
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --wait --wait-timeout 180
           ./scripts/smoke.sh http://127.0.0.1:8000
@@ -116,14 +154,41 @@ jobs:
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T api python - <<'PY'
           import asyncio, os
           from argus.sandbox.client import RemoteSandbox
-          sb = RemoteSandbox("http://sandbox:8100", os.environ["ARGUS_SANDBOX_TOKEN"])
+          sb = RemoteSandbox(os.environ["ARGUS_SANDBOX_URL"], os.environ["ARGUS_SANDBOX_TOKEN"])
           res = asyncio.run(sb.run({"t.py": "print(6*7)"}, "python3 t.py", 30))
           assert res["exit_code"] == 0 and res["stdout"].strip() == "42", res
           net = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\"", 30))
           assert net["exit_code"] != 0, "sandbox must not reach the internet"
+          api = asyncio.run(sb.run({}, "python3 -c \"import urllib.request; urllib.request.urlopen('http://api:8000/health/live', timeout=5)\"", 30))
+          assert api["exit_code"] != 0, "sandbox must not reach the API"
+          # Per-execution isolation: concurrent runs cannot read each other's workspace, nothing a
+          # run starts outlives it, and nothing it leaves in /tmp reaches the next run.
+          secret = "secret-" + os.urandom(8).hex()
+          snoop = "sleep 3; ls -la /work; cat /work/*/secret.txt; grep -rs secret- /work /tmp /dev/shm; true"
+          async def pair():
+              return await asyncio.gather(
+                  sb.run({"secret.txt": secret}, "sleep 8; cat secret.txt", 60), sb.run({}, snoop, 60)
+              )
+          owner, other = asyncio.run(pair())
+          assert owner["exit_code"] == 0 and secret in owner["stdout"], owner
+          assert secret not in other["stdout"] + other["stderr"], other
+          left = asyncio.run(sb.run({}, f"echo {secret} > /tmp/left.txt; setsid sleep 300 >/dev/null 2>&1 &", 30))
+          assert left["exit_code"] == 0, left
+          probe = (
+              "import os\n"
+              "for p in os.listdir('/proc'):\n"
+              "    try:\n"
+              "        print(open('/proc/' + p + '/cmdline').read().replace(chr(0), ' '))\n"
+              "    except (OSError, ValueError):\n"
+              "        pass\n"
+          )
+          after = asyncio.run(sb.run({"probe.py": probe}, "cat /tmp/left.txt; python3 probe.py", 30))
+          assert "probe.py" in after["stdout"], after  # the process listing itself worked
+          assert secret not in after["stdout"], after
+          assert "sleep 300" not in after["stdout"], after
           print("sandbox: OK")
           PY
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: UI end-to-end (production build, strict CSP)
@@ -132,6 +197,9 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
           E2E_BASE=http://127.0.0.1:8080 node e2e/ui-smoke.cjs
+      - name: Backup, update, rollback and restore end-to-end (scripts)
+        timeout-minutes: 15
+        run: ./scripts/tests/e2e.sh
       - name: Logs on failure
         if: failure()
         run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color
@@ -149,4 +217,4 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src:ro" aquasec/trivy:0.57.0 \
             fs --scanners secret --exit-code 1 --no-progress --skip-dirs /src/.git --skip-dirs /src/frontend/node_modules \
-            --skip-files /src/deploy/.env /src
+            --skip-dirs /src/backups --skip-files /src/deploy/.env /src

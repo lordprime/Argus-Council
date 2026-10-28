@@ -16,11 +16,18 @@ dist/
 .DS_Store
 /data/
 
-# Runtime data (artifact blobs) written by local runs and tests
-data/
+# Runtime data (artifact blobs) written by local runs and tests. Anchored so source folders
+# named data/ (frontend/src/features/data) are not ignored.
+/backend/data/
 
 # Deployment state written by scripts/
 deploy/.version
 deploy/.previous-version
 deploy/.built-version
 backups/
+deploy/.rollback-state
+deploy/.rollback-state.*
+deploy/.lock/
+
+# MkDocs build output (mkdocs build)
+/site/

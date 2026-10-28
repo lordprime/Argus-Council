@@ -82,7 +82,7 @@ export function uploadDocument(kbId: string, file: File, onProgress?: (pct: numb
           /* non-JSON */
         }
         if (xhr.status === 401 && !retried) {
-          void refreshOnce().then((ok) => (ok ? send(true).then(resolve, reject) : reject(new ApiError(401, "unauthorized", "Session expired"))));
+          void refreshOnce().then((ok) => (ok ? send(true).then(resolve, reject) : reject(new ApiError(401, "unauthorized", "Session expired"))), reject);
           return;
         }
         if (xhr.status >= 200 && xhr.status < 300) {

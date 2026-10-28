@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Stub `sleep` for scripts/tests/run.sh: health and retry loops run without waiting.
+exit 0

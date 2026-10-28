@@ -1,0 +1,8 @@
+# Gemini CLI admin policy for the Argus agent runner (installed root-owned in
+# /etc/gemini-cli/policies, the Admin tier, which user settings cannot override).
+# Council agents get their tools from Argus (guardrails, approvals, ledger), never from the CLI:
+# deny every built-in and MCP tool. Global deny rules also hide the tools from the model.
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 999

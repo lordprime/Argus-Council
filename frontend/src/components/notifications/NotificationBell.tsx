@@ -7,7 +7,7 @@ import { AlertTriangle, Bell, CheckCheck, CheckCircle2, ShieldAlert, XCircle } f
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
-import { Badge, Button, EmptyState, ErrorState, Skeleton } from "@/components/ui";
+import { Badge, Button, EmptyState, ErrorState, Skeleton, touchSquare } from "@/components/ui";
 import {
   notificationKeys,
   useMarkAllRead,
@@ -112,7 +112,7 @@ export function NotificationBell() {
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger asChild>
           <button type="button" aria-label={label} title={label}
-            className="relative size-8 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-surface-2 hover:text-fg">
+            className={cn("relative size-8 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-surface-2 hover:text-fg", touchSquare)}>
             <Bell className="size-4" aria-hidden />
             {unread > 0 && (
               <span aria-hidden data-testid="notification-badge"

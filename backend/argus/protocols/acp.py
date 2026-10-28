@@ -21,7 +21,7 @@ from argus.api.schemas import RunIn
 from argus.core.errors import ArgusError, NotFound
 from argus.db.models import Council, Run
 from argus.services import ledger
-from argus.services.runs import create_and_start_run, wait_terminal
+from argus.services.runs import create_and_start_run, wait_for_run
 
 router = APIRouter(prefix="/acp", tags=["acp"])
 
@@ -147,7 +147,8 @@ async def create_run(data: RunCreate, principal: CurrentPrincipal, db: DbDep, re
         RunIn(topic=topic[:500], description=(rest or text)[:20_000], mode=mode, council_id=council_id),
     )
     if data.mode == "sync":
-        run = await wait_terminal(request.app.state.db.sessionmaker, run.id, 600)
+        state = request.app.state
+        run = await wait_for_run(state, run, state.settings.protocol_max_wait_s, protocol="acp")
     view = run_view(run, data.agent_name)
     view["session_id"] = data.session_id
     await ledger.record(

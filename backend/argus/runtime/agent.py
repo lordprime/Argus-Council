@@ -16,28 +16,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from argus.agents.roles import ROLES
+from argus.core.errors import NotFound
 from argus.core.logging import get_logger
-from argus.core.metrics import (
-    LLM_CALLS,
-    LLM_COST,
-    LLM_LATENCY,
-    LLM_TOKENS,
-    TOOL_CALLS,
-    TOOL_LATENCY,
-    safe_label,
-)
+from argus.core.metrics import TOOL_CALLS, TOOL_LATENCY, tool_label
 from argus.providers.base import ProviderError
 from argus.providers.types import CompletionRequest, CompletionResponse, Message, ToolCall
 from argus.runtime.context import Correction, RunContext
 from argus.runtime.events import Actor
 from argus.runtime.guardrails import GuardrailBreach
+from argus.runtime.history import compact_history
 from argus.runtime.oversight import Thought, ThoughtBus
 from argus.services.llm import Route
 from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
 
 log = get_logger(__name__)
 
-TOOL_TIMEOUT_S = 300
 PREVIEW_CHARS = 2000
 
 
@@ -54,6 +47,8 @@ class MemberSpec:
     fallbacks: list[Route] = field(default_factory=list)
     effort: str | None = None
     temperature: float | None = None
+    # CLI agents: resume this existing vendor session (validated against the run owner's sessions).
+    cli_session: str | None = None
 
     @property
     def actor(self) -> Actor:
@@ -85,6 +80,7 @@ class MemberSpec:
             ],
             effort=cfg.get("effort"),
             temperature=m.get("temperature"),
+            cli_session=str(cfg["cli_session"]) if cfg.get("cli_session") else None,
         )
 
 
@@ -182,15 +178,24 @@ class AgentRunner:
                 "topic": self.ctx.topic,
                 "mode": self.ctx.mode,
                 "cache": False,
+                # CLI agents key their vendor session on (run, seat).
+                "run_id": str(self.ctx.run_id),
+                "member_id": self.member.id,
+                **({"cli_session": self.member.cli_session} if self.member.cli_session else {}),
             },
         )
         t0 = time.monotonic()
         response: CompletionResponse | None = None
+        original = Route(self.member.provider, self.member.model)
+        primary = original
+        fallbacks = list(self.member.fallbacks)
+        streamed = False
+        failure: Exception | None = None
         try:
-            async for ev in self.ctx.llm.stream(
-                req, Route(self.member.provider, self.member.model), owner_id=self.ctx.owner_id
-            ):
+            # The router retries retryable errors that happen before any output was produced.
+            async for ev in self.ctx.llm.stream(req, primary, owner_id=self.ctx.owner_id):
                 if ev.type == "text" and ev.text:
+                    streamed = True
                     await self.ctx.sink.emit(
                         "thought.delta",
                         {"thought_id": thought_id, "text": ev.text},
@@ -199,24 +204,52 @@ class AgentRunner:
                     )
                 elif ev.type == "done":
                     response = ev.response
-        except ProviderError as exc:
-            if not self.member.fallbacks:
+        except (ProviderError, NotFound) as exc:
+            # The stream failed after output reached the user (re-streaming would duplicate it),
+            # its retries are used up, or the provider no longer exists. A non-streamed
+            # completion is safe either way: thought.completed carries the full text and replaces
+            # any partial deltas, and complete() retries with backoff and walks the fallbacks.
+            # A non-retryable error with no fallback would only fail again.
+            # CLI agents (CLIError) also say whether the failure (quota, rate limit, sign-in,
+            # unavailable) should move the seat along its fallback chain; their other failures
+            # (bad session, invalid request) fail the turn. They are never retried in place.
+            retryable = isinstance(exc, ProviderError) and exc.retryable
+            cli_fallback = getattr(exc, "fallback", None)
+            if cli_fallback is False or (not fallbacks and not retryable):
                 raise
-            log.warning("agent.stream_failed_falling_back", member=self.member.name, error=str(exc)[:200])
+            failure = exc
+            log.warning(
+                "agent.stream_failed_completing",
+                member=self.member.name,
+                error=str(exc)[:200],
+                partial=streamed,
+            )
+            if cli_fallback and fallbacks:
+                # Do not re-run a CLI that just hit its limit: go straight to the next route.
+                primary, fallbacks = fallbacks[0], fallbacks[1:]
         if response is None:
             response = await self.ctx.llm.complete(
                 req,
-                Route(self.member.provider, self.member.model),
+                primary,
                 owner_id=self.ctx.owner_id,
-                fallbacks=self.member.fallbacks,
+                fallbacks=fallbacks,
             )
-        self.ctx.ledger.record(response)
-        prov, mdl = safe_label(response.provider), safe_label(response.model)
-        LLM_CALLS.labels(prov, mdl, response.finish_reason).inc()
-        LLM_TOKENS.labels(prov, mdl, "in").inc(response.usage.input_tokens)
-        LLM_TOKENS.labels(prov, mdl, "out").inc(response.usage.output_tokens)
-        LLM_COST.labels(prov, mdl).inc(response.usage.cost_usd)
-        LLM_LATENCY.labels(prov).observe(time.monotonic() - t0)
+            if failure is not None and response.provider != original.provider:
+                # The seat moved to another route of its fallback chain: record it on the run.
+                await self.ctx.sink.emit(
+                    "provider.fallback",
+                    {
+                        "member_id": self.member.id,
+                        "from": {"provider": original.provider, "model": original.model},
+                        "to": {"provider": response.provider, "model": response.model},
+                        "reason": getattr(failure, "category", None)
+                        or (f"http_{failure.status}" if getattr(failure, "status", None) else "error"),
+                        "detail": str(failure)[:300],
+                    },
+                    actor=actor,
+                    step_id=step_id,
+                )
+        self.ctx.ledger.record(response)  # argus_llm_* metrics are recorded by the router
         self.ctx.engine.record_usage(response.usage)
         self.ctx.engine.record_step()
         spent = self.ctx.by_member[self.member.id]
@@ -237,6 +270,16 @@ class AgentRunner:
                 "model": response.model,
                 "provider": response.provider,
                 "tool_calls": [{"id": c.id, "name": c.name} for c in response.tool_calls],
+                # CLI agents: subscription turns cost no API dollars; the estimate is kept apart.
+                **(
+                    {
+                        "billing": response.billing,
+                        "estimated_cost_usd": response.estimated_cost_usd,
+                        "cli_session_id": response.session_id,
+                    }
+                    if response.billing != "api"
+                    else {}
+                ),
             },
             actor=actor,
             step_id=step_id,
@@ -267,7 +310,7 @@ class AgentRunner:
         )
 
         async def finish(status: str, result: ToolResult, t0: float) -> ToolResult:
-            TOOL_CALLS.labels(safe_label(call.name, 64), source, status).inc()
+            TOOL_CALLS.labels(tool_label(tool), source, status).inc()
             TOOL_LATENCY.labels(source).observe(time.monotonic() - t0)
             preview, _ = engine.screen_tool_output(result.content[:PREVIEW_CHARS])
             await self.ctx.sink.emit(
@@ -325,8 +368,12 @@ class AgentRunner:
         await self.ctx.sink.emit(
             "member.status", {"member_id": self.member.id, "status": "tool", "detail": call.name}, actor=actor
         )
+        timeout = tool.timeout_for(tool.parse(args) if args is not call.arguments else parsed)
         try:
-            result = await asyncio.wait_for(tool.invoke(args, tctx), timeout=TOOL_TIMEOUT_S)
+            if timeout is None:
+                result = await tool.invoke(args, tctx)
+            else:
+                result = await asyncio.wait_for(tool.invoke(args, tctx), timeout=timeout)
         except TimeoutError:
             return await finish("timeout", ToolResult.error(f"{call.name} timed out"), t0)
         except GuardrailBreach as exc:
@@ -389,6 +436,7 @@ class AgentRunner:
                     {"correction_id": c.id, "outcome": "applied"},
                     actor=self.member.actor,
                 )
+            compact_history(messages)  # bound what each turn re-sends (see runtime/history.py)
             thought_id, event_id, resp = await self._think(messages, step_id, phase)
             last_text = resp.content or last_text
             thought = Thought(

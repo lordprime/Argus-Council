@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { McpServer, RemoteAgent } from "@/features/connections/queries";
+import { entryPurpose, type McpServer, type RemoteAgent } from "@/features/connections/queries";
 import type { LedgerEntry, User } from "@/lib/types";
 import Ledger from "@/routes/connections/Ledger";
 import McpServers from "@/routes/connections/McpServers";
@@ -200,17 +200,18 @@ const entry = (seq: number, over: Partial<LedgerEntry> = {}): LedgerEntry => ({
 });
 
 describe("Ledger purpose", () => {
-  it("shows method and purpose chips, filters by purpose and by run", async () => {
+  it("shows method and purpose chips, filters by purpose on the server and by run", async () => {
+    const all = [
+      entry(4, { protocol: "a2a", method: "agent-card", detail: { agent: "research", purpose: "refresh" } }),
+      entry(3, { method: "tools/list", detail: { server: "github", purpose: "discover" } }),
+      entry(2, { method: "initialize", detail: { server: "github", purpose: "discover" } }),
+      entry(1, { method: "tools/call", run_id: RUN }),
+    ];
     const fetchMock = mockFetch((url) => {
       if (url.startsWith("/api/v1/ledger")) {
-        return json({
-          entries: [
-            entry(4, { protocol: "a2a", method: "agent-card", detail: { agent: "research", purpose: "refresh" } }),
-            entry(3, { method: "tools/list", detail: { server: "github", purpose: "discover" } }),
-            entry(2, { method: "initialize", detail: { server: "github", purpose: "discover" } }),
-            entry(1, { method: "tools/call", run_id: RUN }),
-          ],
-        });
+        // The server applies the purpose filter before the page limit.
+        const purpose = new URL(url, "http://test").searchParams.get("purpose");
+        return json({ entries: purpose ? all.filter((e) => entryPurpose(e) === purpose) : all, next_before_seq: null });
       }
       return undefined;
     });
@@ -225,15 +226,17 @@ describe("Ledger purpose", () => {
 
     const purpose = screen.getByRole("radiogroup", { name: "Purpose" });
     await userEvent.click(within(purpose).getByRole("radio", { name: "Discover" }));
-    expect(within(table).getAllByRole("row")).toHaveLength(3);
-    expect(within(table).getByText("initialize")).toBeInTheDocument();
-    expect(within(table).queryByText("agent-card")).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/ledger?limit=100&purpose=discover", expect.anything()));
+    await waitFor(() => expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(3));
+    expect(within(screen.getByRole("table")).getByText("initialize")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).queryByText("agent-card")).not.toBeInTheDocument();
 
     await userEvent.click(within(purpose).getByRole("radio", { name: "Run" }));
-    expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(2);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/ledger?limit=100&purpose=run", expect.anything()));
+    await waitFor(() => expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(2));
 
     await userEvent.selectOptions(screen.getByLabelText("Run"), RUN);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/ledger?limit=100&run_id=${RUN}`, expect.anything()));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/ledger?limit=100&run_id=${RUN}&purpose=run`, expect.anything()));
     expect(screen.getByText(/Showing calls for run/)).toBeInTheDocument();
   });
 });

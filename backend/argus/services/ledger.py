@@ -10,12 +10,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from collections import defaultdict
+import weakref
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import orjson
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -24,8 +24,30 @@ from argus.db.models import LedgerEntry
 
 GENESIS = "0" * 64
 # Serialises appends per owner within a process; the (owner_id, seq) unique constraint plus a
-# retry covers concurrent writers in other processes.
-_locks: dict[tuple[int, uuid.UUID], asyncio.Lock] = defaultdict(asyncio.Lock)
+# retry covers concurrent writers in other processes. Weak values: a lock lives only while some
+# append holds or waits on it, so the map does not grow with every owner and event loop.
+_locks: weakref.WeakValueDictionary[tuple[int, uuid.UUID], asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def _lock_for(key: tuple[int, uuid.UUID]) -> asyncio.Lock:
+    lock = _locks.get(key)
+    if lock is None:
+        lock = _locks[key] = asyncio.Lock()
+    return lock
+
+
+Purpose = Literal["run", "discover", "refresh"]
+_TAGGED: tuple[str, ...] = ("run", "discover", "refresh")
+
+
+def purpose_is(purpose: Purpose) -> ColumnElement[bool]:
+    """SQL condition for an entry's purpose: ``detail.purpose`` when it is one of the known values,
+    otherwise "run" for entries tied to a run. Mirrors ``entryPurpose`` in the frontend."""
+    tag = LedgerEntry.detail["purpose"].as_string()
+    if purpose != "run":
+        return tag == purpose
+    untagged = func.coalesce(tag, "").not_in(_TAGGED)
+    return or_(tag == "run", and_(untagged, LedgerEntry.run_id.is_not(None)))
 
 
 def digest(obj: Any) -> str:
@@ -76,7 +98,7 @@ async def record(
     detail: dict[str, Any] | None = None,
 ) -> LedgerEntry:
     PROTOCOL_CALLS.labels(protocol, direction, "ok" if status in ("ok", "completed") else "error").inc()
-    lock = _locks[(id(asyncio.get_running_loop()), owner_id)]
+    lock = _lock_for((id(asyncio.get_running_loop()), owner_id))
     for attempt in range(3):
         try:
             async with lock:

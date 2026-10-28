@@ -34,7 +34,7 @@ from argus.protocols.jsonrpc import (
     validate_request,
 )
 from argus.services import ledger
-from argus.services.runs import create_and_start_run, wait_terminal
+from argus.services.runs import create_and_start_run, wait_for_run, wait_seconds
 from argus.skills.library import skills_for_owner
 
 router = APIRouter(tags=["mcp"])
@@ -165,14 +165,14 @@ async def _call_tool(request: Request, db, principal: Principal, name: str, args
     state = request.app.state
     if name == "start_run":
         principal.require_scope("runs:write")
-        wait = int(args.pop("wait_seconds", 0) or 0)
+        wait = min(wait_seconds(args.pop("wait_seconds", 0) or 0, 0.0), MAX_WAIT_S)
         try:
             data = RunIn.model_validate(args)
         except ValidationError as exc:
             return _text(f"Invalid arguments: {exc.errors(include_url=False)[:3]}", True)
         run = await create_and_start_run(db, state.runs, principal.id, data)
-        if wait:
-            run = await wait_terminal(state.db.sessionmaker, run.id, min(wait, MAX_WAIT_S))
+        if wait > 0:
+            run = await wait_for_run(state, run, wait, protocol="mcp")
         return _text(_run_view(run))
     if name == "get_run":
         run = await _own_run(db, principal, args.get("run_id"))
@@ -317,7 +317,7 @@ async def mcp_endpoint(request: Request) -> Response:
         )
     async with state.db.sessionmaker() as db:
         try:
-            principal = await resolve_principal(db, state.settings, token)
+            principal = await resolve_principal(db, state.settings, token, state.cache)
         except ArgusError:
             return JSONResponse(
                 err(None, -32001, "Invalid credentials"),

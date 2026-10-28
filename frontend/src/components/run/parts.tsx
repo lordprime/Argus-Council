@@ -1,9 +1,12 @@
+import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
+  AtSign,
   Bot,
   Check,
   ChevronDown,
   ChevronRight,
+  CircleStop,
   Eye,
   FileText,
   Globe,
@@ -13,6 +16,7 @@ import {
   Pause,
   Play,
   Plug,
+  Plus,
   Send,
   ShieldX,
   Sparkles,
@@ -21,14 +25,16 @@ import {
   X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 
-import { Badge, Button, IconButton } from "@/components/ui";
+import { Badge, Button, IconButton, touchTarget } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { api, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, compact, usd } from "@/lib/format";
-import type { Member } from "@/lib/types";
+import type { Member, Mode } from "@/lib/types";
+import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type {
   ApprovalItem,
   Budget,
@@ -45,18 +51,26 @@ import { useRuns } from "@/stores/run";
 import { toast } from "@/stores/toast";
 
 // ------------------------------------------------------------------ budget meter
-function Meter({ label, used, cap, fmt }: { label: string; used: number; cap: number | null; fmt: (n: number) => string }) {
+/**
+ * One budget microbar (spec §7.6): a visible label ("Budget", "Tokens", "Steps"), a 4px bar with
+ * role="meter", and `used / cap`. Past 70% and 90% the bar turns warning and danger and an icon is
+ * added, so the threshold is never carried by colour alone.
+ */
+function Meter({ label, noun, used, cap, fmt }: { label: string; noun: string; used: number; cap: number | null; fmt: (n: number) => string }) {
   const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
   const tone = pct >= 90 ? "bg-danger" : pct >= 70 ? "bg-warning" : "bg-accent";
   return (
     <div className="flex items-center gap-2 text-xs tabular">
-      <span className="w-12 text-fg-subtle">{label}</span>
-      <div role="meter" aria-label={`${label} budget`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
-        aria-valuetext={cap ? `${pct} percent of ${label} budget` : `${fmt(used)} used, no cap`}
-        className="h-1 w-24 rounded-full bg-surface-3 overflow-hidden">
+      <span className="w-12 shrink-0 text-xs text-fg-subtle">{label}</span>
+      <div role="meter" aria-label={`${noun[0]!.toUpperCase()}${noun.slice(1)} budget`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+        aria-valuetext={cap ? `${pct} percent of ${noun} budget, ${fmt(used)} of ${fmt(cap)}` : `${fmt(used)} used, no ${noun} cap`}
+        className="h-1 w-20 sm:w-[7.5rem] shrink-0 rounded-full bg-surface-3 overflow-hidden">
         <div className={cn("h-full", tone)} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-fg-muted whitespace-nowrap">{fmt(used)}{cap ? ` / ${fmt(cap)}` : ""}{pct >= 70 ? (pct >= 90 ? " ⚠" : " !") : ""}</span>
+      <span className={cn("inline-flex items-center gap-1 whitespace-nowrap", pct >= 90 ? "text-danger" : pct >= 70 ? "text-warning" : "text-fg-muted")}>
+        {fmt(used)}{cap ? ` / ${fmt(cap)}` : ""}
+        {pct >= 70 && <AlertTriangle className="size-3" aria-hidden />}
+      </span>
     </div>
   );
 }
@@ -65,10 +79,10 @@ export function BudgetMeter({ budget }: { budget: Budget | null }) {
   if (!budget) return null;
   const tokens = budget.used.tokens_in + budget.used.tokens_out;
   return (
-    <div className="flex flex-col gap-0.5" aria-label="Budget">
-      <Meter label="$" used={budget.used.usd} cap={budget.limits.usd} fmt={(n) => usd(n)} />
-      <Meter label="tokens" used={tokens} cap={budget.limits.tokens} fmt={compact} />
-      <Meter label="steps" used={budget.used.steps} cap={budget.limits.steps} fmt={(n) => String(n)} />
+    <div role="group" aria-label="Budget usage" className="flex flex-col gap-0.5">
+      <Meter label="Budget" noun="dollar" used={budget.used.usd} cap={budget.limits.usd} fmt={(n) => usd(n)} />
+      <Meter label="Tokens" noun="token" used={tokens} cap={budget.limits.tokens} fmt={compact} />
+      <Meter label="Steps" noun="step" used={budget.used.steps} cap={budget.limits.steps} fmt={(n) => String(n)} />
     </div>
   );
 }
@@ -247,6 +261,22 @@ function CorrectionComposer({ runId, thought, onDone }: { runId: string; thought
   );
 }
 
+/**
+ * A ballot an agent wrote as its message: `{"option": "approve", "rationale": "…"}`, optionally in a
+ * ```json fence. Returns null for anything else, so ordinary messages render as Markdown (audit C-26).
+ */
+export function parseVoteText(text: string): { option: string; rationale?: string } | null {
+  const body = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  if (!body.startsWith("{") || !body.endsWith("}")) return null;
+  try {
+    const v = JSON.parse(body) as { option?: unknown; rationale?: unknown };
+    if (!v || typeof v !== "object" || typeof v.option !== "string" || !v.option.trim()) return null;
+    return { option: v.option, rationale: typeof v.rationale === "string" && v.rationale.trim() ? v.rationale.trim() : undefined };
+  } catch {
+    return null;
+  }
+}
+
 export function ThoughtCard({ runId, t, live, selected, onSelect }: {
   runId: string; t: ThoughtItem; live: boolean; selected: boolean; onSelect: () => void;
 }) {
@@ -262,13 +292,14 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
       toast({ tone: "danger", title: "Could not intercept", body: errorMessage(err) });
     }
   };
-  const long = t.text.length > 400 || t.text.split("\n").length > 4;
+  const vote = t.streaming ? null : parseVoteText(t.text);
+  const long = !vote && (t.text.length > 400 || t.text.split("\n").length > 4);
   return (
     <div className={cn("rounded-lg border bg-surface border-l-[3px] p-3", selected ? "outline outline-2 outline-accent" : "",
       held ? "border-warning" : "border-border", s.border)}>
       <div className="flex items-center gap-2">
         <RoleAvatar role={t.actor.role} overseer={t.actor.overseer} />
-        <button className="text-sm font-semibold hover:underline" onClick={onSelect}>{t.actor.name}</button>
+        <button type="button" className="min-h-6 text-sm font-semibold hover:underline" onClick={onSelect}>{t.actor.name}</button>
         <span className="text-xs text-fg-subtle tabular">{clock(t.ts)}</span>
         {held && <Badge tone="warning">held</Badge>}
         {!t.streaming && t.tokensOut != null && (
@@ -276,7 +307,12 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
         )}
       </div>
       <div className={cn("mt-2 text-base", !expanded && long && "line-clamp-4", t.streaming && "caret")}>
-        {t.text ? <Markdown className="text-base">{t.text}</Markdown> : t.streaming ? <span className="text-fg-subtle">thinking</span> : (
+        {vote ? (
+          <p className="flex items-start gap-1.5">
+            <Vote className="size-4 mt-1 shrink-0 text-fg-subtle" aria-hidden />
+            <span>Voted <strong className="font-semibold">{vote.option}</strong>{vote.rationale && <span className="text-fg-muted"> · {vote.rationale}</span>}</span>
+          </p>
+        ) : t.text ? <Markdown className="text-base">{t.text}</Markdown> : t.streaming ? <span className="text-fg-subtle">thinking</span> : (
           <span className="text-fg-subtle italic">(used tools)</span>
         )}
       </div>
@@ -354,7 +390,7 @@ export function ApprovalCard({ runId, a }: { runId: string; a: ApprovalItem }) {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor={`reason-${a.id}`}>Reason (optional)</label>
           <input id={`reason-${a.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)"
-            className="h-9 flex-1 min-w-40 rounded-md border border-border-strong bg-surface px-2 text-sm" />
+            className={cn("h-9 flex-1 min-w-40 rounded-md border border-border-strong bg-surface px-2 text-sm", touchTarget)} />
           <Button variant="primary" icon={Check} loading={busy === "approve"} onClick={() => void decide("approve")}>Approve</Button>
           <Button variant="danger" icon={X} loading={busy === "reject"} onClick={() => void decide("reject")}>Reject</Button>
         </div>
@@ -385,7 +421,7 @@ export function VoteCard({ v, members }: { v: VoteItem; members: Member[] }) {
           <ul className="mt-1 flex flex-col gap-1">
             {v.casts.map((c) => (
               <li key={c.memberId} className="flex gap-2"><RoleAvatar role={c.actor.role} size={18} label={memberName(members, c.memberId)} />
-                <span><strong>{c.actor.name}</strong> · {c.option}: {c.rationale}</span></li>
+                <span><strong>{c.actor.name}</strong> · {v.options.find((o) => o.id === c.option)?.label ?? c.option}{c.rationale ? `: ${c.rationale}` : ""}</span></li>
             ))}
           </ul>
         </details>
@@ -435,11 +471,45 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
 }
 
 // ------------------------------------------------------------------ intervention bar
-export function InterventionBar({ runId, members, disabled }: { runId: string; members: Member[]; disabled: boolean }) {
+const FINISHED: Record<string, string> = {
+  completed: "Run completed", failed: "Run failed", halted: "Run halted", cancelled: "Run stopped",
+};
+
+/** What a "Start a follow-up run" link hands the Home composer (routes/Home.tsx ComposerPrefill). */
+export interface FollowUp { topic: string; mode: Mode; description?: string }
+
+/**
+ * Bottom bar of the run workspace. Live: target and message type, the message, Send and Halt all; below
+ * `sm` it is a single row and the two selects move into a popover (audit C-04). Finished: a one-line
+ * "Run finished · Start a follow-up run" row instead of a bar of disabled controls (C-16).
+ */
+export function InterventionBar({ runId, members, disabled, status, followUp }: {
+  runId: string;
+  members: Member[];
+  disabled: boolean;
+  /** Terminal status, to word the finished row. */
+  status?: string;
+  followUp?: FollowUp;
+}) {
   const [target, setTarget] = useState("council");
   const [text, setText] = useState("");
   const [kind, setKind] = useState<"message" | "correct">("message");
   const [busy, setBusy] = useState(false);
+  const wide = useMediaQuery(BREAKPOINT.sm);
+  if (disabled) {
+    return (
+      <div className="border-t border-border bg-surface px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        <span className="inline-flex items-center gap-1.5 text-fg-muted">
+          <CircleStop className="size-4 shrink-0" aria-hidden />{FINISHED[status ?? ""] ?? "Run finished"}
+        </span>
+        <span aria-hidden className="text-fg-subtle">·</span>
+        <Link to="/" state={followUp ? { prefill: followUp } : undefined}
+          className={cn("inline-flex items-center gap-1 min-h-6 font-medium text-accent underline underline-offset-2", touchTarget)}>
+          <Plus className="size-4" aria-hidden />Start a follow-up run
+        </Link>
+      </div>
+    );
+  }
   const send = async () => {
     if (!text.trim()) return;
     setBusy(true);
@@ -464,27 +534,52 @@ export function InterventionBar({ runId, members, disabled }: { runId: string; m
       toast({ tone: "danger", title: "Could not halt", body: errorMessage(err) });
     }
   };
-  return (
-    <form aria-label="Intervene" onSubmit={(e) => { e.preventDefault(); void send(); }}
-      className="border-t border-border bg-surface p-2 flex flex-wrap items-center gap-2">
-      <label className="sr-only" htmlFor="iv-target">Send to</label>
-      <select id="iv-target" value={target} onChange={(e) => setTarget(e.target.value)} disabled={disabled}
-        className="h-9 rounded-md border border-border-strong bg-surface px-2 text-sm">
+  const targetName = target === "council" ? "Council" : members.find((m) => m.id === target)?.name ?? "agent";
+  const select = cn("h-9 rounded-md border border-border-strong bg-surface px-2 text-sm", touchTarget);
+  const selects = (
+    <>
+      <label className={wide ? "sr-only" : "text-sm font-medium"} htmlFor="iv-target">Send to</label>
+      <select id="iv-target" value={target} onChange={(e) => setTarget(e.target.value)} className={select}>
         <option value="council">Council</option>
         {members.map((m) => <option key={m.id} value={m.id}>@{m.name}</option>)}
       </select>
-      <label className="sr-only" htmlFor="iv-kind">Type</label>
-      <select id="iv-kind" value={kind} onChange={(e) => setKind(e.target.value as "message" | "correct")} disabled={disabled}
-        className="h-9 rounded-md border border-border-strong bg-surface px-2 text-sm">
+      <label className={wide ? "sr-only" : "text-sm font-medium mt-1"} htmlFor="iv-kind">Type</label>
+      <select id="iv-kind" value={kind} onChange={(e) => setKind(e.target.value as "message" | "correct")} className={select}>
         <option value="message">Message</option>
         <option value="correct">Standing order</option>
       </select>
+    </>
+  );
+  return (
+    <form aria-label="Intervene" onSubmit={(e) => { e.preventDefault(); void send(); }}
+      className="border-t border-border bg-surface p-2 flex items-center gap-2">
+      {wide ? selects : (
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            {/* Visible text (the target) starts the name, then what the button does. */}
+            <Button type="button" className="shrink-0 max-w-[8rem]"
+              aria-label={`${targetName}, ${kind === "message" ? "message" : "standing order"}: change recipient or type`}>
+              <AtSign className="size-4 shrink-0" aria-hidden />
+              <span className="truncate">{targetName}</span>
+              <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+            </Button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content side="top" align="start" sideOffset={6} aria-label="Message options"
+              className="z-popover w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-surface shadow-2 p-3 flex flex-col gap-1">
+              {selects}
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      )}
       <label className="sr-only" htmlFor="iv-text">Message</label>
-      <input id="iv-text" value={text} onChange={(e) => setText(e.target.value)} disabled={disabled}
-        placeholder={disabled ? "Run has finished" : "Message the council, or give a standing order…"}
-        className="h-9 flex-1 min-w-48 rounded-md border border-border-strong bg-surface px-3 text-sm" />
-      <Button type="submit" variant="primary" icon={Send} loading={busy} disabled={disabled || !text.trim()}>Send</Button>
-      <IconButton type="button" label="Halt all agents" icon={Hand} variant="danger-ghost" size="md" disabled={disabled} onClick={() => void haltAll()} />
+      <input id="iv-text" value={text} onChange={(e) => setText(e.target.value)} enterKeyHint="send"
+        placeholder={wide ? "Message the council, or give a standing order…" : `Message ${target === "council" ? "the council" : targetName}…`}
+        className={cn("h-9 flex-1 min-w-0 rounded-md border border-border-strong bg-surface px-3 text-sm", touchTarget)} />
+      <Button type="submit" variant="primary" icon={Send} loading={busy} disabled={!text.trim()} className="shrink-0">
+        <span className="sr-only sm:not-sr-only">Send</span>
+      </Button>
+      <IconButton type="button" label="Halt all agents" icon={Hand} variant="danger-ghost" size="md" className="shrink-0" onClick={() => void haltAll()} />
     </form>
   );
 }

@@ -1,13 +1,22 @@
-import { Compass } from "lucide-react";
-import { Link } from "react-router";
+import { ArrowLeft, Compass, Home } from "lucide-react";
+import { useNavigate } from "react-router";
 
-import { EmptyState } from "@/components/ui";
+import { Button, ButtonLink, Card, EmptyState, Page } from "@/components/ui";
 
+/** 404: the empty state's title is the page's single h1, inside the same Card frame as every other empty state (C-23). */
 export default function NotFound() {
+  const navigate = useNavigate();
   return (
-    <div className="p-6">
-      <h1 className="sr-only">Page not found</h1>
-      <EmptyState icon={Compass} title="Page not found" body="The page you are looking for does not exist." action={<Link to="/" className="text-accent underline">Go home</Link>} />
-    </div>
+    <Page>
+      <Card as="div">
+        <EmptyState icon={Compass} titleAs="h1" title="Page not found" body="The page you are looking for does not exist or has moved."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <ButtonLink to="/" variant="primary" icon={Home}>Go home</ButtonLink>
+              <Button icon={ArrowLeft} onClick={() => navigate(-1)}>Back</Button>
+            </div>
+          } />
+      </Card>
+    </Page>
   );
 }

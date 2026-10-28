@@ -39,13 +39,14 @@ async def idempotent(
         return JSONResponse(
             stored["response"], status_code=stored["status"], headers={"Idempotent-Replayed": "true"}
         )
-    if await cache.backend.incr_window(cache.key("idem-lock", scope), 120) > 1:
+    if await cache.incr_window(cache.key("idem-lock", scope), 120) > 1:
         raise Conflict("A request with this Idempotency-Key is still in progress")
     try:
         result = await run()
     finally:
-        await cache.delete(cache.key("idem-lock", scope))
-    await cache.set(
+        await cache.delete_best_effort(cache.key("idem-lock", scope))
+    # The work is done: failing to store the replay record must not turn success into an error.
+    await cache.set_best_effort(
         store_key,
         {
             "status": status_code,

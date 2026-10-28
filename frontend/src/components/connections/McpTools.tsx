@@ -1,4 +1,4 @@
-import { Badge, Callout, SwitchTrack } from "@/components/ui";
+import { Badge, Callout, switchHit, SwitchTrack } from "@/components/ui";
 import { Chips } from "@/components/connections/parts";
 import { effectiveToolRisk, toolAllowed, type ConnectionTestResult, type McpServer, type McpTrust } from "@/features/connections/queries";
 import { cn } from "@/lib/cn";
@@ -76,7 +76,7 @@ export function ToolTable({ server, tools, settings, onChange }: {
                   {onChange ? (
                     <button type="button" role="switch" aria-checked={ask} aria-label={`Always ask before ${t.name}`}
                       onClick={() => onChange({ require_approval: ask ? settings.require_approval.filter((x) => x !== t.name) : [...settings.require_approval, t.name] })}
-                      className="mt-0.5 inline-flex rounded-full">
+                      className={switchHit}>
                       <SwitchTrack checked={ask} />
                     </button>
                   ) : ask ? <Badge tone="warning">Yes</Badge> : <span className="text-fg-subtle">—</span>}

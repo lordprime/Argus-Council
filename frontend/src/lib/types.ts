@@ -10,11 +10,20 @@ export interface User {
   display_name: string;
   is_admin: boolean;
   created_at: string;
+  /** Two-factor authentication (TOTP) is on for this account. */
+  mfa_enabled?: boolean;
 }
 
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
+  expires_in: number;
+}
+
+/** POST /auth/login answer when the account has two-factor authentication on. */
+export interface MfaChallenge {
+  mfa_required: true;
+  mfa_token: string;
   expires_in: number;
 }
 
@@ -128,6 +137,47 @@ export interface ArtifactInfo {
   mime: string;
   created_by: string;
   updated_at: string;
+}
+
+/** One vendor CLI (claude, codex, gemini) run as an account-authenticated council agent. */
+export interface CliAgentInfo {
+  cli: "claude" | "codex" | "gemini";
+  /** Provider name to use on a seat: "claude-cli", "codex-cli", "gemini-cli". */
+  provider: string;
+  label: string;
+  enabled: boolean;
+  version: string | null;
+  installed: boolean | null;
+  /** null: unknown (runner unreachable or nothing to check). */
+  logged_in: boolean | null;
+  login_method: string | null;
+  login_verified: boolean;
+  status_detail: string;
+  has_api_key: boolean;
+  key_hint: string | null;
+  key_env: string;
+  login_command: string;
+  cli_login_command: string;
+  suggested_models: string[];
+}
+
+export interface CliAgentsOverview {
+  enabled: boolean;
+  allow_subscription: boolean;
+  runner_error: string | null;
+  notice: string;
+  clis: CliAgentInfo[];
+}
+
+export interface CliSessionInfo {
+  id: string;
+  cli: string;
+  session_id: string;
+  label: string;
+  run_id: string | null;
+  member_id: string | null;
+  created_at: string;
+  last_used_at: string;
 }
 
 export interface ProviderKind {
