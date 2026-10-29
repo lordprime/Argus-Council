@@ -139,9 +139,11 @@ class Violation:
     observed: Any
     action: Action
     message: str
+    # Where it was seen, e.g. the text around a flagged phrase (shown when the event is expanded).
+    excerpt: str = ""
 
     def as_event(self, target: dict[str, Any] | None = None) -> dict[str, Any]:
-        return {
+        event = {
             "rule": self.rule,
             "limit": self.limit,
             "observed": self.observed,
@@ -149,6 +151,9 @@ class Violation:
             "message": self.message,
             "target": target or {},
         }
+        if self.excerpt:
+            event["excerpt"] = self.excerpt
+        return event
 
 
 class GuardrailBreach(Exception):
@@ -194,7 +199,18 @@ def redact_secrets(text: str) -> tuple[str, bool]:
 
 
 def looks_like_injection(text: str) -> bool:
-    return any(p.search(text) for p in _INJECTION_PATTERNS)
+    return injection_match(text) is not None
+
+
+def injection_match(text: str) -> tuple[str, str] | None:
+    """The first instruction-like phrase in ``text`` and a short excerpt around it, or None."""
+    for p in _INJECTION_PATTERNS:
+        m = p.search(text)
+        if m:
+            start, end = max(0, m.start() - 80), min(len(text), m.end() + 80)
+            excerpt = " ".join(text[start:end].split())
+            return m.group(0), ("…" if start else "") + excerpt + ("…" if end < len(text) else "")
+    return None
 
 
 def dangerous_shell(command: str) -> bool:
@@ -417,21 +433,28 @@ class GuardrailEngine:
         return out
 
     def screen_tool_output(self, text: str) -> tuple[str, list[Violation]]:
-        """Tool output is untrusted data: redact secrets, flag injected instructions."""
+        """Tool output is untrusted data: redact secrets, flag injected instructions.
+
+        A flagged phrase is only reported (``warned``): the output still reaches the agent, wrapped
+        as untrusted data, because pages *about* prompt injection quote such phrases all the time.
+        """
         cleaned, redacted = redact_secrets(text)
         found: list[Violation] = []
         if redacted:
             found.append(
                 Violation("content.secret", "no secrets", "tool output", "truncated", "Secret redacted")
             )
-        if looks_like_injection(cleaned):
+        match = injection_match(cleaned)
+        if match:
+            phrase, excerpt = match
             found.append(
                 Violation(
                     "content.injection",
                     "tool output is data",
-                    "instruction-like text",
+                    phrase,
                     "warned",
-                    "Tool output contains instruction-like text; treated as data",
+                    "Tool output contains instruction-like text; the agent gets it as data, not as orders",
+                    excerpt=excerpt,
                 )
             )
         return cleaned, found

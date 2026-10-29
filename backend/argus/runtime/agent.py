@@ -411,8 +411,11 @@ class AgentRunner:
             log.warning("agent.tool_error", tool=call.name, error=str(exc)[:300])
             return await finish("error", ToolResult.error(f"{call.name} failed: {str(exc)[:500]}"), t0)
         cleaned, violations = engine.screen_tool_output(result.content)
+        where = {"member_id": self.member.id, "tool_call_id": call.id, "tool": call.name}
+        if isinstance(result.data.get("url"), str):
+            where["source"] = result.data["url"]  # e.g. the page web_fetch read
         for v2 in violations:
-            await self.ctx.violation(v2, {"member_id": self.member.id, "tool_call_id": call.id}, actor)
+            await self.ctx.violation(v2, where, actor)
         result.content = cleaned
         return await finish("error" if result.is_error else "ok", result, t0)
 

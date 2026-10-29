@@ -86,6 +86,8 @@ export type Severity = "critical" | "high" | "medium";
 export const SEVERITIES: Severity[] = ["critical", "high", "medium"];
 /** Guardrail rules carry no severity on the wire; classify by the rule's name. */
 export function ruleSeverity(rule: string): Severity {
+  // Flagged instruction-like text in tool output is only ever a warning (the text stays data).
+  if (rule === "content.injection") return "medium";
   if (/secret|pii|inject|exfil|policy|forbid|deny|egress|credential/i.test(rule)) return "critical";
   if (/budget|cost|usd|token|step|time|rate|loop/i.test(rule)) return "high";
   return "medium";

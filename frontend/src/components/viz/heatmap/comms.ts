@@ -68,8 +68,12 @@ function itemKind(it: TimelineItem): CommKind | "error" {
     case "approval": return "approval";
     case "vote": return "vote";
     case "user": return it.type === "correction.issued" ? "correction" : "user";
-    case "error":
-    case "violation": return "error";
+    case "error": return "error";
+    // Only a guardrail that stopped something is an error; warnings and redactions are status.
+    case "violation": {
+      const action = (it.data as { action?: string } | undefined)?.action;
+      return action === "blocked" || action === "halted" ? "error" : "status";
+    }
     case "plan": return "assign";
     default:
       if (it.type.startsWith("intercept")) return "intercept";
