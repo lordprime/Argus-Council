@@ -81,8 +81,13 @@ async def _get(db, owner_id: uuid.UUID, provider_id: uuid.UUID) -> ProviderConfi
     return cfg
 
 
+def _visible_kinds(settings) -> dict:  # type: ignore[no-untyped-def]
+    """Provider kinds users may pick; ``mock`` only where the mock provider is enabled."""
+    return {k: v for k, v in KINDS.items() if k != "mock" or settings.mock_provider_enabled}
+
+
 @router.get("/providers/kinds")
-async def kinds(_: CurrentPrincipal, request: Request) -> dict:
+async def kinds(_: CurrentPrincipal, request: Request, settings: SettingsDep) -> dict:
     return {
         "kinds": [
             {
@@ -94,7 +99,7 @@ async def kinds(_: CurrentPrincipal, request: Request) -> dict:
                 "self_hosted": k.self_hosted,
                 "suggested_models": list(k.suggested_models),
             }
-            for k in KINDS.values()
+            for k in _visible_kinds(settings).values()
         ],
         "system_providers": _router(request).available_system_providers(),
         # CLI agents enabled on this instance ("claude-cli", ...): account-authenticated seats.
@@ -127,7 +132,7 @@ async def create_provider(
     data: ProviderConfigIn, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ):
     principal.require_scope("providers:write")
-    if data.kind not in KINDS:
+    if data.kind not in _visible_kinds(settings):
         raise ArgusError(f"Unknown provider kind '{data.kind}'")
     spec = KINDS[data.kind]
     if spec.protocol == "openai" and not (data.base_url or spec.default_base_url):

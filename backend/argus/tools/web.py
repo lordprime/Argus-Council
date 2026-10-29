@@ -16,8 +16,11 @@ import httpx
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
+from argus.core.logging import get_logger
 from argus.core.netguard import guarded_client, ip_blocked
 from argus.tools.base import Tool, ToolCallContext, ToolResult
+
+log = get_logger(__name__)
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_CHARS = 40_000
@@ -85,6 +88,50 @@ def html_to_text(raw: str) -> tuple[str, str]:
     return title, text
 
 
+def default_client(allow_private: bool) -> httpx.AsyncClient:
+    return guarded_client(
+        allow_private, timeout=httpx.Timeout(20.0, connect=5.0), headers={"User-Agent": USER_AGENT}
+    )
+
+
+async def fetch_raw(
+    url: str,
+    *,
+    allow_domains: list[str],
+    block_private: bool,
+    client: httpx.AsyncClient,
+    resolver: Resolver,
+) -> tuple[str, str, str]:
+    """GET a text document, re-checking every redirect hop. Returns (final url, content type, body)."""
+    for _ in range(MAX_REDIRECTS + 1):
+        await check_url(url, allow_domains, block_private, resolver)
+        async with client.stream("GET", url, follow_redirects=False) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:
+                url = urljoin(url, resp.headers["location"])
+                continue
+            if resp.status_code >= 400:
+                raise FetchBlocked(f"HTTP {resp.status_code} from {urlparse(url).hostname}")
+            ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype and not ctype.startswith(_TEXT_TYPES):
+                raise FetchBlocked(f"Unsupported content type '{ctype}'")
+            chunks, size = [], 0
+            async for chunk in resp.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_BYTES:
+                    break
+                chunks.append(chunk)
+            raw = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+            return url, ctype, raw
+    raise FetchBlocked("Too many redirects")
+
+
+def readable(raw: str, ctype: str) -> tuple[str, str]:
+    """(title, text) of a fetched body: HTML is reduced to its main text, anything else kept as is."""
+    if "html" in ctype or raw.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
+        return html_to_text(raw)
+    return "", raw
+
+
 class WebFetch(Tool):
     name = "web_fetch"
     description = (
@@ -103,42 +150,38 @@ class WebFetch(Tool):
         resolver: Resolver | None = None,
         *,
         allow_private: bool = False,
+        capture: bool = False,
     ) -> None:
         # Server-side ceiling: a run's guardrails can block private networks but never unblock them.
         self.allow_private = allow_private
-        self.client_factory = client_factory or (
-            lambda: guarded_client(
-                allow_private,
-                timeout=httpx.Timeout(20.0, connect=5.0),
-                headers={"User-Agent": USER_AGENT},
-            )
-        )
+        self.client_factory = client_factory or (lambda: default_client(allow_private))
         self.resolver = resolver or default_resolver
+        # Keep every page read in the owner's research library (argus.knowledge.service).
+        self.capture = capture
 
     async def fetch(self, url: str, ctx: ToolCallContext) -> tuple[str, str, str]:
         policy = ctx.run.engine.rails.network
         block_private = policy.block_private_ips or not self.allow_private
         async with self.client_factory() as client:
-            for _ in range(MAX_REDIRECTS + 1):
-                await check_url(url, policy.allow_domains, block_private, self.resolver)
-                async with client.stream("GET", url, follow_redirects=False) as resp:
-                    if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:
-                        url = urljoin(url, resp.headers["location"])
-                        continue
-                    if resp.status_code >= 400:
-                        raise FetchBlocked(f"HTTP {resp.status_code} from {urlparse(url).hostname}")
-                    ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-                    if ctype and not ctype.startswith(_TEXT_TYPES):
-                        raise FetchBlocked(f"Unsupported content type '{ctype}'")
-                    chunks, size = [], 0
-                    async for chunk in resp.aiter_bytes():
-                        size += len(chunk)
-                        if size > MAX_BYTES:
-                            break
-                        chunks.append(chunk)
-                    raw = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
-                    return url, ctype, raw
-        raise FetchBlocked("Too many redirects")
+            return await fetch_raw(
+                url,
+                allow_domains=policy.allow_domains,
+                block_private=block_private,
+                client=client,
+                resolver=self.resolver,
+            )
+
+    async def _capture(self, ctx: ToolCallContext, url: str, title: str, text: str) -> None:
+        from argus.knowledge.service import capture_source
+
+        try:
+            async with ctx.run.sessionmaker() as s:
+                await capture_source(
+                    s, ctx.run.owner_id, url=url, title=title, text=text, run_id=ctx.run.run_id
+                )
+                await s.commit()
+        except Exception as exc:  # the library is best-effort; never fail the fetch over it
+            log.warning("knowledge.capture_failed", url=url, error=type(exc).__name__)
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         try:
@@ -147,11 +190,9 @@ class WebFetch(Tool):
             return ToolResult.error(f"Fetch blocked: {exc}")
         except httpx.HTTPError as exc:
             return ToolResult.error(f"Fetch failed: {type(exc).__name__}")
-        title, text = (
-            html_to_text(raw)
-            if "html" in ctype or raw.lstrip()[:15].lower().startswith(("<!doctype", "<html"))
-            else ("", raw)
-        )
+        title, text = readable(raw, ctype)
+        if self.capture:
+            await self._capture(ctx, final_url, title, text)
         truncated = len(text) > args.max_chars
         text = text[: args.max_chars]
         sources = ctx.run.sources
@@ -253,7 +294,10 @@ class WebSearch(Tool):
 
 def web_tools(settings: Any) -> list[Tool]:
     tools: list[Tool] = [
-        WebFetch(allow_private=bool(getattr(settings, "web_fetch_allow_private_urls", False)))
+        WebFetch(
+            allow_private=bool(getattr(settings, "web_fetch_allow_private_urls", False)),
+            capture=bool(getattr(settings, "knowledge_capture_enabled", True)),
+        )
     ]
     provider = getattr(settings, "search_provider", None)
     if provider:

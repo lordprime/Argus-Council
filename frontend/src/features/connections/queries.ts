@@ -96,6 +96,7 @@ export function useTestProvider() {
           return { ok: false, latencyMs: elapsed(), model, text: (err instanceof Error ? err.message : "Request failed").slice(0, 200) };
         }
       }
+      if (!model) return { ok: false, latencyMs: elapsed(), model, text: "This server needs a model to test; enter one or set a default model." };
       try {
         const r = await api.post<{ model: string; content: string }>(`${V1}/llm/complete`, {
           provider,

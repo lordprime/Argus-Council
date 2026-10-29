@@ -1,4 +1,10 @@
-"""Knowledge-base ingestion and BM25 search, plus council-scoped long-term memory."""
+"""Knowledge-base ingestion and BM25 search, plus council-scoped long-term memory.
+
+Every owner also has one *research library* (``KnowledgeBase.kind == "library"``): every source the
+agents read (``web_fetch``) is captured into it, deduplicated by URL, so later runs can search what
+earlier runs found. It is capped at ``MAX_LIBRARY_CHUNKS``; the least recently captured sources are
+evicted first.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +14,11 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.core.errors import ArgusError
+from argus.db.base import utcnow
 from argus.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, MemoryItem
 from argus.knowledge.bm25 import Doc, rank
 from argus.knowledge.text import (
@@ -33,6 +40,14 @@ MAX_K = 50
 MAX_MEMORY_TEXT = 4_000
 MAX_MEMORY_PER_SCOPE = 2_000
 EXTRACT_TIMEOUT_S = 30
+MAX_TEXT_CHARS = 1_000_000  # pasted text / fetched pages
+LIBRARY_NAME = "Research library"
+LIBRARY_DESCRIPTION = (
+    "Captured automatically: every page and paper the agents read, with its source URL. "
+    "Searchable by every run."
+)
+MAX_LIBRARY_CHUNKS = 20_000
+MAX_CAPTURE_CHARS = 200_000  # per captured source
 
 
 class LimitExceeded(ArgusError):
@@ -73,9 +88,15 @@ async def kb_chunk_count(db: AsyncSession, kb_id: uuid.UUID) -> int:
 
 
 async def ingest(
-    db: AsyncSession, kb: KnowledgeBase, filename: str, declared_type: str | None, data: bytes
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    filename: str,
+    declared_type: str | None,
+    data: bytes,
+    *,
+    run_id: uuid.UUID | None = None,
 ) -> KnowledgeDocument:
-    """Validate, extract, chunk and store one document. Caller commits."""
+    """Validate, extract, chunk and store one uploaded file. Caller commits."""
     filename = (filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()[:255]
     if not filename:
         raise UnsupportedMedia("A file name is required")
@@ -91,22 +112,68 @@ async def ingest(
         raise LimitExceeded(str(exc)) from exc
     except TimeoutError as exc:
         raise UnsupportedMedia("The document took too long to read") from exc
-    pieces = chunk_text(text)
-    if not pieces:
-        raise ArgusError("The document contains no text")
-    existing = await kb_chunk_count(db, kb.id)
-    if existing + len(pieces) > MAX_KB_CHUNKS:
-        raise LimitExceeded(
-            f"Knowledge base would exceed {MAX_KB_CHUNKS} chunks "
-            f"({existing} stored, this document adds {len(pieces)})"
-        )
-    doc = KnowledgeDocument(
-        kb_id=kb.id,
+    return await _store(
+        db,
+        kb,
+        text,
         filename=filename,
         content_type=ctype,
         size=len(data),
         sha256=hashlib.sha256(data).hexdigest(),
+        origin="upload",
+        run_id=run_id,
+    )
+
+
+def _max_chunks(kb: KnowledgeBase) -> int:
+    return MAX_LIBRARY_CHUNKS if kb.kind == "library" else MAX_KB_CHUNKS
+
+
+def _filename_for(title: str, url: str | None) -> str:
+    base = title.strip() or (url or "").split("://", 1)[-1] or "note"
+    safe = "".join(c if c.isalnum() or c in " -_.()" else "-" for c in base).strip(" -.")[:120]
+    return (safe or "note") + ".txt"
+
+
+async def _store(
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    text: str,
+    *,
+    filename: str,
+    content_type: str,
+    size: int,
+    sha256: str,
+    origin: str,
+    title: str = "",
+    source_url: str | None = None,
+    run_id: uuid.UUID | None = None,
+) -> KnowledgeDocument:
+    pieces = chunk_text(text)
+    if not pieces:
+        raise ArgusError("The document contains no text")
+    existing = await kb_chunk_count(db, kb.id)
+    cap = _max_chunks(kb)
+    if existing + len(pieces) > cap:
+        if kb.kind == "library" and len(pieces) <= cap:
+            await _evict_oldest(db, kb.id, existing + len(pieces) - cap)
+        else:
+            raise LimitExceeded(
+                f"Knowledge base would exceed {cap} chunks "
+                f"({existing} stored, this document adds {len(pieces)})"
+            )
+    doc = KnowledgeDocument(
+        kb_id=kb.id,
+        filename=filename[:255],
+        content_type=content_type,
+        size=size,
+        sha256=sha256,
         chunk_count=len(pieces),
+        title=title[:300],
+        origin=origin,
+        source_url=source_url,
+        url_hash=_url_hash(source_url) if source_url else None,
+        run_id=run_id,
     )
     db.add(doc)
     await db.flush()
@@ -115,6 +182,156 @@ async def ingest(
         db.add(KnowledgeChunk(kb_id=kb.id, document_id=doc.id, idx=i, text=piece, length=length, terms=terms))
     await db.flush()
     return doc
+
+
+async def _evict_oldest(db: AsyncSession, kb_id: uuid.UUID, chunks_needed: int) -> None:
+    """Free at least ``chunks_needed`` chunks by deleting the least recently captured documents."""
+    freed = 0
+    rows = await db.execute(
+        select(KnowledgeDocument.id, KnowledgeDocument.chunk_count)
+        .where(KnowledgeDocument.kb_id == kb_id)
+        .order_by(KnowledgeDocument.updated_at, KnowledgeDocument.id)
+    )
+    doomed = []
+    for doc_id, count in rows:
+        if freed >= chunks_needed:
+            break
+        doomed.append(doc_id)
+        freed += count
+    if doomed:
+        await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id.in_(doomed)))
+        await db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.id.in_(doomed)))
+        await db.flush()
+
+
+def _url_hash(url: str) -> str:
+    return hashlib.sha256(url.strip().encode()).hexdigest()
+
+
+async def ingest_text(
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    *,
+    title: str,
+    text: str,
+    origin: str = "text",
+    source_url: str | None = None,
+    run_id: uuid.UUID | None = None,
+) -> KnowledgeDocument:
+    """Store pasted text or an already-extracted page. Caller commits."""
+    text = text.strip()
+    if len(text) > MAX_TEXT_CHARS:
+        raise LimitExceeded(f"Text exceeds {MAX_TEXT_CHARS:,} characters")
+    data = text.encode()
+    return await _store(
+        db,
+        kb,
+        text,
+        filename=_filename_for(title, source_url),
+        content_type="text/plain",
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        origin=origin,
+        title=title.strip(),
+        source_url=source_url,
+        run_id=run_id,
+    )
+
+
+async def library_kb(db: AsyncSession, owner_id: uuid.UUID) -> KnowledgeBase:
+    """The owner's research library, created on first use. Caller commits."""
+    kb = (
+        await db.execute(
+            select(KnowledgeBase)
+            .where(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kind == "library")
+            .order_by(KnowledgeBase.created_at)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if kb is not None:
+        return kb
+    name = LIBRARY_NAME
+    taken = (
+        await db.execute(
+            select(KnowledgeBase.id).where(KnowledgeBase.owner_id == owner_id, KnowledgeBase.name == name)
+        )
+    ).first()
+    if taken:
+        name = f"{LIBRARY_NAME} (auto)"
+    kb = KnowledgeBase(owner_id=owner_id, name=name, description=LIBRARY_DESCRIPTION, kind="library")
+    db.add(kb)
+    await db.flush()
+    return kb
+
+
+async def capture_source(
+    db: AsyncSession,
+    owner_id: uuid.UUID,
+    *,
+    url: str,
+    title: str,
+    text: str,
+    run_id: uuid.UUID | None = None,
+) -> KnowledgeDocument | None:
+    """Put one source an agent read into the owner's research library. Caller commits.
+
+    The same URL is stored once: unchanged content only refreshes it (so eviction keeps it), changed
+    content replaces it. Returns None when there is nothing worth keeping.
+    """
+    text = text.strip()[:MAX_CAPTURE_CHARS]
+    if len(text) < 200:
+        return None
+    kb = await library_kb(db, owner_id)
+    sha = hashlib.sha256(text.encode()).hexdigest()
+    old = (
+        await db.execute(
+            select(KnowledgeDocument).where(
+                KnowledgeDocument.kb_id == kb.id, KnowledgeDocument.url_hash == _url_hash(url)
+            )
+        )
+    ).scalar_one_or_none()
+    if old is not None:
+        if old.sha256 == sha:
+            old.run_id = run_id or old.run_id
+            old.updated_at = utcnow()
+            await db.flush()
+            return old
+        await db.delete(old)
+        await db.flush()
+    return await ingest_text(
+        db, kb, title=title or url, text=text, origin="agent", source_url=url, run_id=run_id
+    )
+
+
+async def linked_summary(db: AsyncSession, owner_id: uuid.UUID, ids: Sequence[Any]) -> list[dict[str, Any]]:
+    """Name, short description and size of the knowledge bases linked to a run (for agent prompts)."""
+    wanted = []
+    for i in ids:
+        try:
+            wanted.append(uuid.UUID(str(i)))
+        except ValueError:
+            continue
+    if not wanted:
+        return []
+    kbs = list(
+        (
+            await db.execute(
+                select(KnowledgeBase)
+                .where(KnowledgeBase.owner_id == owner_id, KnowledgeBase.id.in_(wanted))
+                .order_by(KnowledgeBase.name)
+            )
+        ).scalars()
+    )
+    stats = await kb_stats(db, [k.id for k in kbs])
+    return [
+        {
+            "id": str(k.id),
+            "name": k.name,
+            "description": " ".join(k.description.split())[:300],
+            "document_count": stats[k.id]["document_count"],
+        }
+        for k in kbs
+    ]
 
 
 async def search(db: AsyncSession, kb_ids: Sequence[uuid.UUID], query: str, k: int = 5) -> dict[str, Any]:
@@ -154,6 +371,8 @@ async def search(db: AsyncSession, kb_ids: Sequence[uuid.UUID], query: str, k: i
                 "kb_name": kb.name,
                 "document_id": str(doc.id),
                 "filename": doc.filename,
+                "title": doc.title,
+                "source_url": doc.source_url,
                 "chunk_index": chunk.idx,
                 "text": chunk.text,
                 "snippet": snippet(chunk.text, terms),

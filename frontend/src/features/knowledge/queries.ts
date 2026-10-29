@@ -4,13 +4,14 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 
 import { ApiError, api, auth, refreshOnce, V1 } from "@/lib/api";
 
-import type { KnowledgeBase, KnowledgeDocument, MemoryItem, SearchResponse } from "./types";
+import type { KnowledgeBase, KnowledgeDocument, LinkedKnowledge, MemoryItem, SearchResponse } from "./types";
 
 export const kKeys = {
   bases: ["knowledge-bases"] as const,
   docs: (kb: string) => ["knowledge-docs", kb] as const,
   search: (kb: string, q: string) => ["knowledge-search", kb, q] as const,
   memory: (council: string) => ["memory", council] as const,
+  runLinks: (runId: string) => ["run-knowledge", runId] as const,
 };
 
 export const useKnowledgeBases = () =>
@@ -99,6 +100,48 @@ export function uploadDocument(kbId: string, file: File, onProgress?: (pct: numb
       xhr.send(form);
     });
   return send(false);
+}
+
+export type NewKnowledge =
+  | { kind: "text"; title: string; text: string; source_url?: string | null }
+  | { kind: "url"; url: string; title?: string | null };
+
+/** Add pasted text, or a page fetched from a URL, as a document. */
+export function useAddKnowledge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kbId, item }: { kbId: string; item: NewKnowledge }) => {
+      const { kind, ...body } = item;
+      return api.post<KnowledgeDocument>(`${V1}/knowledge-bases/${kbId}/documents/${kind}`, body);
+    },
+    onSuccess: (_doc, { kbId }) => {
+      void qc.invalidateQueries({ queryKey: kKeys.docs(kbId) });
+      void qc.invalidateQueries({ queryKey: kKeys.bases });
+      void qc.invalidateQueries({ queryKey: ["knowledge-search", kbId] });
+    },
+  });
+}
+
+export const useRunKnowledge = (runId: string) =>
+  useQuery({
+    queryKey: kKeys.runLinks(runId),
+    queryFn: async () => (await api.get<{ linked: LinkedKnowledge[] }>(`${V1}/runs/${runId}/knowledge`)).linked,
+  });
+
+/** Link knowledge bases to a run (live agents pick them up on their next turn), or unlink one. */
+export function useLinkKnowledge(runId: string) {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: kKeys.runLinks(runId) });
+  const link = useMutation({
+    mutationFn: (ids: string[]) =>
+      api.post<{ linked: LinkedKnowledge[]; added: string[]; live: boolean }>(`${V1}/runs/${runId}/knowledge`, { knowledge_base_ids: ids }),
+    onSuccess: done,
+  });
+  const unlink = useMutation({
+    mutationFn: (kbId: string) => api.del<{ linked: LinkedKnowledge[] }>(`${V1}/runs/${runId}/knowledge/${kbId}`),
+    onSuccess: done,
+  });
+  return { link, unlink };
 }
 
 export function useInvalidateKnowledge() {

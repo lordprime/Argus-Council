@@ -156,7 +156,7 @@ const CLI_OPTION: Record<string, { label: string; models: string[] }> = {
 
 /**
  * Providers a seat can use: the user's enabled provider configs plus system providers
- * (env-configured). The offline `mock` provider (model `mock-1`) is always offered.
+ * (env-configured). The offline `mock` provider shows only when the server enables it (tests).
  */
 export function useProviderOptions(): { options: ProviderOption[]; isLoading: boolean } {
   const providers = useProviders();
@@ -181,7 +181,6 @@ export function useProviderOptions(): { options: ProviderOption[]; isLoading: bo
       const known = CLI_OPTION[cli];
       out.push({ value: cli, label: known?.label ?? `${cli} (account)`, models: known?.models ?? ["default"], auth: "account" });
     }
-    if (!out.some((o) => o.value === MOCK_PROVIDER)) out.push({ value: MOCK_PROVIDER, label: MOCK_PROVIDER_LABEL, models: ["mock-1"] });
     return out;
   }, [providers.data, kinds.data]);
   return { options, isLoading: providers.isLoading || kinds.isLoading };

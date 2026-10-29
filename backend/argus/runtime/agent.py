@@ -32,6 +32,16 @@ from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
 log = get_logger(__name__)
 
 PREVIEW_CHARS = 2000
+# The skill index is re-sent every turn; descriptions (up to 20,000 words) are cut to this there and
+# use_skill returns them in full.
+SKILL_SUMMARY_CHARS = 600
+
+
+def _skill_summary(description: str) -> str:
+    text = " ".join(description.split())
+    if len(text) <= SKILL_SUMMARY_CHARS:
+        return text
+    return text[:SKILL_SUMMARY_CHARS].rsplit(" ", 1)[0] + " … (full description: use_skill)"
 
 
 @dataclass
@@ -135,11 +145,27 @@ class AgentRunner:
         ]
         if self.ctx.skills and self._allowed("use_skill"):
             index = "\n".join(
-                f"- {p.name}: {p.description}" for p in sorted(self.ctx.skills.values(), key=lambda p: p.name)
+                f"- {p.name}: {_skill_summary(p.description)}"
+                for p in sorted(self.ctx.skills.values(), key=lambda p: p.name)
             )
             parts.append(
                 "\nAvailable skills (call use_skill with the name to load full instructions "
                 f"before relying on one):\n{index}"
+            )
+        if self._allowed("knowledge_search"):
+            linked = self.ctx.extra.get("linked_knowledge") or []
+            if linked:
+                lines = "\n".join(
+                    f"- {k['name']} ({k['document_count']} documents)"
+                    + (f": {k['description']}" if k["description"] else "")
+                    for k in linked
+                )
+                parts.append(
+                    "\nKnowledge the user linked to this run. Search it with knowledge_search "
+                    f"(knowledge_bases=[name]) before the web, and cite what you use:\n{lines}"
+                )
+            parts.append(
+                "\nknowledge_search also covers the research library: every source earlier runs read."
             )
         _, standing = self.ctx.corrections_for_peek(self.member.id)
         if standing:

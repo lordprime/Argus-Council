@@ -9,8 +9,8 @@
 #   ./scripts/update.sh --rollback --restore-db # ...and load the pre-update backup instead of downgrading
 #
 # Before building, the running images are tagged rollback-<time>, the database revision is
-# recorded and a backup is taken. Migrations run when the new API container starts. If it does
-# not become ready, the API is stopped, the pre-update backup is restored when the schema changed
+# recorded and a backup is taken. All pending migrations are then applied as their own step with
+# the new images, before the new API starts. If migrating fails or the API does not become ready, the API is stopped, the pre-update backup is restored when the schema changed
 # (alembic downgrade when there is no backup), and the previous images are started again.
 # --rollback downgrades the schema with the newer image; --restore-db loses data written since.
 # ARGUS_READY_TIMEOUT (default 240) is how many seconds the new version gets to become ready.
@@ -147,7 +147,8 @@ if [ -f "$STATE_FILE" ]; then cp -f "$STATE_FILE" "$STATE_FILE.before-update"; f
 write_state "version=$prev" "from=$next" "db_revision=$pre_rev" "db_dump=$dump"
 
 ready_timeout="${ARGUS_READY_TIMEOUT:-240}"
-if start "$next" "$ready_timeout" && wait_healthy "$ready_timeout"; then
+# The old API is stopped first so it never writes to a schema it does not know.
+if dc stop api && migrate_db "$next" && start "$next" "$ready_timeout" && wait_healthy "$ready_timeout"; then
   rm -f "$STATE_FILE.before-update"
   echo "$prev" >"$PREV_FILE"
   echo "$next" >"$VERSION_FILE"

@@ -15,6 +15,7 @@ import {
   VoteCard,
 } from "@/components/run/parts";
 import { ModeLabel } from "@/components/run/ModeLabel";
+import { RunKnowledgeButton } from "@/components/knowledge/RunKnowledge";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
 import { Badge, Button, Callout, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
 import { Drawer } from "@/components/ui/Drawer";
@@ -150,6 +151,7 @@ function Header({ run, runId }: { run: RunDetail; runId: string }) {
           <Button icon={Pause} loading={busy === "pause"} onClick={() => void act("pause")}>Pause</Button>
         ))}
         {live && <Button variant="danger-ghost" icon={Square} loading={busy === "cancel"} onClick={() => void act("cancel")}>Stop</Button>}
+        <RunKnowledgeButton runId={runId} topic={run.topic} live={live} />
         {/* Page-level switch, named apart from the Timeline/Map/… tabs inside the workspace (audit C-16). */}
         <nav aria-label="Run pages" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">
           <Link to={`/runs/${runId}`} aria-current={!onOutput ? "page" : undefined} className={viewLink(!onOutput)}>Workspace</Link>

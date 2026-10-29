@@ -177,6 +177,13 @@ class Run(IdMixin, TimestampMixin, Base):
     last_seq: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Archived runs leave the default run list but stay intact; trashed runs are soft-deleted and
+    # purged by retention after ``retention_trash_days``. Restoring from the trash keeps archived_at.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trashed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # Knowledge bases the user linked to this run (before it started or while it runs); agents are
+    # told about them and knowledge_search may always read them. Ids as strings.
+    knowledge_base_ids: Mapped[list[Any]] = mapped_column(default=list)
 
 
 class RunEvent(Base):
@@ -432,6 +439,9 @@ class KnowledgeBase(IdMixin, TimestampMixin, Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text, default="")
+    # "user": made and filled by the user. "library": the owner's research library, filled
+    # automatically with every source agents read (one per owner, see argus.knowledge.service).
+    kind: Mapped[str] = mapped_column(String(16), default="user", server_default="user")
 
 
 class KnowledgeDocument(IdMixin, TimestampMixin, Base):
@@ -445,6 +455,15 @@ class KnowledgeDocument(IdMixin, TimestampMixin, Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     sha256: Mapped[str] = mapped_column(String(64), default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    origin: Mapped[str] = mapped_column(
+        String(16), default="upload", server_default="upload"
+    )  # upload|text|url|agent
+    source_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    url_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class KnowledgeChunk(Base):

@@ -92,7 +92,7 @@ describe("Runs list", () => {
     expect(screen.queryByText("Battery recycling")).toBeNull();
   });
 
-  it("bulk-deletes only finished runs and names the count in the confirmation", async () => {
+  it("moves only finished runs to the trash, and archives from the main list", async () => {
     desktop();
     const fetchMock = mockRuns();
     renderRuns();
@@ -101,7 +101,29 @@ describe("Runs list", () => {
 
     await userEvent.click(within(table).getByRole("checkbox", { name: "Select all finished runs" }));
     expect(screen.getByText("3 selected")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([u]) => String(u));
+      expect(posts.sort()).toEqual(["/api/v1/runs/r1/trash", "/api/v1/runs/r2/trash", "/api/v1/runs/r3/trash"]);
+    });
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+
+    await userEvent.click(within(table).getByRole("checkbox", { name: "Select “Solid-state batteries”" }));
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/runs/r1/archive", expect.objectContaining({ method: "POST" })));
+  });
+
+  it("deletes forever only from the trash view, naming the count in the confirmation", async () => {
+    desktop();
+    const fetchMock = mockRuns();
+    renderRuns("/runs?view=trash");
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).includes("view=trash"))).toBe(true));
+    expect(screen.getByRole("tab", { name: "Trash" })).toHaveAttribute("aria-selected", "true");
+
+    await userEvent.click(within(table).getByRole("checkbox", { name: "Select all finished runs" }));
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete forever" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading")).toHaveTextContent("Delete 3 runs?");

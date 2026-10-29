@@ -272,6 +272,9 @@ class RunIn(BaseModel):
     model: str = Field(default="mock-1", max_length=120)
     outputs: list[OutputFormat] = Field(default_factory=lambda: ["md"], max_length=7)
     guardrails: dict[str, Any] = Field(default_factory=dict)
+    knowledge_base_ids: list[uuid.UUID] = Field(
+        default_factory=list, max_length=20, description="Knowledge bases to link to the run from the start"
+    )
 
     _guardrails = field_validator("guardrails")(_valid_guardrails)
 
@@ -292,6 +295,9 @@ class RunOut(ORM):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    archived_at: datetime | None = None
+    trashed_at: datetime | None = None
+    knowledge_base_ids: list[str] = Field(default_factory=list)
 
 
 class RunDetail(RunOut):
@@ -324,7 +330,7 @@ class ApprovalDecisionIn(BaseModel):
 
 # ---------------------------------------------------------------- skills
 class SkillIn(BaseModel):
-    skill_md: str = Field(min_length=1, max_length=200_000)
+    skill_md: str = Field(min_length=1, max_length=400_000)  # see argus.skills.package.MAX_WORDS
     files: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
 

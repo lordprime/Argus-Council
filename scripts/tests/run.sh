@@ -46,7 +46,7 @@ setup() {
   echo a1 >"$STUB_STATE/artifacts"
   echo v1 >"$R/deploy/.version"
   unset STUB_BUILD_HEAD STUB_BUILD_HEALTHY STUB_BUILD_FAIL STUB_PGDUMP_FAIL STUB_TAR_FAIL \
-    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
+    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL STUB_MIGRATE_FAIL ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
   export ARGUS_READY_TIMEOUT=20 # a broken version is given up on after 20 polls, not 240
 }
 
@@ -512,6 +512,66 @@ if begin snapshot_keeps_the_runner_image_for_rollback; then
   check "a rollback tag is printed" ok grep -q '^rollback-' <<<"$tag"
   check "the runner is in the snapshot" eq "$(tag_id "argus-council/runner:$tag")" sha256:v1-runner
   check "the api is in the snapshot" eq "$(tag_id "argus-council/api:$tag")" sha256:v1-api
+  end
+fi
+
+if begin update_migrates_as_its_own_step_before_starting; then
+  export STUB_BUILD_HEAD=2
+  check "update.sh succeeds" ok run update.sh --no-pull
+  check "alembic upgrade ran once" eq "$(count upgrades.log)" 1
+  check "the old API was stopped first" contains "$STUB_STATE/calls.log" "stop api"
+  check "the revisions are logged" contains "$T/out" "database schema migrated 1 -> 2"
+  check "the database migrated" eq "$(st db/rev)" 2
+  end
+fi
+
+if begin update_failed_migration_rolls_back; then
+  echo d-before >"$STUB_STATE/db/data"
+  export STUB_BUILD_HEAD=2 STUB_MIGRATE_FAIL=1
+  check "update.sh fails" fails run update.sh --no-pull
+  check "the failure is reported" contains "$T/out" "database migrations failed"
+  check "it says it rolled back" contains "$T/out" "update failed and was rolled back"
+  check "the database is at revision 1" eq "$(st db/rev)" 1
+  check "the old image runs again" eq "$(running_api)" sha256:v1-api
+  check "and it is healthy" eq "$(st ct/api.status)" healthy
+  end
+fi
+
+if begin deploy_on_existing_deployment_updates_with_backup_and_migrations; then
+  export STUB_BUILD_HEAD=2
+  check "deploy.sh succeeds" ok run deploy.sh
+  check "it took the update path" contains "$T/out" "existing deployment (v1): updating"
+  check "a backup was taken" eq "$(dumps | wc -l | tr -d ' ')" 1
+  check "alembic upgrade ran" eq "$(count upgrades.log)" 1
+  check "the database migrated" eq "$(st db/rev)" 2
+  next="$(cat "$R/deploy/.built-version")"
+  check "the new version is recorded" eq "$(cat "$R/deploy/.version")" "$next"
+  check "the new image runs" eq "$(running_api)" "$(tag_id "argus-council/api:$next")"
+  check "the code was not pulled" lacks "$T/out" "pulling the latest code"
+  end
+fi
+
+if begin deploy_fresh_install_migrates_then_starts; then
+  rm -f "$R/deploy/.version" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
+  echo 0 >"$STUB_STATE/db/rev"
+  export STUB_BUILD_HEAD=3
+  check "deploy.sh succeeds" ok run deploy.sh
+  check "alembic upgrade ran" eq "$(count upgrades.log)" 1
+  check "the database is at the new head" eq "$(st db/rev)" 3
+  check "the revisions are logged" contains "$T/out" "database schema migrated base -> 3"
+  next="$(cat "$R/deploy/.built-version")"
+  check "the version is recorded" eq "$(cat "$R/deploy/.version")" "$next"
+  check "the lock is released" fails test -e "$R/deploy/.lock"
+  end
+fi
+
+if begin deploy_fresh_install_stops_when_migrations_fail; then
+  rm -f "$R/deploy/.version" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
+  echo 0 >"$STUB_STATE/db/rev"
+  export STUB_BUILD_HEAD=3 STUB_MIGRATE_FAIL=1
+  check "deploy.sh fails" fails run deploy.sh
+  check "it says nothing was started" contains "$T/out" "nothing was started"
+  check "no version is recorded" fails test -f "$R/deploy/.version"
   end
 fi
 

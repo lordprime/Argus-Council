@@ -1,8 +1,10 @@
 """Agent tools for knowledge-base search and council-scoped long-term memory.
 
 Which knowledge bases a run may search: the council snapshot's ``knowledge_base_ids`` (ids or names)
-when present, otherwise every knowledge base the run's owner has. Memory is scoped to the run's
-council (or to the owner's council-less memory for ad-hoc runs).
+when present, otherwise every knowledge base the run's owner has. Knowledge bases the user linked to
+the run (``Run.knowledge_base_ids``) and the owner's research library are always included. The scope
+is cached per run; linking knowledge mid-run drops the cache (``SCOPE_KEY``). Memory is scoped to the
+run's council (or to the owner's council-less memory for ad-hoc runs).
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ from sqlalchemy import select
 from argus.core.errors import ArgusError
 from argus.db.models import KnowledgeBase, Run
 from argus.knowledge import service
-from argus.tools.base import Tool, ToolCallContext, ToolResult
+from argus.tools.base import StrList, Tool, ToolCallContext, ToolResult
 
-_SCOPE_KEY = "knowledge_scope"
+SCOPE_KEY = "knowledge_scope"
+_SCOPE_KEY = SCOPE_KEY
 
 
 async def _scope(ctx: ToolCallContext) -> dict[str, Any]:
@@ -31,6 +34,7 @@ async def _scope(ctx: ToolCallContext) -> dict[str, Any]:
         run = await s.get(Run, ctx.run.run_id)
         snapshot = (run.council_snapshot or {}) if run else {}
         council_id = run.council_id if run else None
+        linked = {str(i) for i in (run.knowledge_base_ids or [])} if run else set()
         kbs = list(
             (
                 await s.execute(select(KnowledgeBase).where(KnowledgeBase.owner_id == ctx.run.owner_id))
@@ -38,8 +42,8 @@ async def _scope(ctx: ToolCallContext) -> dict[str, Any]:
         )
     allowed = snapshot.get("knowledge_base_ids")
     if isinstance(allowed, list):
-        wanted = {str(a) for a in allowed}
-        kbs = [k for k in kbs if str(k.id) in wanted or k.name in wanted]
+        wanted = {str(a) for a in allowed} | linked
+        kbs = [k for k in kbs if str(k.id) in wanted or k.name in wanted or k.kind == "library"]
     scope = {"council_id": council_id, "kbs": {k.name: k.id for k in kbs}}
     ctx.run.extra[_SCOPE_KEY] = scope
     return scope
@@ -55,7 +59,7 @@ class KnowledgeSearch(Tool):
     class Args(BaseModel):
         query: str = Field(min_length=1, max_length=500)
         k: int = Field(default=5, ge=1, le=20)
-        knowledge_bases: list[str] | None = Field(
+        knowledge_bases: StrList | None = Field(
             default=None, max_length=20, description="Restrict to these knowledge base names"
         )
 
@@ -85,14 +89,15 @@ class KnowledgeSearch(Tool):
         lines = []
         sources = ctx.run.sources
         for i, r in enumerate(results, 1):
-            url = f"kb://{r['kb_name']}/{r['filename']}#chunk-{r['chunk_index']}"
+            # Library and URL documents cite their original page; uploads cite the knowledge base.
+            url = r.get("source_url") or f"kb://{r['kb_name']}/{r['filename']}#chunk-{r['chunk_index']}"
             source = sources.get(url)
             if source is None:
                 source = {
                     "source_id": f"src_{len(sources) + 1}",
                     "n": len(sources) + 1,
                     "url": url,
-                    "title": f"{r['filename']} ({r['kb_name']}, chunk {r['chunk_index']})",
+                    "title": f"{r.get('title') or r['filename']} ({r['kb_name']}, chunk {r['chunk_index']})",
                     "retrieved_at": datetime.now(UTC).isoformat(),
                 }
                 sources[url] = source
@@ -119,7 +124,7 @@ class MemoryWrite(Tool):
     class Args(BaseModel):
         text: str = Field(min_length=1, max_length=service.MAX_MEMORY_TEXT)
         key: str = Field(default="", max_length=120)
-        tags: list[str] = Field(default_factory=list, max_length=20)
+        tags: StrList = Field(default_factory=list, max_length=20)
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         scope = await _scope(ctx)

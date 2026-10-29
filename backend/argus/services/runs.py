@@ -9,6 +9,7 @@ from collections import Counter
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.agents.roles import ROLES, roster_for
@@ -16,7 +17,7 @@ from argus.api.schemas import RunIn
 from argus.core.errors import ArgusError, NotFound
 from argus.core.logging import get_logger
 from argus.core.metrics import PROTOCOL_BLOCKING_WAITS, PROTOCOL_WAITS_SHED
-from argus.db.models import Run
+from argus.db.models import KnowledgeBase, Run
 from argus.runtime.events import TERMINAL_STATUSES
 from argus.runtime.guardrails import Guardrails
 from argus.runtime.manager import RunManager
@@ -25,6 +26,26 @@ from argus.services.councils import get_council
 log = get_logger(__name__)
 
 DEFAULT_SIZES = {"chat": 2, "coding": 6, "research": 6}
+MAX_LINKED_KBS = 20
+
+
+async def owned_kb_ids(db: AsyncSession, owner_id: uuid.UUID, ids: list[uuid.UUID]) -> list[str]:
+    """``ids`` as strings, after checking the owner has every one of them."""
+    wanted = set(ids)
+    if not wanted:
+        return []
+    found = set(
+        (
+            await db.execute(
+                select(KnowledgeBase.id).where(
+                    KnowledgeBase.owner_id == owner_id, KnowledgeBase.id.in_(wanted)
+                )
+            )
+        ).scalars()
+    )
+    if found != wanted:
+        raise NotFound("Knowledge base not found")
+    return [str(i) for i in dict.fromkeys(ids)]
 
 
 def ephemeral_roster(mode: str, size: int, provider: str, model: str) -> list[dict]:
@@ -113,6 +134,7 @@ async def create_and_start_run(
         outputs=list(data.outputs),
         guardrails=rails.model_dump(),
         council_snapshot=snapshot,
+        knowledge_base_ids=await owned_kb_ids(db, owner_id, data.knowledge_base_ids),
     )
     db.add(run)
     await db.commit()

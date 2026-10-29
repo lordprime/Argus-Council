@@ -1,12 +1,13 @@
-import { BookOpen, Library, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Globe, Library, Plus, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
 
 import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
+import { AddKnowledgeForm } from "@/components/knowledge/AddKnowledge";
 import { MemoryPanel } from "@/components/knowledge/MemoryPanel";
 import { DocumentsTable, SearchPanel } from "@/components/knowledge/parts";
 import { UploadZone } from "@/components/knowledge/UploadZone";
-import { Button, Callout, Card, Dialog, EmptyState, ErrorState, Page, PageHeader, Skeleton, Tabs, TextArea, TextField } from "@/components/ui";
+import { Badge, Button, Callout, Card, Dialog, EmptyState, ErrorState, Page, PageHeader, Skeleton, Tabs, TextArea, TextField } from "@/components/ui";
 import { useCreateKnowledgeBase, useDeleteKnowledgeBase, useKnowledgeBases } from "@/features/knowledge/queries";
 import type { KnowledgeBase } from "@/features/knowledge/types";
 import { errorMessage } from "@/lib/api";
@@ -49,22 +50,34 @@ function KnowledgeBasePane({ kb, onDeleted }: { kb: KnowledgeBase; onDeleted: ()
   const del = useDeleteKnowledgeBase();
   const [confirm, setConfirm] = useState(false);
   const pct = Math.min(100, Math.round((kb.chunk_count / kb.max_chunks) * 100));
+  const library = kb.kind === "library";
   return (
     <Card className="p-4 space-y-5 min-w-0" aria-labelledby={`kb-title-${kb.id}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id={`kb-title-${kb.id}`} className="text-lg break-words">{kb.name}</h2>
+          <h2 id={`kb-title-${kb.id}`} className="text-lg break-words flex flex-wrap items-center gap-2">
+            {kb.name}{library && <Badge tone="info"><Globe className="size-3" aria-hidden />Auto-captured</Badge>}
+          </h2>
           {kb.description && <p className="text-sm text-fg-muted mt-0.5 break-words">{kb.description}</p>}
           <p className="text-xs text-fg-subtle mt-1">
             {kb.document_count} document{kb.document_count === 1 ? "" : "s"} · {kb.chunk_count} / {kb.max_chunks} chunks ({pct}%)
           </p>
+          {library && (
+            <p className="text-xs text-fg-subtle mt-1">Full: the least recently used sources make room for new ones. Every run's knowledge_search covers it.</p>
+          )}
         </div>
         <Button variant="danger-ghost" size="sm" icon={Trash2} onClick={() => setConfirm(true)}>Delete</Button>
       </div>
-      <section aria-labelledby={`kb-upload-${kb.id}`} className="space-y-2">
-        <h3 id={`kb-upload-${kb.id}`} className="text-sm font-semibold">Upload</h3>
-        <UploadZone kbId={kb.id} />
-      </section>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <section aria-labelledby={`kb-upload-${kb.id}`} className="space-y-2 min-w-0">
+          <h3 id={`kb-upload-${kb.id}`} className="text-sm font-semibold">Upload files</h3>
+          <UploadZone kbId={kb.id} />
+        </section>
+        <section aria-labelledby={`kb-add-${kb.id}`} className="space-y-2 min-w-0">
+          <h3 id={`kb-add-${kb.id}`} className="text-sm font-semibold">Add text or a link</h3>
+          <AddKnowledgeForm kbId={kb.id} />
+        </section>
+      </div>
       <section aria-labelledby={`kb-docs-${kb.id}`} className="space-y-2">
         <h3 id={`kb-docs-${kb.id}`} className="text-sm font-semibold">Documents</h3>
         <DocumentsTable kbId={kb.id} />
@@ -116,7 +129,10 @@ function BasesTab() {
                   <button type="button" onClick={() => select(kb.id)} aria-current={selected?.id === kb.id ? "true" : undefined}
                     className={cn("w-full rounded-md px-3 py-2 text-left text-sm transition-colors",
                       selected?.id === kb.id ? "bg-accent-subtle text-fg font-medium" : "hover:bg-surface-2 text-fg-muted")}>
-                    <span className="block truncate">{kb.name}</span>
+                    <span className="flex items-center gap-1.5 truncate">
+                      {kb.kind === "library" && <Globe className="size-3.5 shrink-0 text-accent" aria-label="Research library" />}
+                      <span className="truncate">{kb.name}</span>
+                    </span>
                     <span className="block text-xs text-fg-subtle">{kb.document_count} docs · {kb.chunk_count} chunks</span>
                   </button>
                 </li>
@@ -136,7 +152,7 @@ export default function KnowledgePage() {
   return (
     <Page>
       <PageHeader title="Knowledge"
-        description="Documents your agents can search (knowledge_search) and the long-term memory they keep across runs." />
+        description="What your agents know: documents and notes you add, the research library of every source they have read, and the memory they keep across runs." />
       <Tabs value={tab}
         onValueChange={(v) => {
           const next = new URLSearchParams(params);

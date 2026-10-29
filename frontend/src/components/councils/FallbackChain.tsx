@@ -34,7 +34,7 @@ export function FallbackChain({ value, onChange, primary }: {
     // CLI seat: suggest the same vendor's API provider; API seat: suggest a CLI agent, else any other option.
     const pick = options.find((o) => o.value !== primary && o.auth !== options.find((p) => p.value === primary)?.auth) ??
       options.find((o) => o.value !== primary) ?? options[0];
-    return { provider: pick?.value ?? "mock", model: pick?.models[0] ?? "" };
+    return { provider: pick?.value ?? "", model: pick?.models[0] ?? "" };
   };
 
   return (

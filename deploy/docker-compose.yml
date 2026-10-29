@@ -86,6 +86,8 @@ services:
       ARGUS_RETENTION_EVENT_DAYS: ${ARGUS_RETENTION_EVENT_DAYS:-0}
       ARGUS_RETENTION_AUDIT_DAYS: ${ARGUS_RETENTION_AUDIT_DAYS:-365}
       ARGUS_RETENTION_LEDGER_DAYS: ${ARGUS_RETENTION_LEDGER_DAYS:-0}
+      ARGUS_RETENTION_TRASH_DAYS: ${ARGUS_RETENTION_TRASH_DAYS:-30}
+      ARGUS_KNOWLEDGE_CAPTURE_ENABLED: ${ARGUS_KNOWLEDGE_CAPTURE_ENABLED:-true}
       ARGUS_DATA_DIR: /data
       # Unix socket on a shared volume: the sandbox container has no network interface at all.
       ARGUS_SANDBOX_URL: unix:/run/argus-sandbox/sandbox.sock

@@ -41,7 +41,7 @@ def test_parse_good():
         ("---\nname: Bad Name\ndescription: x\n---\nbody", "name"),
         ("---\nname: ok\n---\nbody", "description"),
         ("---\nname: ok\ndescription: d\n---\n", "instructions"),
-        ("---\nname: ok\ndescription: " + "x" * 1025 + "\n---\nb", "description"),
+        ("---\nname: ok\ndescription: " + "w " * 20_001 + "\n---\nb", "20,000 words"),
         ("---\n[unclosed\n---\nb", "YAML"),
         ("---\n- a list\n---\nb", "mapping"),
     ],
@@ -49,6 +49,11 @@ def test_parse_good():
 def test_parse_errors(text, msg):
     with pytest.raises(SkillError, match=msg):
         parse_skill_md(text)
+
+
+def test_skill_description_allows_20000_words():
+    text = "---\nname: long\ndescription: " + "word " * 20_000 + "\n---\nDo the thing."
+    assert len(parse_skill_md(text).description.split()) == 20_000
 
 
 @pytest.mark.parametrize("path", ["../x.md", "/abs.md", ".hidden/x.md", "a/../../b.md", "evil.exe"])
@@ -220,3 +225,11 @@ async def test_guardrails_hide_denied_skills(client, auth, app):
     done = [e for e in evs if e["type"] == "tool.call.completed"]
     assert done[0]["data"]["status"] == "error" and "No skill named" in done[0]["data"]["result_preview"]
     await asyncio.sleep(0)
+
+
+def test_long_skill_description_is_summarized_in_the_prompt():
+    from argus.runtime.agent import SKILL_SUMMARY_CHARS, _skill_summary
+
+    assert _skill_summary("Use for  reports.\nAlways.") == "Use for reports. Always."
+    long = _skill_summary("word " * 20_000)
+    assert len(long) < SKILL_SUMMARY_CHARS + 40 and long.endswith("(full description: use_skill)")

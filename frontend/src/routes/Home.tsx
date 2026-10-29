@@ -1,14 +1,16 @@
-import { ChevronDown, ChevronRight, History, Play } from "lucide-react";
+import { BookPlus, ChevronDown, ChevronRight, History, Play } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { RoleChip } from "@/components/councils/parts";
+import { KnowledgePicker, QuickAddKnowledgeDialog } from "@/components/knowledge/AddKnowledge";
 import { RunRowList } from "@/components/run/RunRow";
 import {
   Button, Callout, Card, Chip, EmptyState, ErrorState, FormActions, Kbd, Page, PageHeader, SectionTitle, Segmented, SelectField, Skeleton,
   Stepper, TextArea, TextField, Toggle,
 } from "@/components/ui";
 import { MODES } from "@/features/councils/logic";
+import { useKnowledgeBases } from "@/features/knowledge/queries";
 import { SaveTemplateButton, TemplatePicker } from "@/features/templates/components";
 import { errorMessage } from "@/lib/api";
 import { providerKindLabel } from "@/lib/providers";
@@ -72,7 +74,10 @@ function Composer() {
   const [maxSteps, setMaxSteps] = useState("80");
   const [interceptMode, setInterceptMode] = useState("hold");
   const [approvals, setApprovals] = useState<string[]>(["shell", "package_install", "remote_agent", "network_write"]);
-  const [route, setRoute] = useState("mock::mock-1");
+  const [route, setRoute] = useState("");
+  const knowledge = useKnowledgeBases();
+  const [kbIds, setKbIds] = useState<string[]>([]);
+  const [addingKnowledge, setAddingKnowledge] = useState(false);
 
   useEffect(() => setSize(DEFAULT_SIZE[mode]), [mode]);
   useEffect(() => {
@@ -93,7 +98,7 @@ function Composer() {
     for (const p of providers.data ?? []) {
       if (!p.enabled) continue;
       const kind = kinds.data?.kinds.find((k) => k.key === p.kind);
-      const models = p.default_model ? [p.default_model] : kind?.suggested_models ?? [];
+      const models = [...new Set([...(p.default_model ? [p.default_model] : []), ...(kind?.suggested_models ?? [])])];
       for (const m of models) out.push({ value: `${p.name}::${m}`, label: `${p.name} · ${m}` });
     }
     for (const sys of kinds.data?.system_providers ?? []) {
@@ -104,7 +109,11 @@ function Composer() {
     return out;
   }, [providers.data, kinds.data]);
 
-  const onlyMock = routes.length > 0 && routes.every((r) => r.value.startsWith("mock::"));
+  const noProviders = !providers.isLoading && !kinds.isLoading && routes.every((r) => r.value.startsWith("mock::"));
+  // Keep the selection on a route that exists: the first one until the user picks.
+  useEffect(() => {
+    if (routes.length && !routes.some((r) => r.value === route)) setRoute(routes[0]!.value);
+  }, [routes, route]);
 
   /** The composer's run configuration (also what "Save as template" stores). */
   const buildConfig = () => {
@@ -127,7 +136,7 @@ function Composer() {
     e?.preventDefault();
     if (!topic.trim()) return;
     try {
-      const run = await create.mutateAsync(buildConfig());
+      const run = await create.mutateAsync({ ...buildConfig(), ...(kbIds.length ? { knowledge_base_ids: kbIds } : {}) });
       navigate(`/runs/${run.id}`);
     } catch {
       /* rendered below */
@@ -154,8 +163,9 @@ function Composer() {
           </SelectField>
           {!councilId && (
             <SelectField label="Model" value={route} onChange={(e) => setRoute(e.target.value)}
-              hint={onlyMock ? "Only the offline demo model is available. Connect a provider for real runs." : undefined}>
-              {routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              hint={noProviders ? "No provider connected yet." : undefined}>
+              {routes.length ? routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)
+                : <option value="">No models available</option>}
             </SelectField>
           )}
         </div>
@@ -169,6 +179,18 @@ function Composer() {
             </ul>
           </div>
         )}
+
+        <div className="flex flex-col gap-2">
+          <KnowledgePicker legend="Knowledge to link" bases={knowledge.data ?? []} value={kbIds} onChange={setKbIds} />
+          <Button type="button" variant="ghost" size="sm" className="self-start -ml-2.5" icon={BookPlus} onClick={() => setAddingKnowledge(true)}>
+            Add a note or link…
+          </Button>
+          {addingKnowledge && (
+            <QuickAddKnowledgeDialog open onOpenChange={setAddingKnowledge} bases={knowledge.data ?? []}
+              defaultName={topic.trim() ? `Notes: ${topic.trim()}`.slice(0, 120) : "Run notes"}
+              onAdded={(id) => setKbIds((ids) => (ids.includes(id) ? ids : [...ids, id]))} />
+          )}
+        </div>
 
         <fieldset>
           <legend className="text-sm font-medium mb-2">Deliverable formats</legend>
@@ -219,17 +241,17 @@ function Composer() {
         )}
 
         {create.error && <Callout tone="danger" title="Could not start the run">{errorMessage(create.error)}</Callout>}
-        {onlyMock && (
-          <Callout tone="info" title="Running in offline demo mode"
+        {noProviders && (
+          <Callout tone="warning" title="No model provider connected"
             action={<Link to="/connections/providers" className="text-sm text-accent underline self-center">Connect a provider</Link>}>
-            Councils will use a deterministic mock model until you connect Anthropic, OpenAI, Gemini, Ollama or another provider.
+            Connect Anthropic, OpenAI, Gemini, Ollama or another provider (or a CLI agent) before starting a run.
           </Callout>
         )}
         <FormActions
           meta={topic.trim()
             ? <span className="[@media(pointer:coarse)]:hidden"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> to start</span>
             : <span id="start-hint">Add a topic to start.</span>}>
-          <Button type="submit" variant="primary" size="lg" icon={Play} loading={create.isPending} disabled={!topic.trim()}
+          <Button type="submit" variant="primary" size="lg" icon={Play} loading={create.isPending} disabled={!topic.trim() || (!councilId && !route)}
             aria-describedby={!topic.trim() ? "start-hint" : undefined}>
             Start run
           </Button>

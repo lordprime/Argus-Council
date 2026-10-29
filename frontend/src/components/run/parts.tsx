@@ -2,6 +2,7 @@ import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
   AtSign,
+  BookOpen,
   Bot,
   Check,
   ChevronDown,
@@ -463,6 +464,10 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
       if (item.type === "run.status") return <Row icon={d.status === "paused" ? Pause : Bot}>Run {d.status}{d.reason ? `: ${d.reason}` : ""}</Row>;
       if (item.type === "correction.resolved") return <Row icon={Check}>Correction {d.outcome}</Row>;
       if (item.type === "skill.loaded") return <Row icon={Sparkles}>Loaded skill <span className="font-mono">{d.name}</span></Row>;
+      if (item.type === "knowledge.linked") {
+        const names = ((d.names as string[] | undefined) ?? []).join(", ") || "a knowledge base";
+        return <Row icon={BookOpen}>{d.action === "unlinked" ? "Unlinked" : "Linked"} knowledge: <span className="font-medium">{names}</span></Row>;
+      }
       if (item.type === "intercept.raised") return <Row icon={Hand} tone="text-warning">{item.actor.name} intercepted: {d.note ?? d.reason}</Row>;
       return <Row icon={Bot}>{item.type}</Row>;
     default:

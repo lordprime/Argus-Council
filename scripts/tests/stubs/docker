@@ -9,7 +9,7 @@
 #              cannot locate the revision), otherwise it migrates to the image's head.
 #
 # Knobs (environment): STUB_BUILD_HEAD, STUB_BUILD_HEALTHY, STUB_BUILD_FAIL, STUB_PGDUMP_FAIL,
-# STUB_TAR_FAIL, STUB_FORCE_UNHEALTHY, STUB_DOWNGRADE_FAIL.
+# STUB_TAR_FAIL, STUB_FORCE_UNHEALTHY, STUB_DOWNGRADE_FAIL, STUB_MIGRATE_FAIL.
 set -euo pipefail
 S="${STUB_STATE:?STUB_STATE is not set}"
 mkdir -p "$S/tags" "$S/ids" "$S/db" "$S/ct"
@@ -129,6 +129,15 @@ compose() {
           [ "$(idprop "$id" head)" -ge "$(rev)" ] || fail "Can't locate revision identified by $(rev)"
           num "$target" >"$S/db/rev"
           echo downgrade >>"$S/downgrades.log" ;;
+        *"alembic upgrade head"*)
+          local uid; uid="$(resolve "argus-council/api:${ARGUS_VERSION:-latest}")" || fail "no such image"
+          [ "${STUB_MIGRATE_FAIL:-0}" = 1 ] && fail "alembic upgrade failed"
+          [ "$(rev)" -le "$(idprop "$uid" head)" ] || fail "Can't locate revision identified by $(rev)"
+          if [ "$(rev)" -lt "$(idprop "$uid" head)" ]; then
+            idprop "$uid" head >"$S/db/rev"
+            echo "$(cat "$S/db/data")+m$(idprop "$uid" head)" >"$S/db/data"
+          fi
+          echo upgrade >>"$S/upgrades.log" ;;
         *) fail "unexpected compose run: $*" ;;
       esac ;;
     *) fail "unexpected compose command: $sub" ;;

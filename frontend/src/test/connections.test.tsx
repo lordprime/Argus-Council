@@ -94,6 +94,30 @@ describe("Providers", () => {
     expect(await screen.findByText(/^Connected · \d+ ms$/)).toBeInTheDocument();
     expect(screen.getByText("“OK”")).toBeInTheDocument();
   });
+
+  it("tests a non-Anthropic provider without a default model, and any model typed in", async () => {
+    const openai = { ...PROVIDER, id: "p2", name: "openai", kind: "openai", default_model: null, api_key: undefined };
+    const bodies: unknown[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/v1/providers/kinds") return json({ ...KINDS, kinds: [...KINDS.kinds, { ...KINDS.kinds[1], key: "openai", label: "OpenAI", self_hosted: false }] });
+      if (url === "/api/v1/providers") return json([openai]);
+      if (url === "/api/v1/providers/openai/models") return json({ provider: "openai", models: ["gpt-a", "gpt-b"] });
+      if (url === "/api/v1/providers/openai/test") {
+        bodies.push(JSON.parse(String(init.body)));
+        return json({ provider: "openai", ok: true, status: "ok", detail: "2 models available", latency_ms: 12, probe: "list_models", model: null, persisted: true });
+      }
+      return undefined;
+    });
+    renderAt("/connections/providers", <Providers />);
+    const card = await screen.findByRole("article", { name: "openai" });
+    const button = within(card).getByRole("button", { name: "Test connection" });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(await within(card).findByText("2 models available")).toBeInTheDocument();
+    await userEvent.type(within(card).getByLabelText("Model to test for openai"), "gpt-b");
+    await userEvent.click(button);
+    await waitFor(() => expect(bodies).toEqual([{}, { model: "gpt-b" }]));
+  });
 });
 
 const SERVER: McpServerInfo = {

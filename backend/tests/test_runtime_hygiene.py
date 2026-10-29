@@ -39,6 +39,16 @@ def test_compaction_shrinks_old_tool_results_and_keeps_recent_ones():
     assert len(msgs) == 22
 
 
+def test_compaction_keeps_loaded_skill_instructions():
+    msgs = _history(6, 20_000)
+    skill = '<tool_output tool="use_skill" untrusted="true">\n# Skill: big\n' + "y" * 60_000
+    msgs.insert(2, Message.assistant("", [ToolCall(id="s", name="use_skill", arguments={})]))
+    msgs.insert(3, Message.tool_result("s", skill))
+    compact_history(msgs, budget_chars=60_000, keep_recent=1)
+    assert msgs[3].content == skill  # the oldest result, but never shrunk
+    assert "omitted" in msgs[5].content  # ordinary older results still are
+
+
 def test_compaction_is_a_no_op_under_budget_and_idempotent():
     msgs = _history(3, 100)
     before = [m.content for m in msgs]

@@ -99,7 +99,7 @@ Requirements: Docker with the Compose plugin, Git, and `openssl` or Python 3.
 ```bash
 git clone https://github.com/lordprime/Argus-Council.git
 cd Argus-Council
-./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, starts, waits, smoke-tests
+./scripts/deploy.sh --smoke   # creates deploy/.env with generated secrets, builds, migrates, starts, waits, smoke-tests
 ```
 
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent
@@ -107,12 +107,17 @@ protocols (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a 
 Content-Security-Policy. The first account that registers becomes an `admin`; later accounts are
 `member`s. Set `ARGUS_ALLOW_REGISTRATION=false` once your accounts exist.
 
-Without provider keys, every council runs on the offline `mock` provider. Add keys to `deploy/.env`
-(for example `ANTHROPIC_API_KEY` or `ARGUS_OLLAMA_BASE_URL`) and run `./scripts/deploy.sh --no-build`,
-or add your own connection under *Connections, Providers*.
+Councils need a model provider: add keys to `deploy/.env` (for example `ANTHROPIC_API_KEY` or
+`ARGUS_OLLAMA_BASE_URL`) and run `./scripts/deploy.sh --no-build`, or add your own connection under
+*Connections, Providers* (each one has a **Test connection** button that takes any model id).
+
+`deploy.sh` is also the one command for updates: on an existing deployment it backs up, builds,
+applies every pending database migration as its own step, restarts, and rolls back if the new
+version does not become ready.
 
 ```bash
-./scripts/update.sh              # git pull, back up DB + artifacts to backups/, rebuild, restart; rolls back if unhealthy
+./scripts/deploy.sh --pull       # update: git pull, back up, build, migrate, restart (rolls back if unhealthy)
+./scripts/update.sh              # the same update path, called directly
 ./scripts/update.sh --rollback   # previous images; schema via alembic downgrade (--restore-db: pre-update backup)
 ./scripts/backup.sh              # verified, checksummed backup into backups/ (cron-safe)
 ./scripts/restore.sh --list      # then ./scripts/restore.sh <timestamp>; refuses corrupt or truncated backups
@@ -139,6 +144,8 @@ The API reads `ARGUS_*` environment variables (`backend/argus/core/config.py`). 
 | `ARGUS_MCP_ALLOW_STDIO` | `false` | Allow admins to register stdio MCP servers |
 | `ARGUS_METRICS_TOKEN` | unset | Bearer token for `/metrics` (required to scrape in production) |
 | `ARGUS_RETENTION_RUN_DAYS` / `_EVENT_DAYS` / `_AUDIT_DAYS` / `_LEDGER_DAYS` | `0` / `0` / `365` / `0` | Data retention in days; `0` keeps forever |
+| `ARGUS_RETENTION_TRASH_DAYS` | `30` | Runs in the trash are deleted permanently after this many days |
+| `ARGUS_KNOWLEDGE_CAPTURE_ENABLED` | `true` | Keep every page agents read in each user's *Research library* knowledge base |
 | `ARGUS_RATE_LIMIT_PER_MINUTE` | `120` | Requests per minute per user or API key |
 | `<KIND>_API_KEY`, `ARGUS_<KIND>_BASE_URL` | unset | System providers, e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARGUS_OLLAMA_BASE_URL` |
 

@@ -6,10 +6,12 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import orjson
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import load_only
 
@@ -19,10 +21,11 @@ from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunD
 from argus.api.sse import END, HEARTBEAT, SseHub
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
+from argus.knowledge import service as knowledge
 from argus.runtime.events import TERMINAL_STATUSES, load_events
 from argus.runtime.manager import RunManager
 from argus.runtime.snapshot import SnapshotReducer
-from argus.services.runs import create_and_start_run
+from argus.services.runs import MAX_LINKED_KBS, create_and_start_run, owned_kb_ids
 
 # stream-ticket only grants read access to a run's own event stream.
 router = APIRouter(
@@ -32,6 +35,8 @@ router = APIRouter(
 TICKET_TTL_S = 300
 HEARTBEAT_S = 15.0
 SNAPSHOT_PAGE = 1000  # events per query when reducing a snapshot
+
+RunView = Literal["active", "archived", "trash", "all"]
 
 
 def _manager(request: Request) -> RunManager:
@@ -67,6 +72,10 @@ async def list_runs(
         default=None, description="Cursor tie-breaker: with `before`, the id of the last run already seen"
     ),
     limit: int = Query(default=50, ge=1, le=200),
+    view: RunView = Query(
+        default="active",
+        description="active (default), archived, trash, or all (everything not in the trash)",
+    ),
 ):
     # Only the RunOut columns: never the result text or the council snapshot (polled every 10 s).
     q = (
@@ -74,6 +83,14 @@ async def list_runs(
         .options(load_only(*(getattr(Run, f) for f in RunOut.model_fields)))
         .where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
     )
+    if view == "trash":
+        q = q.where(Run.trashed_at.is_not(None))
+    else:
+        q = q.where(Run.trashed_at.is_(None))
+        if view == "active":
+            q = q.where(Run.archived_at.is_(None))
+        elif view == "archived":
+            q = q.where(Run.archived_at.is_not(None))
     if before and before_id:
         # Keyset on (created_at, id) so runs sharing a timestamp are not skipped at a page boundary.
         q = q.where(or_(Run.created_at < before, and_(Run.created_at == before, Run.id < before_id)))
@@ -96,10 +113,130 @@ async def get_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+    """Delete a run permanently (the UI moves runs to the trash first; see ``/trash``)."""
     run = await _own_run(db, principal.id, run_id)
     if run.status not in TERMINAL_STATUSES:
         raise ArgusError("Cancel the run before deleting it")
     await db.delete(run)
+
+
+async def _top_level(db, owner_id: uuid.UUID, run_id: uuid.UUID) -> Run:
+    run = await _own_run(db, owner_id, run_id)
+    if run.parent_run_id is not None:
+        raise ArgusError("Sub-runs follow their parent run; archive or trash the parent instead")
+    return run
+
+
+@router.post("/{run_id}/archive", response_model=RunOut)
+async def archive_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+    run = await _top_level(db, principal.id, run_id)
+    if run.trashed_at is not None:
+        raise ArgusError("Restore the run from the trash first")
+    run.archived_at = run.archived_at or datetime.now(UTC)
+    await db.flush()
+    return run
+
+
+@router.post("/{run_id}/unarchive", response_model=RunOut)
+async def unarchive_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+    run = await _top_level(db, principal.id, run_id)
+    run.archived_at = None
+    await db.flush()
+    return run
+
+
+@router.post("/{run_id}/trash", response_model=RunOut)
+async def trash_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+    """Move a finished run to the trash; it is purged after ``retention_trash_days``."""
+    run = await _top_level(db, principal.id, run_id)
+    if run.status not in TERMINAL_STATUSES:
+        raise ArgusError("Cancel the run before moving it to the trash")
+    run.trashed_at = run.trashed_at or datetime.now(UTC)
+    await db.flush()
+    return run
+
+
+@router.post("/{run_id}/restore", response_model=RunOut)
+async def restore_run(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep):
+    run = await _top_level(db, principal.id, run_id)
+    run.trashed_at = None
+    await db.flush()
+    return run
+
+
+@router.post("/trash/empty")
+async def empty_trash(principal: CurrentPrincipal, db: DbDep) -> dict:
+    """Permanently delete every run in the caller's trash (artifact blobs are swept by retention)."""
+    principal.require_scope("runs:write")
+    rows = await db.execute(
+        select(Run).where(
+            Run.owner_id == principal.id, Run.parent_run_id.is_(None), Run.trashed_at.is_not(None)
+        )
+    )
+    runs = list(rows.scalars())
+    for run in runs:
+        await db.delete(run)
+    return {"deleted": len(runs)}
+
+
+class KnowledgeLinkIn(BaseModel):
+    knowledge_base_ids: list[uuid.UUID] = Field(min_length=1, max_length=MAX_LINKED_KBS)
+
+
+@router.get("/{run_id}/knowledge")
+async def run_knowledge(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep) -> dict:
+    """Knowledge bases linked to this run."""
+    run = await _own_run(db, principal.id, run_id)
+    return {"linked": await knowledge.linked_summary(db, principal.id, run.knowledge_base_ids or [])}
+
+
+@router.post("/{run_id}/knowledge")
+async def link_knowledge(
+    run_id: uuid.UUID, data: KnowledgeLinkIn, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    """Link knowledge bases to a run, before or while it runs; live agents use them from their next turn."""
+    run = await _own_run(db, principal.id, run_id)
+    await owned_kb_ids(db, principal.id, data.knowledge_base_ids)
+    current = [str(i) for i in run.knowledge_base_ids or []]
+    added = [str(i) for i in dict.fromkeys(data.knowledge_base_ids) if str(i) not in current]
+    if len(current) + len(added) > MAX_LINKED_KBS:
+        raise ArgusError(f"A run can link at most {MAX_LINKED_KBS} knowledge bases")
+    run.knowledge_base_ids = current + added
+    await db.flush()
+    linked = await knowledge.linked_summary(db, principal.id, run.knowledge_base_ids)
+    await db.commit()
+    live = False
+    if added:
+        names = [k["name"] for k in linked if k["id"] in added]
+        live = await _manager(request).knowledge_changed(
+            run_id,
+            linked,
+            {"action": "linked", "knowledge_base_ids": added, "names": names},
+            user_name=principal.user.display_name or "You",
+        )
+    return {"linked": linked, "added": added, "live": live}
+
+
+@router.delete("/{run_id}/knowledge/{kb_id}")
+async def unlink_knowledge(
+    run_id: uuid.UUID, kb_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    run = await _own_run(db, principal.id, run_id)
+    current = [str(i) for i in run.knowledge_base_ids or []]
+    if str(kb_id) not in current:
+        raise NotFound("That knowledge base is not linked to this run")
+    gone = next((k for k in await knowledge.linked_summary(db, principal.id, [kb_id])), None)
+    run.knowledge_base_ids = [i for i in current if i != str(kb_id)]
+    await db.flush()
+    linked = await knowledge.linked_summary(db, principal.id, run.knowledge_base_ids)
+    await db.commit()
+    await _manager(request).knowledge_changed(
+        run_id,
+        linked,
+        {"action": "unlinked", "knowledge_base_ids": [str(kb_id)], "names": [gone["name"]] if gone else []},
+        user_name=principal.user.display_name or "You",
+    )
+    return {"linked": linked}
 
 
 @router.post("/{run_id}/pause", status_code=status.HTTP_202_ACCEPTED)

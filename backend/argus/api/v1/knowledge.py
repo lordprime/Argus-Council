@@ -5,15 +5,17 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, File, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from argus.api.deps import CurrentPrincipal, DbDep, write_scope
-from argus.core.errors import Conflict, NotFound
+from argus.api.deps import CurrentPrincipal, DbDep, SettingsDep, write_scope
+from argus.core.errors import ArgusError, Conflict, NotFound
 from argus.db.models import Council, KnowledgeBase, KnowledgeDocument, MemoryItem
 from argus.knowledge import service
-from argus.knowledge.service import MAX_FILE_BYTES, MAX_KB_CHUNKS, LimitExceeded
+from argus.knowledge.service import MAX_FILE_BYTES, MAX_TEXT_CHARS, LimitExceeded
+from argus.tools.web import FetchBlocked, default_client, default_resolver, fetch_raw, readable
 
 router = APIRouter(tags=["knowledge"], dependencies=[write_scope("knowledge:write")])
 
@@ -28,6 +30,17 @@ class KnowledgeBasePatch(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
 
 
+class TextDocumentIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+    source_url: str | None = Field(default=None, max_length=2000)
+
+
+class UrlDocumentIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+    title: str | None = Field(default=None, max_length=300)
+
+
 class MemoryIn(BaseModel):
     text: str = Field(min_length=1, max_length=service.MAX_MEMORY_TEXT)
     key: str = Field(default="", max_length=120)
@@ -40,9 +53,10 @@ def _kb_out(kb: KnowledgeBase, stats: dict[str, int]) -> dict:
         "id": str(kb.id),
         "name": kb.name,
         "description": kb.description,
+        "kind": kb.kind,
         "document_count": stats.get("document_count", 0),
         "chunk_count": stats.get("chunk_count", 0),
-        "max_chunks": MAX_KB_CHUNKS,
+        "max_chunks": service.MAX_LIBRARY_CHUNKS if kb.kind == "library" else service.MAX_KB_CHUNKS,
         "created_at": kb.created_at.isoformat(),
         "updated_at": kb.updated_at.isoformat(),
     }
@@ -57,7 +71,12 @@ def _doc_out(d: KnowledgeDocument) -> dict:
         "size": d.size,
         "sha256": d.sha256,
         "chunk_count": d.chunk_count,
+        "title": d.title,
+        "origin": d.origin,
+        "source_url": d.source_url,
+        "run_id": str(d.run_id) if d.run_id else None,
         "created_at": d.created_at.isoformat(),
+        "updated_at": d.updated_at.isoformat(),
     }
 
 
@@ -78,6 +97,7 @@ async def _name_taken(db, owner_id: uuid.UUID, name: str, exclude: uuid.UUID | N
 # ------------------------------------------------------------------ knowledge bases
 @router.get("/knowledge-bases")
 async def list_kbs(principal: CurrentPrincipal, db: DbDep) -> dict:
+    await service.library_kb(db, principal.id)  # always listed, even before anything is captured
     kbs = list(
         (
             await db.execute(
@@ -87,6 +107,7 @@ async def list_kbs(principal: CurrentPrincipal, db: DbDep) -> dict:
             )
         ).scalars()
     )
+    kbs.sort(key=lambda k: k.kind != "library")  # the research library first, then by name
     stats = await service.kb_stats(db, [k.id for k in kbs])
     return {"knowledge_bases": [_kb_out(k, stats[k.id]) for k in kbs]}
 
@@ -178,6 +199,45 @@ async def upload_document(
     kb = await _owned_kb(db, principal.id, kb_id)
     data = await file.read(MAX_FILE_BYTES + 1)
     doc = await service.ingest(db, kb, file.filename or "", file.content_type, data)
+    await db.refresh(doc)
+    return _doc_out(doc)
+
+
+@router.post("/knowledge-bases/{kb_id}/documents/text", status_code=status.HTTP_201_CREATED)
+async def add_text_document(
+    kb_id: uuid.UUID, data: TextDocumentIn, principal: CurrentPrincipal, db: DbDep
+) -> dict:
+    """Add pasted text (notes, an abstract, an article) as a document."""
+    kb = await _owned_kb(db, principal.id, kb_id)
+    doc = await service.ingest_text(db, kb, title=data.title, text=data.text, source_url=data.source_url)
+    await db.refresh(doc)
+    return _doc_out(doc)
+
+
+@router.post("/knowledge-bases/{kb_id}/documents/url", status_code=status.HTTP_201_CREATED)
+async def add_url_document(
+    kb_id: uuid.UUID, data: UrlDocumentIn, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
+) -> dict:
+    """Fetch a web page or text document (same SSRF checks as the agents' web_fetch) and add it."""
+    kb = await _owned_kb(db, principal.id, kb_id)
+    allow_private = settings.web_fetch_allow_private_urls
+    try:
+        async with default_client(allow_private) as client:
+            final_url, ctype, raw = await fetch_raw(
+                data.url.strip(),
+                allow_domains=["*"],
+                block_private=not allow_private,
+                client=client,
+                resolver=default_resolver,
+            )
+    except FetchBlocked as exc:
+        raise ArgusError(f"Could not fetch that URL: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise ArgusError(f"Could not fetch that URL: {type(exc).__name__}") from exc
+    title, text = readable(raw, ctype)
+    doc = await service.ingest_text(
+        db, kb, title=data.title or title or final_url, text=text, origin="url", source_url=final_url
+    )
     await db.refresh(doc)
     return _doc_out(doc)
 
