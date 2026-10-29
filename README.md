@@ -346,8 +346,10 @@ uv run --no-project --with-requirements tools/docs-requirements.txt mkdocs serve
 
 CI (`.github/workflows/ci.yml`) runs the backend lint and tests, migrations against Postgres
 (`alembic upgrade`, `check` and `downgrade`), integration tests with Postgres and Redis, the frontend
-audit, lint, typecheck, tests and build, a Compose smoke test, a UI end-to-end test against the
-production build with its strict CSP, and Trivy image and secret scans. The docs workflow builds
+audit, lint, typecheck, tests and build, a Compose smoke test, the backup, update and restore
+scripts end to end, and Trivy image and secret scans. The UI end-to-end test
+(`frontend/e2e/ui-smoke.cjs`) is not part of CI; run it against a local stack with
+`E2E_BASE=http://127.0.0.1:8080 node e2e/ui-smoke.cjs`. The docs workflow builds
 the site with `mkdocs build --strict` on every pull request.
 
 ## Security
