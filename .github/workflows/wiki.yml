@@ -7,7 +7,8 @@ name: Wiki
 # have a source. A commit is pushed only when the generated wiki changed.
 #
 # GitHub creates the wiki repository only after its first page is saved in the
-# web UI, so create any page once before this workflow can push.
+# web UI, so create any page once before this workflow can push. Until then the
+# sync is skipped with a warning (instead of failing on the checkout).
 
 on:
   push:
@@ -47,7 +48,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check that the wiki exists
+        id: wiki
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIKI_URL: https://github.com/${{ github.repository }}.wiki.git
+        run: |
+          set -uo pipefail
+          # Same credential hand-off as the push below: environment only, never a command line.
+          if GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            git ls-remote "$WIKI_URL" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Wiki not initialised::GitHub has not created the wiki repository yet. Open the repository's Wiki tab, save any page once, then re-run this workflow; it replaces that page with the docs."
+          fi
       - name: Check out the wiki
+        if: steps.wiki.outputs.exists == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}.wiki
@@ -57,13 +76,16 @@ jobs:
           # being left in wiki/.git/config while the converter runs.
           persist-credentials: false
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        if: steps.wiki.outputs.exists == 'true'
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: false # never restore caches in a publishing workflow
       - name: Convert docs/ into wiki pages
+        if: steps.wiki.outputs.exists == 'true'
         # stdlib-only script: no project install, no dependencies resolved.
         run: uv run --no-project --python 3.13 tools/docs_to_wiki.py --docs docs --mkdocs mkdocs.yml --out wiki --prune
       - name: Commit and push if the wiki changed
+        if: steps.wiki.outputs.exists == 'true'
         working-directory: wiki
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
