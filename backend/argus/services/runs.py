@@ -21,7 +21,9 @@ from argus.db.models import KnowledgeBase, Run
 from argus.runtime.events import TERMINAL_STATUSES
 from argus.runtime.guardrails import Guardrails
 from argus.runtime.manager import RunManager
+from argus.services import autocouncil
 from argus.services.councils import get_council
+from argus.services.llm import Route
 
 log = get_logger(__name__)
 
@@ -71,6 +73,16 @@ def ephemeral_roster(mode: str, size: int, provider: str, model: str) -> list[di
     return members
 
 
+def _name_seats(seats: list[autocouncil.PlannedSeat]) -> None:
+    """Default names for unnamed seats, numbered per role like the default rosters."""
+    taken: Counter[str] = Counter()
+    for s in seats:
+        taken[s.role] += 1
+        if not s.name:
+            title = ROLES[s.role].title
+            s.name = title if taken[s.role] == 1 else f"{title} {taken[s.role]}"
+
+
 def mode_defaults(mode: str, manager: RunManager) -> dict:
     """Base guardrail layer per mode (council and run settings override it)."""
     from argus.sandbox.client import RemoteSandbox
@@ -110,6 +122,49 @@ async def create_and_start_run(
         council_guardrails = council.guardrails or {}
         snapshot = {"council_id": str(council.id), "name": council.name, "members": members}
         mode = data.mode if data.mode != "general" else council.mode
+    elif data.seats:
+        seats = [
+            autocouncil.PlannedSeat(
+                role=s.role, name=s.name or "", focus=s.focus, provider=s.provider, model=s.model
+            )
+            for s in data.seats
+        ]
+        _name_seats(seats)
+        snapshot = {
+            "council_id": None,
+            "name": "Ad-hoc council",
+            "members": autocouncil.snapshot_members(seats),
+        }
+        mode = data.mode
+    elif data.auto_council or data.auto_models:
+        size = data.size or (autocouncil.MAX_SEATS if data.auto_council else DEFAULT_SIZES.get(data.mode, 5))
+        plan = await autocouncil.plan_council(
+            db,
+            manager.llm,
+            owner_id,
+            topic=data.topic,
+            description=data.description,
+            mode=data.mode,
+            max_size=size,
+            # Only a provider the caller actually chose counts as a preference (the fields have defaults).
+            preferred=Route(data.provider, data.model)
+            if {"provider", "model"} & data.model_fields_set and data.provider and data.model
+            else None,
+            roles=None if data.auto_council else roster_for(data.mode, size),
+            auto_roles=data.auto_council,
+            auto_models=data.auto_models,
+        )
+        if not plan.seats or not all(s.provider and s.model for s in plan.seats):
+            raise ArgusError(
+                "Could not plan a council: connect a provider first", details={"notes": plan.notes}
+            )
+        snapshot = {
+            "council_id": None,
+            "name": "Auto council" if data.auto_council else "Ad-hoc council",
+            "members": autocouncil.snapshot_members(plan.seats),
+            "plan": {k: v for k, v in plan.as_dict().items() if k != "seats"},
+        }
+        mode = data.mode
     else:
         size = data.size or DEFAULT_SIZES.get(data.mode, 5)
         snapshot = {

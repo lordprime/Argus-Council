@@ -10,6 +10,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Auto councils**: the composer can compose the council for the task (*Council: Auto*). A planner
+  model reads the topic and picks the roles, how many of each and a focus per seat, always with a
+  chair and an overseer; with no model reachable a keyword planner does it instead. Preview the
+  council before starting, or let the server plan when the run starts (`RunIn.auto_council`,
+  `POST /runs/plan`, explicit `RunIn.seats`).
+- **Auto models per seat** (*Model: Auto*): every seat gets a model matching its responsibility from
+  the providers you have connected: strong models for the chair, analysts, critics, architects and
+  coders, balanced ones for researchers and writers, fast ones for the monitor (`RunIn.auto_models`).
+
 - **Research library**: every page agents read is captured, with its source URL and the run that
   read it, into a per-user knowledge base that every later run searches. Deduplicated by URL and
   capped, evicting the least recently used sources (`ARGUS_KNOWLEDGE_CAPTURE_ENABLED`).

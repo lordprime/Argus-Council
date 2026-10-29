@@ -17,7 +17,7 @@ from sqlalchemy.orm import load_only
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
-from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, RunDetail, RunIn, RunOut
+from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, PlanIn, RunDetail, RunIn, RunOut
 from argus.api.sse import END, HEARTBEAT, SseHub
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
@@ -25,6 +25,8 @@ from argus.knowledge import service as knowledge
 from argus.runtime.events import TERMINAL_STATUSES, load_events
 from argus.runtime.manager import RunManager
 from argus.runtime.snapshot import SnapshotReducer
+from argus.services import autocouncil
+from argus.services.llm import Route
 from argus.services.runs import MAX_LINKED_KBS, create_and_start_run, owned_kb_ids
 
 # stream-ticket only grants read access to a run's own event stream.
@@ -58,6 +60,29 @@ async def create_run(data: RunIn, principal: CurrentPrincipal, db: DbDep, reques
         return RunOut.model_validate(await create_and_start_run(db, _manager(request), principal.id, data))
 
     return await idempotent(request, cache, str(principal.id), 201, run)
+
+
+@router.post("/plan")
+async def plan_run(data: PlanIn, principal: CurrentPrincipal, db: DbDep, request: Request) -> dict:
+    """Preview the council the server would compose for a task, with a model for every seat.
+
+    Send the returned ``seats`` back as ``RunIn.seats`` to start exactly this council.
+    """
+    principal.require_scope("runs:write")
+    plan = await autocouncil.plan_council(
+        db,
+        _manager(request).llm,
+        principal.id,
+        topic=data.topic,
+        description=data.description,
+        mode=data.mode,
+        max_size=data.max_size,
+        preferred=Route(data.provider, data.model) if data.provider and data.model else None,
+        roles=data.roles,
+        auto_roles=data.auto_council and data.roles is None,
+        auto_models=data.auto_models,
+    )
+    return plan.as_dict()
 
 
 @router.get("", response_model=list[RunOut])
