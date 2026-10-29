@@ -222,6 +222,27 @@ async def test_executor_timeout_and_limits():
     assert res["exit_code"] != 0
 
 
+async def test_executor_returns_when_background_children_hold_the_output(monkeypatch):
+    """`cmd &` without redirection keeps stdout open; the call must not wait for it until the timeout."""
+    import os
+    import resource
+    import time
+
+    import argus.sandbox.executor as executor
+
+    def limits(cpu_s, mem_mb):  # the real limits minus RLIMIT_NPROC, which counts all of the uid's processes
+        os.setsid()
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s + 1))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+
+    monkeypatch.setattr(executor, "_limits", limits)
+    start = time.monotonic()
+    res = await execute({}, "echo started; (sleep 0.2; echo late) & sleep 300 &", timeout_s=20)
+    assert time.monotonic() - start < 8
+    assert res["exit_code"] == 0 and not res["timed_out"], res
+    assert res["stdout"].split() == ["started", "late"]  # output written within the grace period is kept
+
+
 @pytest.mark.parametrize("path", ["../x", "/etc/passwd", "a/../../b"])
 async def test_executor_rejects_unsafe_paths(path):
     with pytest.raises(SandboxError):

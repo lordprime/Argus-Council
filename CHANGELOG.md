@@ -34,6 +34,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Sandbox commands that leave a background process holding stdout or stderr open (`cmd &`) no
+  longer hang until the timeout and report a kill: once the command exits, background processes
+  get a one-second grace to finish writing, then everything the run started is stopped. This was
+  the cause of the failing CI compose smoke test.
 - Test connection works for every provider, not only Anthropic: it no longer needs a default model,
   and any model id can be tested. Hosted kinds now suggest models.
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which

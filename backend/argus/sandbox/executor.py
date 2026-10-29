@@ -7,6 +7,7 @@ development only, in-process.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import os
@@ -23,6 +24,14 @@ MAX_FILES = 500
 MAX_FILE_BYTES = 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_OUTPUT = 64 * 1024
+# Once the command itself has exited, background processes (`cmd &`) may still hold its stdout or
+# stderr open. They get this long to finish writing; then everything the run started is killed so
+# the call returns now instead of waiting for them until the timeout.
+PIPE_GRACE_S = 1.0
+# After that kill, how long to wait for the pipes to close (a process outside the reach of the
+# kill, possible only without isolation, cannot keep the call open past this).
+PIPE_CLOSE_S = 5.0
+_POLL_S = 0.05
 
 
 class SandboxError(ValueError):
@@ -44,6 +53,24 @@ def _safe(path: str) -> PurePosixPath:
     if p.is_absolute() or ".." in p.parts or not p.parts:
         raise SandboxError(f"Unsafe path: {path}")
     return p
+
+
+async def _drain(stream: asyncio.StreamReader | None, buf: bytearray) -> None:
+    """Read ``stream`` to EOF, keeping only the tail that is returned."""
+    if stream is None:
+        return
+    while chunk := await stream.read(65536):
+        buf += chunk
+        if len(buf) > 2 * MAX_OUTPUT:
+            del buf[:-MAX_OUTPUT]
+
+
+async def _exited(proc: asyncio.subprocess.Process) -> int:
+    """Wait for the process to exit. Unlike ``proc.wait()`` this does not also wait for its pipes
+    to close, which a background child holding them open would delay indefinitely."""
+    while proc.returncode is None:  # noqa: ASYNC110 - asyncio has no event for "exited, pipes open"
+        await asyncio.sleep(_POLL_S)
+    return proc.returncode
 
 
 def _digest(data: bytes) -> str:
@@ -149,13 +176,26 @@ async def execute(
                 except (ProcessLookupError, PermissionError):
                     pass
 
+        out, err = bytearray(), bytearray()
+        readers = asyncio.ensure_future(asyncio.gather(_drain(proc.stdout, out), _drain(proc.stderr, err)))
         timed_out = False
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout_s + 2)
+            await asyncio.wait_for(_exited(proc), timeout_s + 2)
         except TimeoutError:
             timed_out = True
             await stop_everything()
-            out, err = await proc.communicate()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(_exited(proc), PIPE_CLOSE_S)
+        try:
+            await asyncio.wait_for(asyncio.shield(readers), PIPE_GRACE_S)
+        except TimeoutError:
+            # Background children still hold the output open: end them (below) and stop reading.
+            await stop_everything()
+            try:
+                await asyncio.wait_for(asyncio.shield(readers), PIPE_CLOSE_S)
+            except TimeoutError:
+                readers.cancel()
+                await asyncio.gather(readers, return_exceptions=True)
         # Reap background children (`cmd &`) so nothing from this run outlives it.
         await stop_everything()
         if isolation is not None:
