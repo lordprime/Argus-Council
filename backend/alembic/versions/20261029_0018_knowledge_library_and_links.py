@@ -23,7 +23,9 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("kind", sa.String(length=16), nullable=False, server_default="user"))
     with op.batch_alter_table("knowledge_documents", schema=None) as batch_op:
         batch_op.add_column(sa.Column("title", sa.String(length=300), nullable=False, server_default=""))
-        batch_op.add_column(sa.Column("origin", sa.String(length=16), nullable=False, server_default="upload"))
+        batch_op.add_column(
+            sa.Column("origin", sa.String(length=16), nullable=False, server_default="upload")
+        )
         batch_op.add_column(sa.Column("source_url", sa.String(length=2000), nullable=True))
         batch_op.add_column(sa.Column("url_hash", sa.String(length=64), nullable=True))
         batch_op.add_column(sa.Column("run_id", sa.Uuid(), nullable=True))
