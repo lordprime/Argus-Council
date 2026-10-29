@@ -395,3 +395,105 @@ def test_pricing():
     )
     u = Usage(input_tokens=1, output_tokens=2, cost_usd=0.5) + Usage(input_tokens=3, cost_usd=0.25)
     assert (u.input_tokens, u.output_tokens, u.cost_usd, u.total_tokens) == (4, 2, 0.75, 6)
+
+
+async def test_openai_sends_max_completion_tokens_and_drops_temperature_for_reasoning_models():
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+        )
+
+    p = OpenAICompatProvider(
+        api_key="sk-1", client=openai_transport(handler)
+    )  # the official API (kind openai)
+    await p.complete(req(model="gpt-5", max_tokens=64, temperature=0.2))
+    await p.complete(req(model="gpt-4.1", max_tokens=64, temperature=0.2))
+    assert bodies[0]["max_completion_tokens"] == 64 and "max_tokens" not in bodies[0]
+    assert "temperature" not in bodies[0]  # reasoning models only take the default
+    assert bodies[1]["max_completion_tokens"] == 64 and bodies[1]["temperature"] == 0.2
+    # Other OpenAI-compatible servers keep the classic parameter.
+    local = OpenAICompatProvider(base_url="https://x/v1", kind="ollama", client=openai_transport(handler))
+    await local.complete(req(model="llama3", max_tokens=32))
+    assert bodies[2]["max_tokens"] == 32 and "max_completion_tokens" not in bodies[2]
+
+
+UNSUPPORTED_MAX_TOKENS = {
+    "error": {
+        "message": "Unsupported parameter: 'max_tokens' is not supported with this model. "
+        "Use 'max_completion_tokens' instead.",
+        "type": "invalid_request_error",
+        "param": "max_tokens",
+        "code": "unsupported_parameter",
+    }
+}
+UNSUPPORTED_TEMPERATURE = {
+    "error": {
+        "message": "Unsupported value: 'temperature' does not support 0.2 with this model. "
+        "Only the default (1) value is supported.",
+        "param": "temperature",
+        "code": "unsupported_value",
+    }
+}
+
+
+async def test_openai_compatible_endpoint_adapts_to_rejected_parameters_once():
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "max_tokens" in body:
+            return httpx.Response(400, json=UNSUPPORTED_MAX_TOKENS)
+        if "temperature" in body:
+            return httpx.Response(400, json=UNSUPPORTED_TEMPERATURE)
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+        )
+
+    # A proxy in front of an OpenAI reasoning model, under a name the provider does not recognise.
+    p = OpenAICompatProvider(
+        base_url="https://proxy/v1", kind="openai_compatible", client=openai_transport(handler)
+    )
+    r = await p.complete(req(model="team/reasoner", max_tokens=50, temperature=0.2))
+    assert r.content == "ok" and len(bodies) == 3
+    assert bodies[-1]["max_completion_tokens"] == 50 and "temperature" not in bodies[-1]
+    # Learned per model: the next call goes straight through.
+    await p.complete(req(model="team/reasoner", max_tokens=50, temperature=0.2))
+    assert len(bodies) == 4
+
+    # Streaming adapts the same way (before anything is streamed).
+    sse = (
+        "data: "
+        + json.dumps({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})
+        + "\n\ndata: [DONE]\n\n"
+    )
+
+    def stream_handler(request):
+        body = json.loads(request.content)
+        if "max_tokens" in body:
+            return httpx.Response(400, json=UNSUPPORTED_MAX_TOKENS)
+        return httpx.Response(200, text=sse)
+
+    s = OpenAICompatProvider(
+        base_url="https://proxy/v1", kind="openai_compatible", client=openai_transport(stream_handler)
+    )
+    events = [e async for e in s.stream(req(model="other", max_tokens=10))]
+    assert "".join(e.text for e in events if e.type == "text") == "hi"
+
+
+async def test_openai_unrelated_400_is_not_retried():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(
+            400, json={"error": {"message": "Invalid 'messages': empty", "param": "messages"}}
+        )
+
+    p = OpenAICompatProvider(api_key="sk-1", client=openai_transport(handler))
+    with pytest.raises(ProviderError) as err:
+        await p.complete(req(model="gpt-5"))
+    assert err.value.status == 400 and len(calls) == 1

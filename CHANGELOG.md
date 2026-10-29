@@ -43,6 +43,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- OpenAI's reasoning models (GPT-5, o-series) work: the official API is sent `max_completion_tokens`
+  instead of `max_tokens`, and no `temperature` for models that only take the default. Any
+  OpenAI-compatible endpoint that rejects either parameter with a 400 is retried once with the
+  adjusted request, and the adjustment is remembered for that model.
 - Guardrail warnings no longer look like failures: only events that blocked or halted something are
   red; warnings and redactions are amber. Each one is a one-line summary that expands to the rule,
   limit, what was observed, the tool, the source page and, for flagged instruction-like text, the

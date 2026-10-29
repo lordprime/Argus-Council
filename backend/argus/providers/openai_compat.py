@@ -8,6 +8,7 @@ such as vLLM, LM Studio, llama.cpp and Ollama (``/v1``).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -66,6 +67,35 @@ def _parse_args(raw: str | None) -> dict[str, Any]:
     return val if isinstance(val, dict) else {"value": val}
 
 
+# OpenAI reasoning models (o1, o3, o4-mini, gpt-5...) take only the default temperature.
+_REASONING_MODEL = re.compile(r"^(o\d|gpt-5)")
+# Parameters an endpoint may reject with a 400 "unsupported parameter/value", and how to adapt.
+_MAX_TOKENS = "max_completion_tokens"  # quirk: send this instead of max_tokens
+_NO_TEMPERATURE = "no_temperature"  # quirk: leave temperature out
+
+
+def _quirk_for(status: int, text: str) -> str | None:
+    """The request change a 400 asks for, if it is one of the known parameter mismatches."""
+    if status != 400:
+        return None
+    low = text.lower()
+    if "max_tokens" in low and ("max_completion_tokens" in low or "unsupported" in low):
+        return _MAX_TOKENS
+    if "temperature" in low and (
+        "unsupported" in low or "does not support" in low or "only the default" in low
+    ):
+        return _NO_TEMPERATURE
+    return None
+
+
+class _Rejected(Exception):
+    """A streaming request the endpoint refused before sending anything."""
+
+    def __init__(self, error: ProviderError) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 class OpenAICompatProvider(Provider):
     kind = "openai"
 
@@ -89,15 +119,37 @@ class OpenAICompatProvider(Provider):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0))
         self.headers = headers
+        # Per model: request changes an endpoint asked for (see _quirk_for), so each is paid for once.
+        self._quirks: dict[str, set[str]] = {}
+
+    def _quirks_for(self, model: str) -> set[str]:
+        quirks = set(self._quirks.get(model, ()))
+        if self.kind == "openai":
+            # The official API takes max_completion_tokens for every chat model; max_tokens is
+            # rejected by the reasoning models.
+            quirks.add(_MAX_TOKENS)
+            if _REASONING_MODEL.match(model.rsplit("/", 1)[-1]):
+                quirks.add(_NO_TEMPERATURE)
+        return quirks
+
+    def _learn(self, model: str, status: int, text: str) -> bool:
+        """Remember the change a rejected request asks for; True when retrying could now succeed."""
+        quirk = _quirk_for(status, text)
+        if quirk is None or quirk in self._quirks_for(model):
+            return False
+        self._quirks.setdefault(model, set()).add(quirk)
+        return True
 
     def _body(self, req: CompletionRequest, stream: bool) -> dict[str, Any]:
+        quirks = self._quirks_for(req.model)
+        tokens_key = "max_completion_tokens" if _MAX_TOKENS in quirks else "max_tokens"
         body: dict[str, Any] = {
             "model": req.model,
             "messages": _to_openai_messages(req.messages),
-            "max_tokens": req.max_tokens,
+            tokens_key: req.max_tokens,
             "stream": stream,
         }
-        if req.temperature is not None:
+        if req.temperature is not None and _NO_TEMPERATURE not in quirks:
             body["temperature"] = req.temperature
         if req.stop:
             body["stop"] = req.stop
@@ -144,7 +196,14 @@ class OpenAICompatProvider(Provider):
         return usage
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        data = (await self._post("/chat/completions", self._body(request, stream=False))).json()
+        for attempt in range(3):  # at most one retry per known parameter mismatch
+            try:
+                resp = await self._post("/chat/completions", self._body(request, stream=False))
+                break
+            except ProviderError as exc:
+                if attempt == 2 or not self._learn(request.model, exc.status or 0, str(exc)):
+                    raise
+        data = resp.json()
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         calls = [
@@ -167,6 +226,17 @@ class OpenAICompatProvider(Provider):
         )
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        for attempt in range(3):
+            try:
+                async for event in self._stream(request):
+                    yield event
+                return
+            except _Rejected as exc:
+                # Rejected before any output was sent, so retrying with the adjusted request is safe.
+                if attempt == 2 or not self._learn(request.model, exc.error.status or 0, str(exc.error)):
+                    raise exc.error from None
+
+    async def _stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
         body = self._body(request, stream=True)
         text: list[str] = []
         thinking: list[str] = []
@@ -180,7 +250,7 @@ class OpenAICompatProvider(Provider):
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    raise ProviderError.from_status(self.name, resp.status_code, resp.text)
+                    raise _Rejected(ProviderError.from_status(self.name, resp.status_code, resp.text))
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
