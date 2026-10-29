@@ -19,6 +19,7 @@ import {
   Plug,
   Plus,
   Send,
+  ShieldAlert,
   ShieldX,
   Sparkles,
   Vote,
@@ -166,6 +167,57 @@ export function CouncilRail({ runId, members, state, live, onFocus, focused }: {
 // ------------------------------------------------------------------ timeline items
 function memberName(members: Member[], id?: string) {
   return members.find((m) => m.id === id)?.name ?? "Agent";
+}
+
+/** Friendly titles for the guardrail rules users meet most; anything else shows its rule id. */
+const VIOLATION_TITLE: Record<string, string> = {
+  "content.injection": "Possible prompt injection in tool output",
+  "content.secret": "Secret redacted",
+  "content.blocked_topic": "Blocked topic",
+};
+
+/**
+ * A guardrail event. Only what stopped something (blocked, halted) is red; a warning or a redaction is
+ * the guardrail doing its job and reads as amber. One line by default, details on expand.
+ */
+function ViolationRow({ d }: { d: Record<string, any> }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const stopped = d.action === "blocked" || d.action === "halted";
+  const Icon = stopped ? ShieldX : ShieldAlert;
+  const target = (d.target ?? {}) as { tool?: string; source?: string };
+  const details: [string, ReactNode][] = [
+    ["Rule", <code key="r">{d.rule}</code>],
+    ["Action", d.action],
+    ["Limit", String(d.limit)],
+    ["Observed", String(d.observed)],
+    ...(target.tool ? [["Tool", <code key="t">{target.tool}</code>] as [string, ReactNode]] : []),
+    ...(target.source
+      ? [["Source", <a key="s" href={target.source} target="_blank" rel="noopener noreferrer nofollow" className="text-accent underline break-all">{target.source}</a>] as [string, ReactNode]]
+      : []),
+  ];
+  return (
+    <div role="status">
+    <details className={cn("group rounded-md border px-3 py-2 text-sm", stopped ? "border-danger bg-danger-subtle" : "border-warning/60 bg-warning-subtle/60")}
+      data-violation={d.action}>
+      <summary className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden">
+        <Icon className={cn("size-4 mt-0.5 shrink-0", stopped ? "text-danger" : "text-warning")} aria-hidden />
+        <span className="min-w-0 flex-1">
+          <strong className="font-medium">{VIOLATION_TITLE[d.rule] ?? d.rule}</strong>
+          <span className="text-fg-muted">{" · "}{d.action}{target.tool ? ` · ${target.tool}` : ""}</span>
+          <span className="block text-fg-muted">{d.message}</span>
+        </span>
+        <ChevronRight className="size-4 mt-0.5 shrink-0 text-fg-subtle transition-transform group-open:rotate-90" aria-hidden />
+      </summary>
+      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 pl-6 text-xs">
+        {details.map(([k, v]) => (
+          <div key={k} className="contents"><dt className="text-fg-subtle">{k}</dt><dd className="min-w-0 break-words">{v}</dd></div>
+        ))}
+      </dl>
+      {d.excerpt && (
+        <blockquote className="mt-2 ml-6 border-l-2 border-border-strong pl-2 text-xs text-fg-muted break-words">{d.excerpt}</blockquote>
+      )}
+    </details>
+    </div>
+  );
 }
 
 function Row({ icon: Icon, tone, children }: { icon: typeof Bot; tone?: string; children: ReactNode }) {
@@ -443,12 +495,7 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
         </Row>
       );
     case "violation":
-      return (
-        <div className="rounded-md border border-danger bg-danger-subtle px-3 py-2 text-sm flex items-start gap-2" role="status">
-          <ShieldX className="size-4 text-danger mt-0.5" aria-hidden />
-          <div><strong>{d.rule}</strong>: {d.message} <span className="text-fg-muted">(limit {String(d.limit)}, observed {String(d.observed)}, {d.action})</span></div>
-        </div>
-      );
+      return <ViolationRow d={d} />;
     case "citation":
       return <Row icon={Link2}>Source {d.n}: <a href={d.url} target="_blank" rel="noopener noreferrer nofollow" className="text-accent underline">{d.title}</a></Row>;
     case "user":

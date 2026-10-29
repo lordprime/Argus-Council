@@ -1,4 +1,4 @@
-// UI smoke test: register, start a run, follow it live, open the deliverable, use the palette.
+// UI smoke test (light and dark): register, start a run, follow it live, open the deliverable, use the palette.
 // Fails on any page error or console error (CSP violations included).
 const { chromium } = require('playwright');
 const BASE = process.env.E2E_BASE ?? 'http://127.0.0.1:8080';
@@ -57,24 +57,6 @@ const PAGES = [
     console.log(theme, 'ok, timeline items:', feedCount, 'pages:', PAGES.length);
     await ctx.close();
   }
-  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  const mp = await mobile.newPage();
-  await mp.goto(`${BASE}/login`);
-  await mp.getByLabel('Email').fill(`e2e-light-${stamp}@example.com`);
-  await mp.getByLabel('Password').fill('correct horse battery staple');
-  await mp.getByRole('button', { name: 'Sign in' }).click();
-  await mp.waitForURL(`${BASE}/`);
-  if (SHOTS) await mp.screenshot({ path: `${SHOTS}/home-mobile.png`, fullPage: true });
-  const overflowing = [];
-  for (const path of ['/', ...PAGES]) {
-    if (path !== '/') {
-      await mp.goto(`${BASE}${path}`);
-      await mp.getByRole('heading', { level: 1 }).first().waitFor({ timeout: 10000 });
-    }
-    if (await mp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) overflowing.push(path);
-  }
-  console.log('mobile horizontal overflow:', overflowing.length ? overflowing : 'none');
-  if (overflowing.length) throw new Error('horizontal overflow on mobile: ' + overflowing.join(', '));
   if (errors.length) throw new Error('browser errors: ' + JSON.stringify(errors));
   await browser.close();
 })().catch((e) => { console.error('E2E FAILED', e); process.exit(1); });

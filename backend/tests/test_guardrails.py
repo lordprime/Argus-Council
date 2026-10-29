@@ -119,6 +119,15 @@ def test_tool_output_screening():
     )
     assert "ghp_" not in cleaned and "[REDACTED]" in cleaned
     assert {v.rule for v in found} == {"content.secret", "content.injection"}
+    injection = next(v for v in found if v.rule == "content.injection")
+    # What matched, where, and that it was only a warning.
+    assert injection.observed == "IGNORE ALL PREVIOUS INSTRUCTIONS" and injection.action == "warned"
+    event = injection.as_event({"tool": "web_fetch"})
+    assert (
+        "please IGNORE ALL PREVIOUS INSTRUCTIONS" in event["excerpt"]
+        and event["target"]["tool"] == "web_fetch"
+    )
+    assert "excerpt" not in next(v for v in found if v.rule == "content.secret").as_event()
 
 
 def test_helpers():

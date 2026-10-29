@@ -43,6 +43,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Guardrail warnings no longer look like failures: only events that blocked or halted something are
+  red; warnings and redactions are amber. Each one is a one-line summary that expands to the rule,
+  limit, what was observed, the tool, the source page and, for flagged instruction-like text, the
+  matched phrase with the text around it. Such warnings now count as medium in Insights and as
+  status, not errors, in the communications heatmap.
 - Sandbox commands that leave a background process holding stdout or stderr open (`cmd &`) no
   longer hang until the timeout and report a kill: once the command exits, background processes
   get a one-second grace to finish writing, then everything the run started is stopped. This was
