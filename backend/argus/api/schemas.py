@@ -262,6 +262,35 @@ class CompleteIn(BaseModel):
 OutputFormat = Literal["txt", "md", "latex", "pdf", "html", "docx", "json"]
 
 
+class SeatIn(BaseModel):
+    role: str = Field(min_length=1, max_length=40)
+    name: str | None = Field(default=None, max_length=120)
+    focus: str = Field(default="", max_length=300)
+    provider: str = Field(min_length=1, max_length=64)
+    model: str = Field(min_length=1, max_length=120)
+
+    @field_validator("role")
+    @classmethod
+    def _known_role(cls, v: str) -> str:
+        from argus.agents.roles import ROLES
+
+        if v not in ROLES:
+            raise ValueError(f"unknown role '{v}'")
+        return v
+
+
+class PlanIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=20_000)
+    mode: CouncilMode = "general"
+    max_size: int = Field(default=12, ge=1, le=12)
+    provider: str | None = Field(default=None, max_length=64, description="The user's preferred provider")
+    model: str | None = Field(default=None, max_length=120)
+    auto_council: bool = True
+    auto_models: bool = True
+    roles: list[str] | None = Field(default=None, max_length=64, description="Fixed roles (only pick models)")
+
+
 class RunIn(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=20_000)
@@ -275,6 +304,11 @@ class RunIn(BaseModel):
     knowledge_base_ids: list[uuid.UUID] = Field(
         default_factory=list, max_length=20, description="Knowledge bases to link to the run from the start"
     )
+    # Ad-hoc councils only (no council_id): explicit seats (e.g. from POST /runs/plan), or let the
+    # server compose the council for the task and/or pick a model per seat.
+    seats: list[SeatIn] | None = Field(default=None, min_length=1, max_length=64)
+    auto_council: bool = Field(default=False, description="Compose the council's roles for this task")
+    auto_models: bool = Field(default=False, description="Pick a model for every seat by its role")
 
     _guardrails = field_validator("guardrails")(_valid_guardrails)
 

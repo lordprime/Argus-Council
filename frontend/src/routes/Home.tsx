@@ -1,9 +1,10 @@
-import { BookPlus, ChevronDown, ChevronRight, History, Play } from "lucide-react";
+import { BookPlus, ChevronDown, ChevronRight, History, Play, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { RoleChip } from "@/components/councils/parts";
 import { KnowledgePicker, QuickAddKnowledgeDialog } from "@/components/knowledge/AddKnowledge";
+import { CouncilPlanPreview } from "@/components/run/CouncilPlanPreview";
 import { RunRowList } from "@/components/run/RunRow";
 import {
   Button, Callout, Card, Chip, EmptyState, ErrorState, FormActions, Kbd, Page, PageHeader, SectionTitle, Segmented, SelectField, Skeleton,
@@ -14,7 +15,9 @@ import { useKnowledgeBases } from "@/features/knowledge/queries";
 import { SaveTemplateButton, TemplatePicker } from "@/features/templates/components";
 import { errorMessage } from "@/lib/api";
 import { providerKindLabel } from "@/lib/providers";
-import { useCouncils, useCreateRun, useProviderKinds, useProviders, useRoles, useRunsList } from "@/lib/queries";
+import {
+  useCouncils, useCreateRun, usePlanCouncil, useProviderKinds, useProviders, useRoles, useRunsList, type CouncilPlan, type PlanRequest,
+} from "@/lib/queries";
 import type { Mode, OutputFormat } from "@/lib/types";
 
 const DEFAULT_SIZE: Record<Mode, number> = { research: 5, coding: 6, chat: 2, general: 4 };
@@ -52,6 +55,9 @@ export function rosterFor(rosters: Record<string, string[]> | undefined, oversee
 export interface ComposerPrefill { topic: string; mode: Mode; description?: string }
 const MIN_SEATS = 1;
 const MAX_SEATS = 12;
+/** Select value for "let the server decide" (council roles / per-seat models). */
+const AUTO = "__auto__";
+const AUTO_MAX_SEATS = 8;
 
 function Composer() {
   const navigate = useNavigate();
@@ -65,7 +71,8 @@ function Composer() {
   const [topic, setTopic] = useState(prefill?.topic ?? "");
   const [description, setDescription] = useState(prefill?.description ?? "");
   const [mode, setMode] = useState<Mode>(prefill?.mode ?? "research");
-  const [councilId, setCouncilId] = useState("");
+  // AUTO: compose the council's roles for this task (council) / pick a model for every seat (model).
+  const [councilId, setCouncilId] = useState(AUTO);
   const [size, setSize] = useState(DEFAULT_SIZE.research);
   const [outputs, setOutputs] = useState<OutputFormat[]>(["md"]);
   const [preset, setPreset] = useState<keyof typeof PRESETS>("balanced");
@@ -74,12 +81,17 @@ function Composer() {
   const [maxSteps, setMaxSteps] = useState("80");
   const [interceptMode, setInterceptMode] = useState("hold");
   const [approvals, setApprovals] = useState<string[]>(["shell", "package_install", "remote_agent", "network_write"]);
-  const [route, setRoute] = useState("");
+  const [route, setRoute] = useState(AUTO);
+  const planner = usePlanCouncil();
+  const [plan, setPlan] = useState<{ key: string; plan: CouncilPlan } | null>(null);
   const knowledge = useKnowledgeBases();
   const [kbIds, setKbIds] = useState<string[]>([]);
   const [addingKnowledge, setAddingKnowledge] = useState(false);
 
-  useEffect(() => setSize(DEFAULT_SIZE[mode]), [mode]);
+  const autoCouncil = councilId === AUTO;
+  const adHoc = !councilId || autoCouncil;
+  const autoModels = adHoc && route === AUTO;
+  useEffect(() => setSize(autoCouncil ? AUTO_MAX_SEATS : DEFAULT_SIZE[mode]), [mode, autoCouncil]);
   useEffect(() => {
     const prefill = (e: Event) => {
       const d = (e as CustomEvent<{ topic: string; mode: Mode }>).detail;
@@ -110,10 +122,28 @@ function Composer() {
   }, [providers.data, kinds.data]);
 
   const noProviders = !providers.isLoading && !kinds.isLoading && routes.every((r) => r.value.startsWith("mock::"));
-  // Keep the selection on a route that exists: the first one until the user picks.
+  // Keep the selection on a route that exists (or Auto).
   useEffect(() => {
-    if (routes.length && !routes.some((r) => r.value === route)) setRoute(routes[0]!.value);
+    if (route !== AUTO && routes.length && !routes.some((r) => r.value === route)) setRoute(AUTO);
   }, [routes, route]);
+
+  /** What the server is asked to plan; a preview is only reused while this stays the same. */
+  const planRequest = (): PlanRequest | null => {
+    if (!adHoc || (!autoCouncil && !autoModels) || !topic.trim()) return null;
+    const [provider, model] = route === AUTO ? [undefined, undefined] : route.split("::");
+    return {
+      topic: topic.trim(), description, mode, max_size: size, provider, model,
+      auto_council: autoCouncil, auto_models: autoModels,
+      ...(autoCouncil ? {} : { roles: roster }),
+    };
+  };
+  const request = planRequest();
+  const planKey = request ? JSON.stringify(request) : "";
+  const freshPlan = plan && plan.key === planKey ? plan.plan : null;
+  const preview = () => {
+    if (!request) return;
+    planner.mutate(request, { onSuccess: (p) => setPlan({ key: JSON.stringify(request), plan: p }) });
+  };
 
   /** The composer's run configuration (also what "Save as template" stores). */
   const buildConfig = () => {
@@ -125,18 +155,23 @@ function Composer() {
       guardrails.oversight = { intercept_mode: interceptMode };
       guardrails.approval_required = approvals;
     }
-    return {
-      topic: topic.trim(), description, mode, outputs,
-      ...(councilId ? { council_id: councilId } : { size, provider, model }),
-      guardrails,
-    };
+    const council = !adHoc
+      ? { council_id: councilId }
+      : { size, ...(autoModels ? {} : { provider, model }), auto_council: autoCouncil, auto_models: autoModels };
+    return { topic: topic.trim(), description, mode, outputs, ...council, guardrails };
   };
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
     if (!topic.trim()) return;
     try {
-      const run = await create.mutateAsync({ ...buildConfig(), ...(kbIds.length ? { knowledge_base_ids: kbIds } : {}) });
+      // A fresh preview is started exactly as shown; otherwise the server plans when the run is created.
+      const seats = freshPlan?.seats.map(({ role, name, focus, provider, model }) => ({ role, name, focus, provider, model }));
+      const run = await create.mutateAsync({
+        ...buildConfig(),
+        ...(seats ? { seats } : {}),
+        ...(kbIds.length ? { knowledge_base_ids: kbIds } : {}),
+      });
       navigate(`/runs/${run.id}`);
     } catch {
       /* rendered below */
@@ -157,26 +192,45 @@ function Composer() {
         <p className="text-xs text-fg-subtle -mt-3">{MODES.find((m) => m.value === mode)?.hint}</p>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField label="Council" value={councilId} onChange={(e) => setCouncilId(e.target.value)}>
-            <option value="">Auto from mode</option>
+          <SelectField label="Council" value={councilId} onChange={(e) => setCouncilId(e.target.value)}
+            hint={autoCouncil ? "Roles and their focus are chosen for this task." : undefined}>
+            <option value={AUTO}>Auto: compose for this task</option>
+            <option value="">Default roster for the mode</option>
             {councils.data?.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.members.length} seats)</option>)}
           </SelectField>
           {!councilId && (
             <SelectField label="Model" value={route} onChange={(e) => setRoute(e.target.value)}
-              hint={noProviders ? "No provider connected yet." : undefined}>
-              {routes.length ? routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)
-                : <option value="">No models available</option>}
+              hint={noProviders ? "No provider connected yet."
+                : autoModels ? "Strong models for the chair, critics and builders; fast ones for overseers." : undefined}>
+              <option value={AUTO}>Auto: best model per seat</option>
+              {routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </SelectField>
           )}
         </div>
 
         {!councilId && (
           <div className="flex flex-col gap-2">
-            <Stepper label="Council size" value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
-              hint={`Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
-            <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
-              {roster.map((r, i) => <RoleChip key={`${r}-${i}`} role={r} roles={roles.data?.roles} overseer={overseers.has(r)} />)}
-            </ul>
+            <Stepper label={autoCouncil ? "Max seats" : "Council size"} value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
+              hint={autoCouncil ? "The planner uses as few seats as the task needs, up to this." : `Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
+            {!autoCouncil && !freshPlan && (
+              <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
+                {roster.map((r, i) => <RoleChip key={`${r}-${i}`} role={r} roles={roles.data?.roles} overseer={overseers.has(r)} />)}
+              </ul>
+            )}
+            {(autoCouncil || autoModels) && (
+              <div className="flex flex-col gap-2">
+                <Button type="button" size="sm" variant="ghost" className="self-start -ml-2.5" icon={Sparkles}
+                  loading={planner.isPending} disabled={!request} onClick={preview}
+                  title={!request ? "Add a topic first" : undefined}>
+                  {freshPlan ? "Plan again" : autoCouncil ? "Preview the council" : "Preview the models"}
+                </Button>
+                {planner.error != null && <Callout tone="danger" title="Could not plan the council">{errorMessage(planner.error)}</Callout>}
+                {plan && <CouncilPlanPreview plan={plan.plan} stale={!freshPlan} />}
+                {!plan && autoCouncil && (
+                  <p className="text-xs text-fg-subtle">The council is composed when the run starts. Preview it to see the seats and models first.</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

@@ -80,6 +80,8 @@ services:
       # LLM providers users add themselves (Ollama, vLLM, LM Studio on your network need true).
       # Providers configured here through ARGUS_*_BASE_URL are not affected.
       ARGUS_PROVIDER_ALLOW_PRIVATE_URLS: ${ARGUS_PROVIDER_ALLOW_PRIVATE_URLS:-false}
+      # Offline demo model; off unless set (CI turns it on for the UI end-to-end run).
+      ARGUS_ENABLE_MOCK_PROVIDER: ${ARGUS_ENABLE_MOCK_PROVIDER:-}
       ARGUS_METRICS_TOKEN: ${ARGUS_METRICS_TOKEN:-}
       # Retention (0 = keep forever). The ledger is never pruned by default: pruning breaks verification.
       ARGUS_RETENTION_RUN_DAYS: ${ARGUS_RETENTION_RUN_DAYS:-0}

@@ -146,6 +146,7 @@ class Settings(BaseSettings):
         "runner_url",
         "runner_token",
         "metrics_token",
+        "enable_mock_provider",
         mode="before",
     )
     @classmethod

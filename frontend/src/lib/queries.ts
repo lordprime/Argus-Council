@@ -111,6 +111,50 @@ export interface NewRun {
   guardrails: Record<string, unknown>;
   /** Knowledge bases linked to the run from the start. */
   knowledge_base_ids?: string[];
+  /** Exact seats, e.g. from a council plan preview (ad-hoc runs only). */
+  seats?: { role: string; name?: string; focus?: string; provider: string; model: string }[];
+  /** Let the server compose the roles for this task / pick a model for every seat. */
+  auto_council?: boolean;
+  auto_models?: boolean;
+}
+
+export type ModelTier = "strong" | "balanced" | "fast";
+
+export interface PlannedSeat {
+  role: string;
+  name: string;
+  focus: string;
+  reason: string;
+  provider: string;
+  model: string;
+  tier: ModelTier;
+  overseer: boolean;
+}
+
+export interface CouncilPlan {
+  seats: PlannedSeat[];
+  rationale: string;
+  /** llm: composed by a model · heuristic: from keywords (no model reachable) · roster: fixed roles, models only */
+  planner: "llm" | "heuristic" | "roster";
+  planner_route: { provider: string; model: string } | null;
+  notes: string[];
+}
+
+export interface PlanRequest {
+  topic: string;
+  description: string;
+  mode: Mode;
+  max_size: number;
+  provider?: string;
+  model?: string;
+  auto_council: boolean;
+  auto_models: boolean;
+  roles?: string[];
+}
+
+/** Preview the council the server would compose for a task (POST /runs/plan). */
+export function usePlanCouncil() {
+  return useMutation({ mutationFn: (body: PlanRequest) => api.post<CouncilPlan>(`${V1}/runs/plan`, body) });
 }
 
 export function useCreateRun() {

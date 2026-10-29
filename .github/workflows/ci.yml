@@ -147,6 +147,8 @@ jobs:
           ARGUS_VERSION=ci
           # The smoke, UI and backup tests register several accounts.
           ARGUS_ALLOW_REGISTRATION=true
+          # The UI end-to-end test starts runs with no provider keys: use the offline mock model.
+          ARGUS_ENABLE_MOCK_PROVIDER=true
           ENV
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --wait --wait-timeout 180
           ./scripts/smoke.sh http://127.0.0.1:8000

@@ -2064,6 +2064,55 @@
         }
       }
     },
+    "/api/v1/runs/plan": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Plan Run",
+        "description": "Preview the council the server would compose for a task, with a model for every seat.\n\nSend the returned ``seats`` back as ``RunIn.seats`` to start exactly this council.",
+        "operationId": "plan_run_api_v1_runs_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Plan Run Api V1 Runs Plan Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/runs/{run_id}": {
       "get": {
         "tags": [
@@ -8803,6 +8852,96 @@
         ],
         "title": "PasswordIn"
       },
+      "PlanIn": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Topic"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Description",
+            "default": ""
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "general",
+              "research",
+              "coding",
+              "chat"
+            ],
+            "title": "Mode",
+            "default": "general"
+          },
+          "max_size": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Max Size",
+            "default": 12
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "The user's preferred provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "auto_council": {
+            "type": "boolean",
+            "title": "Auto Council",
+            "default": true
+          },
+          "auto_models": {
+            "type": "boolean",
+            "title": "Auto Models",
+            "default": true
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles",
+            "description": "Fixed roles (only pick models)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic"
+        ],
+        "title": "PlanIn"
+      },
       "ProfilePatch": {
         "properties": {
           "display_name": {
@@ -9830,6 +9969,34 @@
             "maxItems": 20,
             "title": "Knowledge Base Ids",
             "description": "Knowledge bases to link to the run from the start"
+          },
+          "seats": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SeatIn"
+                },
+                "type": "array",
+                "maxItems": 64,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seats"
+          },
+          "auto_council": {
+            "type": "boolean",
+            "title": "Auto Council",
+            "description": "Compose the council's roles for this task",
+            "default": false
+          },
+          "auto_models": {
+            "type": "boolean",
+            "title": "Auto Models",
+            "description": "Pick a model for every seat by its role",
+            "default": false
           }
         },
         "type": "object",
@@ -9997,6 +10164,53 @@
           "finished_at"
         ],
         "title": "RunOut"
+      },
+      "SeatIn": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Role"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "focus": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Focus",
+            "default": ""
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "provider",
+          "model"
+        ],
+        "title": "SeatIn"
       },
       "SetupOut": {
         "properties": {
