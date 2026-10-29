@@ -23,11 +23,18 @@ flowchart TB
 ## Deploy
 
 ```bash
-./scripts/deploy.sh             # create deploy/.env if needed, build, start, wait until ready
+./scripts/deploy.sh             # build, run every pending migration, start, wait until ready
+./scripts/deploy.sh --pull      # git pull first: a full update in one command
 ./scripts/deploy.sh --smoke     # also run the end-to-end smoke test afterwards
 ./scripts/deploy.sh --no-build  # start the images already built (see build.sh)
+./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
 ./scripts/deploy.sh --ca FILE   # trust an extra CA while building
 ```
+
+`deploy.sh` handles installs and updates alike. On a fresh install it builds, applies all database
+migrations (`alembic upgrade head`) as their own step, and only then starts the stack; if a migration
+fails nothing is started. On an existing deployment (`deploy/.version` exists) it hands over to
+`update.sh`, below: backup, build, migrate, restart, automatic rollback.
 
 On first run `deploy.sh` copies `deploy/.env.example` to `deploy/.env` and generates any empty
 secret (`ARGUS_SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `ARGUS_SANDBOX_TOKEN`). It waits
@@ -65,9 +72,10 @@ trusted network, set `ARGUS_CORS_ORIGINS` to your public origin, and close regis
 
 `update.sh` refuses to pull over local changes. Before it builds, it tags the images that are
 running as `rollback-<time>`, records the database's Alembic revision, takes a backup and writes
-`deploy/.rollback-state`, so a rollback still works if the script is interrupted. Migrations run
-when the new API container starts, and the new version gets `ARGUS_READY_TIMEOUT` seconds (default
-240) to become ready.
+`deploy/.rollback-state`, so a rollback still works if the script is interrupted. It then stops the
+old API and applies every pending migration with the new images as a separate step (the log shows
+the revision before and after), starts the new version, and gives it `ARGUS_READY_TIMEOUT` seconds
+(default 240) to become ready. A failed migration rolls back the same way as an unhealthy start.
 
 If it does not, the update rolls back by itself: the API and web containers are stopped, the
 pre-update backup is restored when the schema changed (or, with no usable backup, the schema is
@@ -123,6 +131,7 @@ default). `0` days keeps data forever.
 | `ARGUS_RETENTION_EVENT_DAYS` | `0` | Only the event log of finished runs; the run, result and artifacts stay |
 | `ARGUS_RETENTION_AUDIT_DAYS` | `365` | Audit rows |
 | `ARGUS_RETENTION_LEDGER_DAYS` | `0` | Ledger entries. Keep `0`: pruning breaks verification permanently |
+| `ARGUS_RETENTION_TRASH_DAYS` | `30` | Runs moved to the trash this many days ago, like `RUN_DAYS` deletes them |
 
 Blob directories whose run no longer exists are swept as well. Admins can see the policy and the
 last pass under *Settings, Data and privacy*, or with `GET /api/v1/admin/retention`, and run a pass

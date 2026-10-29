@@ -67,7 +67,9 @@ async def test_upload_chunk_search_ranking(client, auth):
     assert top["citation"] == "docs/cats.md#0" and top["chunk_index"] == 0 and top["score"] > 0
 
     lst = (await client.get(KB, headers=auth)).json()["knowledge_bases"]
-    assert lst[0]["document_count"] == 3 and lst[0]["chunk_count"] > 5
+    assert lst[0]["kind"] == "library"  # the research library is always listed first
+    mine = next(x for x in lst if x["id"] == kb["id"])
+    assert mine["kind"] == "user" and mine["document_count"] == 3 and mine["chunk_count"] > 5
 
     docs = (await client.get(f"{KB}/{kb['id']}/documents", headers=auth)).json()["documents"]
     cats = next(d for d in docs if d["filename"] == "cats.md")
@@ -131,7 +133,9 @@ async def test_ownership_isolation(client, auth):
     r = await _upload(client, other, kb["id"], "x.md", "pwn")
     assert r.status_code == 404
     assert (await client.delete(f"{KB}/{kb['id']}", headers=other)).status_code == 404
-    assert (await client.get(KB, headers=other)).json()["knowledge_bases"] == []
+    theirs = (await client.get(KB, headers=other)).json()["knowledge_bases"]
+    assert [k["kind"] for k in theirs] == ["library"]  # only their own (empty) research library
+    assert theirs[0]["document_count"] == 0
     # Cross-KB search ignores ids the caller does not own.
     r = await client.get(f"{KB}/search", headers=other, params={"q": "classified", "kb": kb["id"]})
     assert r.json()["results"] == []

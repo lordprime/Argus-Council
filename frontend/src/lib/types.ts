@@ -78,6 +78,10 @@ export interface Run {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Set while the run is archived (hidden from the default list). */
+  archived_at?: string | null;
+  /** Set while the run is in the trash (purged automatically after the retention period). */
+  trashed_at?: string | null;
 }
 
 export interface RunDetail extends Run {

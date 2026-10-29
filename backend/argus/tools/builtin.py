@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from argus.tools.base import Tool, ToolCallContext, ToolResult
+from argus.tools.base import StrList, Tool, ToolCallContext, ToolResult
 
 
 class NotesWrite(Tool):
@@ -20,7 +20,7 @@ class NotesWrite(Tool):
         title: str = Field(max_length=200)
         body: str = Field(max_length=20_000)
         source: str | None = Field(default=None, max_length=2000)
-        tags: list[str] = Field(default_factory=list, max_length=10)
+        tags: StrList = Field(default_factory=list, max_length=10)
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         note = {

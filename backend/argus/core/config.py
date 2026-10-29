@@ -54,12 +54,17 @@ class Settings(BaseSettings):
     llm_cache_ttl: int = 3600
     llm_max_retries: int = 3
     provider_allow_private_urls: bool = True  # self-hosted models usually live on private networks
+    # The offline, deterministic ``mock`` provider. Unset: on only for ``env=test`` (the test suite),
+    # so real installs never offer it as a provider or model.
+    enable_mock_provider: bool | None = None
     # Webhooks, HTTP MCP servers and remote A2A/ACP agents: private/loopback targets are refused
     # unless the operator opts in. Link-local (cloud metadata) addresses are refused regardless.
     connections_allow_private_urls: bool = False
     # web_fetch (driven by model output, so by whatever content the agents read): a run's guardrails
     # can only tighten this, never open private networks on their own.
     web_fetch_allow_private_urls: bool = False
+    # Keep every page agents read (web_fetch) in the owner's research library knowledge base.
+    knowledge_capture_enabled: bool = True
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     # Research tools
@@ -104,6 +109,7 @@ class Settings(BaseSettings):
     retention_ledger_days: int = Field(default=0, ge=0)
     retention_webhook_delivery_days: int = Field(default=30, ge=0)  # webhook delivery log
     retention_notification_days: int = Field(default=90, ge=0)  # in-app notifications, read or not
+    retention_trash_days: int = Field(default=30, ge=0)  # runs in the trash are purged after N days
     retention_batch_size: int = Field(default=500, ge=1, le=10_000)
     retention_interval_s: int = Field(default=3600, ge=60)
     retention_enabled: bool = True  # run the periodic retention task in this process
@@ -182,6 +188,12 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env == "production"
+
+    @property
+    def mock_provider_enabled(self) -> bool:
+        if self.enable_mock_provider is None:
+            return self.env == "test"
+        return self.enable_mock_provider
 
 
 @lru_cache

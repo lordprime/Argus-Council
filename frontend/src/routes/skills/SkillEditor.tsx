@@ -16,7 +16,8 @@ import {
   frontmatterChecks,
   type FrontmatterCheck,
   KNOWN_TOOLS,
-  MAX_DESCRIPTION,
+  MAX_DESCRIPTION_WORDS,
+  wordCount,
   parseToolList,
   SKILL_PROSE,
   stripFrontmatter,
@@ -173,7 +174,7 @@ function EditorForm({ mode, initial, sourceName }: { mode: "new" | "edit" | "cus
         </div>
         <TextArea label="Description" required value={description} onChange={(e) => setDescription(e.target.value)} rows={3}
           error={show("description")}
-          hint={`${description.trim().length}/${MAX_DESCRIPTION}. Say what the skill does and when agents should use it; agents always see this.`} />
+          hint={`${wordCount(description).toLocaleString("en-US")}/${MAX_DESCRIPTION_WORDS.toLocaleString("en-US")} words. Say what the skill does and when agents should use it. Agents always see the first few sentences; the rest loads with the skill.`} />
         <fieldset className="flex flex-col gap-2">
           <legend className="text-sm font-medium mb-1">Allowed tools</legend>
           <p className="text-xs text-fg-subtle -mt-1">Tools the skill expects to use. Run guardrails still decide what is permitted.</p>

@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 `backend/pyproject.toml`; the docs banner (`overrides/main.html`) and the `copyright` line in
 `mkdocs.yml` repeat it.
 
+## [Unreleased]
+
+### Added
+
+- **Research library**: every page agents read is captured, with its source URL and the run that
+  read it, into a per-user knowledge base that every later run searches. Deduplicated by URL and
+  capped, evicting the least recently used sources (`ARGUS_KNOWLEDGE_CAPTURE_ENABLED`).
+- **Knowledge without files**: add pasted text or a page fetched from a URL to any knowledge base
+  (`POST /knowledge-bases/{id}/documents/text` and `/url`).
+- **Linked knowledge**: attach knowledge bases to a run before it starts (`knowledge_base_ids`) or
+  while it runs (`POST /runs/{id}/knowledge`); agents are told about them from their next turn.
+- **Run archive and trash**: archive runs out of the main list, move runs to a restorable trash,
+  empty it, and purge it automatically after `ARGUS_RETENTION_TRASH_DAYS` (30).
+- **Council map levels**: oversight, council, and tools sit on separate boards at separate levels
+  (sub-councils and you on boards of their own), and conduits are routed in gutters, through gaps
+  and along spines with their own lanes instead of cutting across platforms.
+
+### Changed
+
+- `deploy.sh` is the single install-and-update command: it runs every pending migration as an
+  explicit step (also in `update.sh`, before the new API starts), with `--pull` to update.
+- The offline `mock` provider is no longer offered anywhere unless `ARGUS_ENABLE_MOCK_PROVIDER` is
+  set (it stays on for the test suite).
+- Skill descriptions may be up to 20,000 words; agents see a summary in their skill index and the
+  full text when they load the skill. Loaded skills are never trimmed from an agent's context.
+
+### Fixed
+
+- Test connection works for every provider, not only Anthropic: it no longer needs a default model,
+  and any model id can be tested. Hosted kinds now suggest models.
+- `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
+  models often send, instead of failing with "Input should be a valid list".
+
 ## [0.1.0] - 2026-10-27
 
 The first version of the platform.

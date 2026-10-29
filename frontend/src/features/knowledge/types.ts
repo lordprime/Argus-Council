@@ -2,6 +2,8 @@ export interface KnowledgeBase {
   id: string;
   name: string;
   description: string;
+  /** "library": the research library, filled automatically with every source agents read. */
+  kind?: "user" | "library";
   document_count: number;
   chunk_count: number;
   max_chunks: number;
@@ -17,7 +19,21 @@ export interface KnowledgeDocument {
   size: number;
   sha256: string;
   chunk_count: number;
+  title?: string;
+  /** upload: a file · text: pasted · url: fetched from a link · agent: captured from a run */
+  origin?: "upload" | "text" | "url" | "agent";
+  source_url?: string | null;
+  run_id?: string | null;
   created_at: string;
+  updated_at?: string;
+}
+
+/** Knowledge base linked to a run (GET /runs/{id}/knowledge). */
+export interface LinkedKnowledge {
+  id: string;
+  name: string;
+  description: string;
+  document_count: number;
 }
 
 export interface SearchHit {
@@ -26,6 +42,8 @@ export interface SearchHit {
   kb_name: string;
   document_id: string;
   filename: string;
+  title?: string;
+  source_url?: string | null;
   chunk_index: number;
   text: string;
   snippet: string;

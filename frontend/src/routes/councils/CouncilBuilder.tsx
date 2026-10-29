@@ -1,5 +1,5 @@
 import { ChevronDown, Users } from "lucide-react";
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 
 import { NumberField } from "@/components/councils/fields";
@@ -12,7 +12,7 @@ import {
   clamp, DEFAULT_SIZE, fieldErrorsFrom, MODES, rosterFor, roleTitle, validateBounds, validateName,
   type Dict, type FieldErrors,
 } from "@/features/councils/logic";
-import { useCreateCouncil, type MemberInput } from "@/features/councils/queries";
+import { useCreateCouncil, useProviderOptions, type MemberInput } from "@/features/councils/queries";
 import { useRoles } from "@/lib/queries";
 import type { Mode } from "@/lib/types";
 
@@ -44,7 +44,13 @@ export default function CouncilBuilder() {
   const [seatMode, setSeatMode] = useState<SeatMode>("roster");
   const [size, setSize] = useState(DEFAULT_SIZE.research);
   const [seats, setSeats] = useState<SeatDraft[]>([]);
-  const [route, setRoute] = useState({ provider: "mock", model: "mock-1" });
+  const [route, setRoute] = useState({ provider: "", model: "" });
+  const providerOptions = useProviderOptions();
+  // Default to the first connected provider once the options load (never a placeholder provider).
+  useEffect(() => {
+    const first = providerOptions.options[0];
+    if (!route.provider && first) setRoute({ provider: first.value, model: first.models[0] ?? "" });
+  }, [providerOptions.options, route.provider]);
   const [guardrails, setGuardrails] = useState<Dict>({});
   const [guardrailsValid, setGuardrailsValid] = useState(true);
   const [showGuardrails, setShowGuardrails] = useState(false);
@@ -84,6 +90,7 @@ export default function CouncilBuilder() {
     clientErrors.size = `This council needs between ${minSize} and ${maxSize} seats; it has ${count}.`;
   }
   if (seatMode === "custom" && seats.some((s) => validateName(s.name))) clientErrors.members = "Fix the seat names below.";
+  if (!route.provider) clientErrors.provider = "Connect a provider first (Connections › Providers).";
   if (!route.model.trim()) clientErrors.model = "Enter a model id.";
   if (!guardrailsValid) clientErrors.guardrails = "Fix the highlighted guardrail values.";
 
@@ -219,7 +226,7 @@ export default function CouncilBuilder() {
 
         <Section id="model-h" title="Default model" description="Every seat starts on this model. You can change individual seats after creating the council.">
           <ModelPicker provider={route.provider} model={route.model} providerLabel="Default provider" modelLabel="Default model"
-            errors={{ model: errors.model ?? errors.default_model, provider: errors.default_provider }}
+            errors={{ model: errors.model ?? errors.default_model, provider: errors.provider ?? errors.default_provider }}
             onChange={(r) => { setRoute(r); clearServer("default_model", "default_provider"); }} />
         </Section>
 

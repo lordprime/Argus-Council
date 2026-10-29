@@ -2,7 +2,9 @@
 // and compose a frontmatter block from the editor's structured fields (backend/argus/skills/package.py).
 
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const MAX_DESCRIPTION = 1024;
+/** Description limit in words (package.py MAX_DESCRIPTION_WORDS). Agents see the first ~600 characters in their skill index. */
+export const MAX_DESCRIPTION_WORDS = 20_000;
+export const wordCount = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
 export const TEXT_SUFFIXES = [
   ".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".tex", ".bib", ".csv", ".html", ".css",
   ".sh", ".sql", ".cfg", ".ini", ".rst", ".jinja", ".j2", ".xml", ".svg",
@@ -58,7 +60,7 @@ export function fieldErrors(f: SkillFields): Partial<Record<keyof SkillFields, s
   const e: Partial<Record<keyof SkillFields, string>> = {};
   if (!NAME_RE.test(f.name.trim())) e.name = "1-64 characters: lowercase letters, digits and hyphens, starting with a letter or digit";
   if (!f.description.trim()) e.description = "Required. It tells agents when to use the skill";
-  else if (f.description.trim().length > MAX_DESCRIPTION) e.description = `At most ${MAX_DESCRIPTION} characters`;
+  else if (wordCount(f.description) > MAX_DESCRIPTION_WORDS) e.description = `At most ${MAX_DESCRIPTION_WORDS.toLocaleString("en-US")} words`;
   if (!f.body.trim()) e.body = "Write the instructions agents follow when they use this skill";
   return e;
 }
@@ -112,7 +114,7 @@ export function frontmatterChecks(f: SkillFields): FrontmatterCheck[] {
       ? { field: "description", status: "error", message: errs.description }
       : !/\buse (it )?(when|for|before|after)\b/i.test(desc)
         ? { field: "description", status: "warn", message: "Consider saying when agents should use it (e.g. “Use when …”)" }
-        : { field: "description", status: "ok", message: `${desc.length}/${MAX_DESCRIPTION} characters, says when to use it` },
+        : { field: "description", status: "ok", message: `${wordCount(desc).toLocaleString("en-US")}/${MAX_DESCRIPTION_WORDS.toLocaleString("en-US")} words, says when to use it` },
     !f.version.trim()
       ? { field: "version", status: "warn", message: "No version: the server will default to 1.0.0" }
       : SEMVER.test(f.version.trim())

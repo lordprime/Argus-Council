@@ -30,7 +30,8 @@ class UseSkill(Tool):
         files = "\n".join(f"- {p}" for p in sorted(pkg.files)) or "(none)"
         tools = ", ".join(pkg.allowed_tools) or "any permitted tool"
         return ToolResult(
-            f"# Skill: {pkg.name} (v{pkg.version})\n\n{pkg.body}\n\n"
+            f"# Skill: {pkg.name} (v{pkg.version})\n\n## When to use\n{pkg.description}\n\n"
+            f"## Instructions\n{pkg.body}\n\n"
             f"---\nBundled resources (read with skill_read):\n{files}\nTools this skill expects: {tools}",
             data={"skill": pkg.name},
         )

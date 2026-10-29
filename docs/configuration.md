@@ -53,6 +53,8 @@ those are. To set any other variable in the stack, add it to the `api` service's
 | `ARGUS_LLM_CACHE_TTL` | `3600` | | Seconds to cache responses to deterministic LLM calls |
 | `ARGUS_LLM_MAX_RETRIES` | `3` | | Retries with backoff per provider before falling back |
 | `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS` | `true` | | Allow provider base URLs on private networks (self-hosted models usually live there) |
+| `ARGUS_ENABLE_MOCK_PROVIDER` | unset | | The offline `mock` provider; unset means on only for `ARGUS_ENV=test`, so installs never offer it |
+| `ARGUS_KNOWLEDGE_CAPTURE_ENABLED` | `true` | yes | Keep every page agents read (`web_fetch`) in each user's *Research library* knowledge base |
 | `ARGUS_MODEL_PRICING` | `{}` | | JSON map of model to prices, overriding the built-in table for cost accounting |
 | `ARGUS_SEARCH_PROVIDER` | unset | yes | `searxng`, `tavily` or `brave` for `web_search` |
 | `ARGUS_SEARCH_API_KEY` | unset | yes | API key for Tavily or Brave |
@@ -116,6 +118,7 @@ Retention runs in the API process every `ARGUS_RETENTION_INTERVAL_S` seconds, in
 | `ARGUS_RETENTION_EVENT_DAYS` | `0` | yes | Drop only the event log of finished runs older than this; the run, result and artifacts stay |
 | `ARGUS_RETENTION_AUDIT_DAYS` | `365` | yes | Delete audit rows older than this |
 | `ARGUS_RETENTION_LEDGER_DAYS` | `0` | yes | Prune the protocol ledger. Keep `0`: pruning makes ledger verification fail permanently |
+| `ARGUS_RETENTION_TRASH_DAYS` | `30` | yes | Permanently delete runs that have been in the trash this long |
 | `ARGUS_RETENTION_BATCH_SIZE` | `500` | | Rows per batch (1 to 10000) |
 | `ARGUS_RETENTION_INTERVAL_S` | `3600` | | Seconds between passes (at least 60) |
 | `ARGUS_RETENTION_ENABLED` | `true` | | Run the periodic retention task in this process |

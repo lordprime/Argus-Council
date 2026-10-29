@@ -18,6 +18,7 @@ from argus.core.errors import ArgusError, Conflict, NotFound
 from argus.core.logging import fresh_log_context, get_logger
 from argus.core.metrics import RUN_DURATION, RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run, RunEvent
+from argus.knowledge.service import linked_summary
 from argus.runtime.agent import MemberSpec
 from argus.runtime.context import Correction, RunCancelled, RunContext
 from argus.runtime.events import TERMINAL_STATUSES, Actor, Broker, EventSink
@@ -31,7 +32,7 @@ from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
 from argus.tools.builtin import builtin_tools
 from argus.tools.code import code_tools
-from argus.tools.knowledge import knowledge_tools
+from argus.tools.knowledge import SCOPE_KEY, knowledge_tools
 from argus.tools.skills import skill_tools
 from argus.tools.subcouncil import SubCouncilTool
 from argus.tools.web import web_tools
@@ -229,6 +230,9 @@ class RunManager:
         )
         ctx.notify = self._notifier(run.owner_id, depth)
         ctx.extra["closers"] = closers
+        if run.knowledge_base_ids:
+            async with self.sessionmaker() as s:
+                ctx.extra["linked_knowledge"] = await linked_summary(s, run.owner_id, run.knowledge_base_ids)
         skills = await skills_for_owner(self.sessionmaker, run.owner_id)
         ctx.skills = {
             n: p for n, p in skills.items() if skill_permitted(n, rails.skills.allow, rails.skills.deny)
@@ -569,6 +573,21 @@ class RunManager:
             ctx.controls.held_members.clear()
             return {}
         raise NotFound(f"Unknown intervention '{kind}'")
+
+    async def knowledge_changed(
+        self, run_id: uuid.UUID, linked: list[dict[str, Any]], change: dict[str, Any], user_name: str = "You"
+    ) -> bool:
+        """Tell a live run its linked knowledge changed: agents see it from their next turn.
+
+        Returns False when the run is not live here (the change is then only stored).
+        """
+        live = self.live.get(run_id)
+        if live is None or live.finalising:
+            return False
+        live.ctx.extra["linked_knowledge"] = linked
+        live.ctx.extra.pop(SCOPE_KEY, None)  # knowledge_search re-reads which bases it may use
+        await live.ctx.sink.emit("knowledge.linked", change, actor=Actor.user(user_name))
+        return True
 
     async def release(self, run_id: uuid.UUID, member_id: str | None) -> None:
         live = self._live(run_id)

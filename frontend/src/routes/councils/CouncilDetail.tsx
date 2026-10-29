@@ -10,7 +10,7 @@ import { RunRowList } from "@/components/run/RunRow";
 import { Button, ButtonLink, Card, EmptyState, ErrorState, FormActions, Page, PageHeader, SectionTitle, Skeleton, Tabs } from "@/components/ui";
 import { deepEqual, fieldErrorsFrom, nextSeatName, previewResize, type Dict } from "@/features/councils/logic";
 import {
-  useAddMember, useDeleteCouncil, useRemoveMember, useResizeCouncil, useUpdateCouncil, useUpdateMember,
+  useAddMember, useDeleteCouncil, useProviderOptions, useRemoveMember, useResizeCouncil, useUpdateCouncil, useUpdateMember,
   type MemberInput, type MemberPatch,
 } from "@/features/councils/queries";
 import { ApiError, errorMessage } from "@/lib/api";
@@ -41,7 +41,9 @@ function SeatsTab({ council }: { council: Council }) {
   const tgt = target ?? current;
   const preview = previewResize(members, council.mode, tgt, roles.data?.rosters, overseers, roleList);
   const removedIds = new Set(preview.removed.map((m) => m.id));
-  const ref = members[0];
+  const firstOption = useProviderOptions().options[0];
+  // New seats copy the first seat's model, else the first connected provider.
+  const ref = members[0] ?? (firstOption ? { provider: firstOption.value, model: firstOption.models[0] ?? "" } : undefined);
   const atMin = current <= council.min_size;
   const atMax = current >= council.max_size;
 
@@ -107,7 +109,7 @@ function SeatsTab({ council }: { council: Council }) {
     <div className="flex flex-col gap-4 py-4">
       <ResizePanel current={current} target={tgt} min={council.min_size} max={council.max_size} preview={preview}
         roles={roleList} overseers={overseers} pending={resize.isPending} error={resizeError}
-        newSeatRoute={ref ? `${ref.provider}/${ref.model}` : "mock/mock-1"}
+        newSeatRoute={ref ? `${ref.provider}/${ref.model}` : "no provider connected"}
         onTarget={(n) => { setTarget(n === current ? null : n); setResizeError(undefined); }} onApply={() => void applyResize()} />
 
       <SectionTitle count={current} flush
@@ -144,7 +146,7 @@ function SeatsTab({ council }: { council: Council }) {
 
       <SeatEditDialog open={editing != null} onOpenChange={(o) => !o && setEditing(null)}
         member={editing === "new" ? undefined : editing ?? undefined} roles={roleList}
-        defaults={{ provider: ref?.provider ?? "mock", model: ref?.model ?? "mock-1", name: (role) => nextSeatName(members, role, roleList) }}
+        defaults={{ provider: ref?.provider ?? "", model: ref?.model ?? "", name: (role) => nextSeatName(members, role, roleList) }}
         onSave={(b) => void saveSeat(b)} pending={addMember.isPending || updateMember.isPending} error={editError} />
 
       <ConfirmDeleteDialog open={removing != null} onOpenChange={(o) => !o && setRemoving(null)} requireTyping={false}

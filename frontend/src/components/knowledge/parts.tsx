@@ -1,8 +1,9 @@
-import { FileText, Search, Trash2 } from "lucide-react";
+import { ExternalLink, FileText, Search, Trash2 } from "lucide-react";
+import { Link } from "react-router";
 import { useState, type FormEvent } from "react";
 
 import { ConfirmDelete } from "@/components/connections/ConfirmDelete";
-import { Button, Callout, EmptyState, ErrorState, IconButton, Skeleton } from "@/components/ui";
+import { Badge, Button, Callout, EmptyState, ErrorState, IconButton, Skeleton } from "@/components/ui";
 import { highlight } from "@/features/knowledge/highlight";
 import { useDeleteDocument, useDocuments, useKnowledgeSearch } from "@/features/knowledge/queries";
 import type { KnowledgeDocument } from "@/features/knowledge/types";
@@ -25,6 +26,10 @@ export function Highlighted({ text, terms }: { text: string; terms: string[] }) 
   );
 }
 
+const ORIGIN: Record<NonNullable<KnowledgeDocument["origin"]>, string> = {
+  upload: "File", text: "Note", url: "Link", agent: "Read by an agent",
+};
+
 export function DocumentsTable({ kbId }: { kbId: string }) {
   const docs = useDocuments(kbId);
   const del = useDeleteDocument(kbId);
@@ -32,7 +37,7 @@ export function DocumentsTable({ kbId }: { kbId: string }) {
 
   if (docs.isLoading) return <Skeleton className="h-24" />;
   if (docs.error) return <ErrorState error={docs.error} onRetry={() => void docs.refetch()} />;
-  if (!docs.data?.length) return <EmptyState icon={FileText} title="No documents yet" body="Upload Markdown, text or HTML files above." />;
+  if (!docs.data?.length) return <EmptyState icon={FileText} title="No documents yet" body="Upload files, paste text or add a link above. Sources agents read land in the research library on their own." />;
 
   return (
     <>
@@ -52,14 +57,22 @@ export function DocumentsTable({ kbId }: { kbId: string }) {
             {docs.data.map((d) => (
               <tr key={d.id} className="border-t border-border">
                 <td className="px-3 py-2 max-w-[10rem] sm:max-w-none">
-                  <span className="block truncate font-medium" title={d.filename}>{d.filename}</span>
-                  <span className="text-xs text-fg-subtle">{d.content_type}</span>
+                  <span className="block truncate font-medium" title={d.title || d.filename}>{d.title || d.filename}</span>
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-fg-subtle">
+                    {d.origin && <Badge>{ORIGIN[d.origin]}</Badge>}
+                    {d.source_url ? (
+                      <a href={d.source_url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 truncate max-w-[18rem] text-accent hover:underline">
+                        {d.source_url.replace(/^https?:\/\//, "")}<ExternalLink className="size-3 shrink-0" aria-hidden />
+                      </a>
+                    ) : <span>{d.content_type}</span>}
+                    {d.run_id && <Link to={`/runs/${d.run_id}`} className="text-accent hover:underline">from a run</Link>}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">{d.chunk_count}</td>
                 <td className="px-3 py-2 text-right tabular-nums hidden sm:table-cell">{bytes(d.size)}</td>
-                <td className="px-3 py-2 text-fg-muted hidden md:table-cell">{relTime(d.created_at)}</td>
+                <td className="px-3 py-2 text-fg-muted hidden md:table-cell">{relTime(d.updated_at ?? d.created_at)}</td>
                 <td className="px-3 py-2 text-right">
-                  <IconButton label={`Delete ${d.filename}`} icon={Trash2} variant="danger-ghost" onClick={() => setTarget(d)} />
+                  <IconButton label={`Delete ${d.title || d.filename}`} icon={Trash2} variant="danger-ghost" onClick={() => setTarget(d)} />
                 </td>
               </tr>
             ))}

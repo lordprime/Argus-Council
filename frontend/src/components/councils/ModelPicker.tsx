@@ -28,7 +28,7 @@ export function ModelPicker({ provider, model, onChange, providerLabel = "Provid
   const current = options.find((o) => o.value === provider);
   // Keep an unknown (e.g. since-deleted) provider selectable so editing never silently changes it.
   const all = current || !provider ? options : [...options, { value: provider, label: `${provider} (not configured)`, models: [] }];
-  const onlyMock = !isLoading && options.every((o) => o.value === "mock");
+  const noProviders = !isLoading && options.every((o) => o.value === "mock");
   const apiOptions = all.filter((o) => o.auth !== "account");
   const accountOptions = all.filter((o) => o.auth === "account");
   const render = (o: ProviderOption) => <option key={o.value} value={o.value}>{o.label}</option>;
@@ -36,7 +36,7 @@ export function ModelPicker({ provider, model, onChange, providerLabel = "Provid
   return (
     <div className={cn("grid gap-4 sm:grid-cols-2", className)}>
       <SelectField label={providerLabel} value={provider} disabled={isLoading} error={errors?.provider}
-        hint={onlyMock ? "Only the offline demo is available. Connect a provider for real runs."
+        hint={noProviders ? "No provider connected yet. Connect one under Connections › Providers."
           : current?.auth === "account" ? "Runs the vendor's CLI with your own sign-in or CLI key (Connections > CLI agents)." : undefined}
         onChange={(e) => {
           const next = all.find((o) => o.value === e.target.value);

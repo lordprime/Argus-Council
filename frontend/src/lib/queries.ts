@@ -54,7 +54,7 @@ export const useRoles = () =>
 export const useCouncils = () => useQuery({ queryKey: keys.councils, queryFn: () => api.get<Council[]>(`${V1}/councils`) });
 export const useCouncil = (id: string) => useQuery({ queryKey: keys.council(id), queryFn: () => api.get<Council>(`${V1}/councils/${id}`) });
 
-export function useRunsList(filters: { status?: string; mode?: string; limit?: number } = {}) {
+export function useRunsList(filters: { status?: string; mode?: string; limit?: number; view?: string } = {}) {
   const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]));
   return useQuery({
     queryKey: keys.runs(Object.fromEntries(qs)),
@@ -109,6 +109,8 @@ export interface NewRun {
   model?: string;
   outputs: OutputFormat[];
   guardrails: Record<string, unknown>;
+  /** Knowledge bases linked to the run from the start. */
+  knowledge_base_ids?: string[];
 }
 
 export function useCreateRun() {

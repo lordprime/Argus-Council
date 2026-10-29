@@ -9,6 +9,8 @@ Policy (all ``ARGUS_RETENTION_*`` settings, 0 = keep forever):
 * ``AUDIT_DAYS``   audit rows older than N days are deleted (default 365).
 * ``WEBHOOK_DELIVERY_DAYS``  webhook delivery log rows older than N days (default 30).
 * ``NOTIFICATION_DAYS``      in-app notifications older than N days, read or not (default 90).
+* ``TRASH_DAYS``   runs moved to the trash more than N days ago are deleted like ``RUN_DAYS``
+                   deletes them (default 30).
 * ``LEDGER_DAYS``  the hash-chained protocol ledger is never pruned by default. Every entry hashes
                    its predecessor and ``/connections/ledger/verify`` replays the chain from the
                    genesis hash at seq 1, so deleting any prefix makes verification report a
@@ -32,7 +34,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.core.config import Settings
@@ -75,6 +77,7 @@ class RetentionPolicy:
     ledger_days: int
     webhook_delivery_days: int
     notification_days: int
+    trash_days: int
     batch_size: int
     interval_s: int
     notes: list[str] = field(default_factory=list)
@@ -101,6 +104,7 @@ class RetentionPolicy:
             ledger_days=max(settings.retention_ledger_days, 0),
             webhook_delivery_days=max(settings.retention_webhook_delivery_days, 0),
             notification_days=max(settings.retention_notification_days, 0),
+            trash_days=max(settings.retention_trash_days, 0),
             batch_size=max(settings.retention_batch_size, 1),
             interval_s=max(settings.retention_interval_s, 60),
             notes=notes,
@@ -213,12 +217,19 @@ async def apply_retention(
     ledger_cut = _cutoff(policy.ledger_days, now)
     delivery_cut = _cutoff(policy.webhook_delivery_days, now)
     notification_cut = _cutoff(policy.notification_days, now)
+    trash_cut = _cutoff(policy.trash_days, now)
+    whole_run = []
+    if run_cut is not None:
+        whole_run.append(_finished_before(run_cut))
+    if trash_cut is not None:
+        whole_run.append(Run.trashed_at.is_not(None) & (Run.trashed_at < trash_cut))
 
     doomed: set[uuid.UUID] = set()
     async with sessionmaker() as s:
-        # 1. Whole runs (top-level only; sub-runs follow their parent through the FK cascade).
-        if run_cut is not None:
-            eligible = select(Run.id).where(Run.parent_run_id.is_(None), _finished_before(run_cut))
+        # 1. Whole runs, old finished ones and expired trash (top-level only; sub-runs follow their
+        # parent through the FK cascade).
+        if whole_run:
+            eligible = select(Run.id).where(Run.parent_run_id.is_(None), or_(*whole_run))
             if dry_run:
                 roots = list((await s.execute(eligible)).scalars())
                 ids = await descendant_run_ids(s, roots)

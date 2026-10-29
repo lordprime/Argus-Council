@@ -4,7 +4,7 @@ Resolution order for a provider name:
 1. the user's own ``ProviderConfig`` with that name (encrypted key),
 2. a system provider configured from the environment
    (``ARGUS_<KIND>_API_KEY`` / ``<KIND>_API_KEY`` and ``ARGUS_<KIND>_BASE_URL``),
-3. ``mock`` - always available, offline and deterministic.
+3. ``mock`` - offline and deterministic; only when ``Settings.mock_provider_enabled`` (tests).
 """
 
 from __future__ import annotations
@@ -74,9 +74,11 @@ def validate_base_url(url: str, allow_private: bool, *, require_dns: bool = True
     return url.rstrip("/")
 
 
-def system_providers_from_env(env: dict[str, str] | None = None) -> dict[str, Provider]:
+def system_providers_from_env(
+    env: dict[str, str] | None = None, *, include_mock: bool = True
+) -> dict[str, Provider]:
     env = env if env is not None else dict(os.environ)
-    found: dict[str, Provider] = {"mock": MockProvider()}
+    found: dict[str, Provider] = {"mock": MockProvider()} if include_mock else {}
     for key, spec in KINDS.items():
         if key == "mock":
             continue
@@ -158,7 +160,11 @@ class LLMRouter:
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.cache = cache
-        self.system = system if system is not None else system_providers_from_env()
+        self.system = (
+            system
+            if system is not None
+            else system_providers_from_env(include_mock=settings.mock_provider_enabled)
+        )
         self.box = SecretBox(settings)
         # CLI agents (argus.services.cli_agents.CLIAgents); set by the app. Resolves "<cli>-cli" names.
         self.cli: Any = None
@@ -201,6 +207,8 @@ class LLMRouter:
                 return self._from_config(cfg)
         if name in self.system:
             return self.system[name]
+        if name == "mock":
+            raise NotFound("The offline mock provider is disabled; connect a real provider")
         raise NotFound(f"Provider '{name}' is not configured")
 
     def _from_config(self, cfg: ProviderConfig) -> Provider:

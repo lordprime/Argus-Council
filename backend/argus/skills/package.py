@@ -17,8 +17,9 @@ from typing import Any
 import yaml
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{0,63}$")
-MAX_DESCRIPTION = 1024
-MAX_BODY = 200_000
+MAX_DESCRIPTION_WORDS = 20_000
+MAX_DESCRIPTION = 200_000  # characters; generous so the word limit is what applies
+MAX_BODY = 400_000  # characters of SKILL.md, room for a full-length description plus instructions
 MAX_FILE = 512 * 1024
 MAX_FILES = 64
 MAX_TOTAL = 4 * 1024 * 1024
@@ -81,7 +82,7 @@ class SkillPackage:
 
 def parse_skill_md(text: str) -> SkillPackage:
     if len(text) > MAX_BODY:
-        raise SkillError("SKILL.md is too large")
+        raise SkillError(f"SKILL.md is too large (at most {MAX_BODY:,} characters)")
     m = re.match(r"^﻿?---\s*\n(.*?)\n---\s*(?:\n|$)(.*)$", text, re.S)
     if not m:
         raise SkillError("SKILL.md must start with YAML frontmatter delimited by '---'")
@@ -97,8 +98,10 @@ def parse_skill_md(text: str) -> SkillPackage:
         raise SkillError("name must be 1-64 chars of lowercase letters, digits and hyphens")
     if not description:
         raise SkillError("description is required (it tells agents when to use the skill)")
+    if len(description.split()) > MAX_DESCRIPTION_WORDS:
+        raise SkillError(f"description must be at most {MAX_DESCRIPTION_WORDS:,} words")
     if len(description) > MAX_DESCRIPTION:
-        raise SkillError(f"description must be at most {MAX_DESCRIPTION} characters")
+        raise SkillError(f"description must be at most {MAX_DESCRIPTION:,} characters")
     tools = fm.get("allowed-tools") or fm.get("allowed_tools") or []
     if isinstance(tools, str):
         tools = [t.strip() for t in tools.split(",") if t.strip()]

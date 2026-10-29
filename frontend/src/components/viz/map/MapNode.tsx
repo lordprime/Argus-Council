@@ -5,7 +5,7 @@ import { roleStyle } from "@/components/ui/role";
 import { cn } from "@/lib/cn";
 import type { CommEvent, CommGraph, NodeKind, SubCouncilInfo } from "@/features/viz/types";
 
-import { iso, rhombus, sides, type CardPlacement, type Placed } from "./layout";
+import { rhombus, sides, type CardPlacement, type Placed } from "./layout";
 import { KIND_LABEL, STATUS_TONE } from "./style";
 
 export type GraphNode = CommGraph["nodes"][number];
@@ -160,11 +160,7 @@ export const MapNode = memo(function MapNode(props: Props) {
           })}
     >
       {zone != null && !overlay && (
-        <polygon points={rhombus(p.gx, p.gy, zone, 0)} className="fill-accent/5 stroke-accent/40" strokeDasharray="5 4" strokeWidth={1} />
-      )}
-      {z0 > 0 && (
-        <line x1={iso(p.gx, p.gy, 0)[0]} y1={iso(p.gx, p.gy, 0)[1]} x2={p.sx} y2={iso(p.gx, p.gy, z0)[1]}
-          className="stroke-border-strong" strokeDasharray="2 3" strokeWidth={1} />
+        <polygon points={rhombus(p.gx, p.gy, zone, z0)} className="fill-accent/5 stroke-accent/40" strokeDasharray="5 4" strokeWidth={1} />
       )}
       {lit && (
         <polygon

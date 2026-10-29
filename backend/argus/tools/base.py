@@ -9,11 +9,12 @@ Tool outputs are untrusted data and are screened before agents see them.
 from __future__ import annotations
 
 import abc
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, BeforeValidator, ValidationError
 
 from argus.providers.types import ToolSpec
 
@@ -23,6 +24,31 @@ if TYPE_CHECKING:
 # Default wall-clock limit for one tool call; tools with longer or self-enforced limits override
 # ``Tool.timeout_for``.
 TOOL_TIMEOUT_S = 300.0
+
+
+def _coerce_str_list(value: Any) -> Any:
+    """Accept the shapes models actually send for a list of strings.
+
+    Models often pass ``"a, b"`` or a JSON-encoded array instead of a real array; rejecting those
+    wastes a whole turn, so split them here. Anything else is left for normal validation.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, list):
+            return [str(v).strip() for v in decoded if str(v).strip()]
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+# A ``list[str]`` tool argument that also takes a comma-separated or JSON-encoded string.
+StrList = Annotated[list[str], BeforeValidator(_coerce_str_list)]
 
 
 @dataclass

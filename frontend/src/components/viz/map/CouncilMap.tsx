@@ -14,7 +14,9 @@ import { isTerminal, type RunState } from "@/stores/run";
 import { RunStateBadge, VizPane, VizToolbar, ZoomControls } from "../VizToolbar";
 
 import { MAX_PULSES, usePulses, useReducedMotion, useThrottledAnnouncement } from "./hooks";
-import { boxWithCards, computeLayout, iso, layoutKey, placeCards, pointAt, polyline, route, toPath, type Polyline } from "./layout";
+import {
+  BOARD_THICKNESS, boxWithCards, computeLayout, iso, layoutKey, placeCards, pointAt, polyline, routeKey, routeLinks, toPath, type Board, type Polyline,
+} from "./layout";
 import { MapNode, cardLines, cardSize, clip, glyphFor, money, statusLabel, type GraphNode, type Ledger } from "./MapNode";
 import { EDGE_CLASS, EDGE_DASH, GROUPS, GROUP_OF, KIND_LABEL, SWATCH_CLASS, type GroupId } from "./style";
 
@@ -45,21 +47,55 @@ function subsOf(run: RunState): Record<string, SubCouncilInfo> {
   return Array.isArray(s) ? Object.fromEntries(s.map((x) => [x.id, x])) : s;
 }
 
-/** Conduit polyline between two laid-out nodes, routed once per pair and cached for this layout. */
-function router(layout: ReturnType<typeof computeLayout>) {
+/**
+ * Conduit polylines between laid-out nodes. Every known pair is routed together up front (so parallel conduits
+ * get their own lanes, and filtering never moves them); a pair seen only later is routed on its own.
+ */
+function router(layout: ReturnType<typeof computeLayout>, pairs: [string, string][]) {
+  const all = routeLinks(layout, pairs);
   const cache = new Map<string, Polyline>();
   return (a: string, b: string): Polyline | undefined => {
-    const k = pairKey(a, b);
+    const k = routeKey(a, b);
     let pl = cache.get(k);
     if (!pl) {
-      const pa = layout.nodes.get(a < b ? a : b);
-      const pb = layout.nodes.get(a < b ? b : a);
-      if (!pa || !pb || pa === pb) return undefined;
-      pl = polyline(route(pa, pb));
+      const pts = all.get(k) ?? routeLinks(layout, [[a, b]]).get(k);
+      if (!pts) return undefined;
+      pl = polyline(pts);
       cache.set(k, pl);
     }
     return pl;
   };
+}
+
+/** One board: slab sides, top face with its grid, and a label at its back corner. */
+function BoardShape({ b, label }: { b: Board; label: string }) {
+  const f = (pts: [number, number][]) => pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const top = f([iso(b.x0, b.y0, b.z), iso(b.x1, b.y0, b.z), iso(b.x1, b.y1, b.z), iso(b.x0, b.y1, b.z)]);
+  const z0 = b.z - BOARD_THICKNESS;
+  const left = f([iso(b.x0, b.y1, b.z), iso(b.x1, b.y1, b.z), iso(b.x1, b.y1, z0), iso(b.x0, b.y1, z0)]);
+  const right = f([iso(b.x1, b.y1, b.z), iso(b.x1, b.y0, b.z), iso(b.x1, b.y0, z0), iso(b.x1, b.y1, z0)]);
+  const lines: string[] = [];
+  for (let x = b.x0 + b.step; x < b.x1 - 1e-6; x += b.step) lines.push(toPath([iso(x, b.y0, b.z), iso(x, b.y1, b.z)]));
+  for (let y = b.y0 + b.step; y < b.y1 - 1e-6; y += b.step) lines.push(toPath([iso(b.x0, y, b.z), iso(b.x1, y, b.z)]));
+  const [lx, ly] = iso(b.x0 + 0.35, b.y0, b.z);
+  // Raised boards: a shadow on the ground and legs at the visible corners make the level readable.
+  const shadow = b.z > 0 ? f([iso(b.x0, b.y0, 0), iso(b.x1, b.y0, 0), iso(b.x1, b.y1, 0), iso(b.x0, b.y1, 0)]) : null;
+  const legs = b.z > 0
+    ? ([[b.x0, b.y1], [b.x1, b.y1], [b.x1, b.y0]] as const).map(([x, y]) => toPath([iso(x, y, z0), iso(x, y, 0)])).join(" ")
+    : "";
+  return (
+    <g data-board={b.kind}>
+      {shadow && <polygon points={shadow} className="fill-fg/5" />}
+      {legs && <path d={legs} className="fill-none stroke-border-strong" strokeWidth={1.25} strokeDasharray="1 3" strokeLinecap="round" />}
+      <polygon points={left} className="fill-surface-3 stroke-border" strokeWidth={0.75} />
+      <polygon points={right} className="fill-surface-2 stroke-border" strokeWidth={0.75} />
+      <polygon points={top} className={cn("stroke-border-strong", b.kind === "oversight" ? "fill-warning-subtle/40" : b.kind === "sub" ? "fill-accent-subtle/40" : "fill-surface-2/70")} strokeWidth={1} />
+      {lines.length > 0 && <path d={lines.join(" ")} className="fill-none stroke-border" strokeWidth={0.6} strokeDasharray="2 4" opacity={0.8} />}
+      <text x={lx} y={ly - 6} fontSize={9.5} letterSpacing={1.2} className="fill-fg-subtle font-medium uppercase" style={{ textTransform: "uppercase" }}>
+        {label}
+      </text>
+    </g>
+  );
 }
 
 function time(ts: string) {
@@ -94,7 +130,13 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const layout = useMemo(() => computeLayout(graph.nodes), [lkey]);
 
-  const routes = useMemo(() => router(layout), [layout]);
+  const edgePairs = useMemo(
+    () => graph.edges.map((e) => [e.from, e.to] as [string, string]).sort((x, y) => routeKey(...x).localeCompare(routeKey(...y))),
+    [graph.edges],
+  );
+  const pairsKey = useMemo(() => [...new Set(edgePairs.map((p) => routeKey(...p)))].join("|"), [edgePairs]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const routes = useMemo(() => router(layout, edgePairs), [layout, pairsKey]);
   const routeFor = useCallback(
     (from: string, to: string) => {
       const pl = routes(from, to);
@@ -171,12 +213,6 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
 
   const byMemberCost = view.budget?.by_member;
   const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
-  const zones = useMemo(() => {
-    const z = new Map<string, number>();
-    const subIds = new Set(graph.nodes.filter((n) => n.kind === "subcouncil").map((n) => n.id));
-    for (const n of graph.nodes) if (n.parent && subIds.has(n.parent) && n.kind !== "subcouncil") z.set(n.parent, (z.get(n.parent) ?? 0) + 1);
-    return new Map([...z].map(([id, k]) => [id, 1.5 + Math.max(0, k - 4) * 0.24 + 0.85]));
-  }, [graph.nodes]);
 
   const compact = graph.nodes.length > 14;
   // Stable back-to-front order: never reorder the DOM on focus (that would blur the node and break Tab).
@@ -302,18 +338,13 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
     setZoom((z) => (z.k <= 1.05 ? z : { ...z, x: bx + bw / 2 - p.sx * z.k, y: by + bh / 2 - p.sy * z.k }));
   }, [followId, layout, bx, by, bw, bh]);
 
-  /* ---------------------------------------------------------------- floor */
-  const floor = useMemo(() => {
-    const E = layout.extent;
-    const step = E > 16 ? 2 : 1;
-    const lines: string[] = [];
-    for (let i = -E; i <= E; i += step) {
-      lines.push(toPath([iso(i, -E), iso(i, E)]));
-      lines.push(toPath([iso(-E, i), iso(E, i)]));
-    }
-    const corners = [iso(-E, -E), iso(E, -E), iso(E, E), iso(-E, E)].map(([x, y]) => `${x},${y}`).join(" ");
-    return { d: lines.join(" "), corners };
-  }, [layout.extent]);
+  /* ---------------------------------------------------------------- boards */
+  // Back to front: further back (smaller x + y) first, then lower levels under higher ones.
+  const boards = useMemo(
+    () => [...layout.boards].sort((a, b) => a.x0 + a.y0 - (b.x0 + b.y0) || a.z - b.z),
+    [layout.boards],
+  );
+  const boardLabel = (b: Board) => (b.hub ? `${b.label} · ${clip(nodeById.get(b.hub)?.label ?? b.hub, 22)}` : b.label);
 
   const sel = selected ? nodeById.get(selected) : undefined;
 
@@ -393,8 +424,7 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
           </defs>
           <g transform={`translate(${zoom.x.toFixed(2)} ${zoom.y.toFixed(2)}) scale(${zoom.k.toFixed(3)})`}>
             <g aria-hidden="true">
-              <polygon points={floor.corners} className="fill-surface-2/50 stroke-border" strokeWidth={1} />
-              <path d={floor.d} className="fill-none stroke-border" strokeWidth={0.75} opacity={0.7} />
+              {boards.map((b) => <BoardShape key={b.id} b={b} label={boardLabel(b)} />)}
             </g>
 
             {/* Conduits */}
@@ -444,7 +474,6 @@ export default function CouncilMap({ run, onSelect }: CouncilMapProps) {
                   cost={byMemberCost?.[n.id]?.usd}
                   ledger={ledgers.get(n.id)}
                   sub={subs[n.id]}
-                  zone={zones.get(n.id)}
                   card={cards.get(n.id)!}
                   compact={compact}
                   selected={n.id === selected}

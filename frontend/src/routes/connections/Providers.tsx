@@ -233,7 +233,14 @@ function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderWithHealth; ki
   const update = useUpdateProvider();
   const [showModels, setShowModels] = useState(false);
   const status = providerStatus(p, kind, test.data);
-  const testModel = p.default_model || kind?.suggested_models[0] || "";
+  // Any model can be tested; left blank, the server lists models (no tokens) and then tries the default model.
+  const [testModel, setTestModel] = useState(p.default_model ?? "");
+  const [pickModel, setPickModel] = useState(false);
+  const listed = useProviderModels(p.name, pickModel && p.enabled);
+  const modelOptions = useMemo(
+    () => [...new Set([...(kind?.suggested_models ?? []), ...(listed.data ?? [])])],
+    [kind?.suggested_models, listed.data],
+  );
   const headingId = `prov-${p.id}`;
   const Icon = kind?.self_hosted ? Server : Cloud;
 
@@ -272,7 +279,7 @@ function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderWithHealth; ki
       {test.data && (
         <Callout tone={test.data.ok ? "success" : "danger"}
           title={test.data.ok ? `Connected · ${test.data.latencyMs} ms` : `Test failed after ${test.data.latencyMs} ms`}>
-          {test.data.source !== "server" && <span className="font-mono text-xs">{test.data.model}</span>}
+          {test.data.model && <span className="font-mono text-xs">{test.data.model}</span>}
           {test.data.text && (
             <span className="block break-words mt-0.5">
               {test.data.ok && test.data.source !== "server" ? `“${test.data.text}”` : test.data.text}
@@ -291,9 +298,16 @@ function ProviderCard({ p, kind, onEdit, onDelete }: { p: ProviderWithHealth; ki
       <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-border">
         <Switch object={p.name} checked={p.enabled} onChange={toggle} disabled={update.isPending} />
         <div className="flex-1" />
-        <Button size="sm" icon={Zap} loading={test.isPending} disabled={!testModel || !p.enabled}
-          title={!testModel ? "Set a default model to test" : undefined}
-          onClick={() => test.mutate({ provider: p.name, model: testModel })}>
+        <label className="sr-only" htmlFor={`${headingId}-test-model`}>Model to test for {p.name}</label>
+        <input id={`${headingId}-test-model`} list={`${headingId}-test-models`} value={testModel}
+          onChange={(e) => setTestModel(e.target.value)} onFocus={() => setPickModel(true)}
+          placeholder="Any model" spellCheck={false} disabled={!p.enabled}
+          title="Model to test. Leave blank to list models and check the default model."
+          className="h-8 w-40 rounded-md border border-border bg-surface px-2 font-mono text-xs text-fg placeholder:text-fg-subtle disabled:opacity-50" />
+        <datalist id={`${headingId}-test-models`}>{modelOptions.map((m) => <option key={m} value={m} />)}</datalist>
+        <Button size="sm" icon={Zap} loading={test.isPending} disabled={!p.enabled}
+          title={!p.enabled ? "Enable the provider to test it" : undefined}
+          onClick={() => test.mutate({ provider: p.name, model: testModel.trim() })}>
           Test connection
         </Button>
         <IconButton label={`Edit ${p.name}`} icon={Pencil} onClick={onEdit} />

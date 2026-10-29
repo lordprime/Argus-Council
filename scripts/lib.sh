@@ -244,6 +244,27 @@ db_revision() {
   printf '%s' "${revs:-base}"
 }
 
+# migrate_db VERSION: apply every pending Alembic migration with the images of VERSION, as its own
+# step, before that version's API starts (the API entrypoint would otherwise migrate on boot, where a
+# failure only shows up as a crash loop). Logs the revision before and after. Safe to repeat.
+migrate_db() {
+  local version="$1" before after
+  ensure_db || return 1
+  before="$(db_revision)" || { warn "cannot read the database revision"; return 1; }
+  log "applying database migrations with version $version (schema at $before)"
+  if ! ARGUS_VERSION="$version" dc run --rm --no-deps -T -e ARGUS_RUN_MIGRATIONS=false api \
+    alembic upgrade head; then
+    warn "database migrations failed with version $version"
+    return 1
+  fi
+  after="$(db_revision)" || return 1
+  if [ "$before" = "$after" ]; then
+    log "database schema up to date at revision $after"
+  else
+    log "database schema migrated $before -> $after"
+  fi
+}
+
 # restore_db DUMP: replace the whole database with DUMP, in one transaction. The public schema is
 # dropped first, so tables that a newer migration created and the dump does not have are removed
 # too (pg_restore --clean only drops what the dump contains). If anything fails, the transaction

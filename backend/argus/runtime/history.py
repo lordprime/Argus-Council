@@ -5,7 +5,8 @@ An agent's ``messages`` list keeps every tool output (often 40-100k characters e
 a long tool loop eventually fails with a context-length error. Before each turn the oldest tool
 results are cut to a short preview once the history exceeds the budget. The newest results stay
 intact, and every message stays in place, so tool calls and their results remain paired as
-providers require.
+providers require. Loaded skill instructions (``use_skill``) are never cut: the agent is meant to
+keep following them for the rest of its turn, and a skill may be up to 20,000 words.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ HISTORY_BUDGET_CHARS = 120_000
 KEEP_RECENT_TOOL_RESULTS = 3
 PREVIEW_CHARS = 800
 _MARK = "characters of earlier tool output omitted to save context"
+# Tool results the agent must keep verbatim (agent.py wraps every result in <tool_output tool="...">).
+_KEEP_PREFIXES = ('<tool_output tool="use_skill"',)
 
 
 def _chars(messages: list[Message]) -> int:
@@ -40,7 +43,7 @@ def compact_history(
         if total - saved <= budget_chars:
             break
         m = messages[i]
-        if _MARK in m.content or len(m.content) <= PREVIEW_CHARS * 2:
+        if _MARK in m.content or len(m.content) <= PREVIEW_CHARS * 2 or m.content.startswith(_KEEP_PREFIXES):
             continue
         dropped = len(m.content) - PREVIEW_CHARS
         short = f"{m.content[:PREVIEW_CHARS]}\n…[{dropped} {_MARK}]"

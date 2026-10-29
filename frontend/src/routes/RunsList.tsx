@@ -1,15 +1,15 @@
-import { History, Plus, RefreshCw, SearchX, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, History, Plus, RefreshCw, RotateCcw, SearchX, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 
 import {
-  Button, ButtonLink, Card, Dialog, EmptyState, ErrorState, FilterBar, Page, PageHeader, SearchField, SelectField, Skeleton,
+  Button, ButtonLink, Card, Dialog, EmptyState, ErrorState, FilterBar, Page, PageHeader, SearchField, SegmentedTabs, SelectField, Skeleton,
 } from "@/components/ui";
 import { errorMessage } from "@/lib/api";
 import { MODE_META } from "@/lib/modes";
 import { useRunsList } from "@/lib/queries";
 import type { Run } from "@/lib/types";
-import { TERMINAL, useDeleteRuns } from "@/features/runs/queries";
+import { TERMINAL, useDeleteRuns, useEmptyTrash, useRunsAction, type RunAction, type RunView } from "@/features/runs/queries";
 import { RunsStack, RunsTable, SelectAll } from "@/features/runs/RunsViews";
 import { useMediaQuery } from "@/features/runs/useMediaQuery";
 import { toast } from "@/stores/toast";
@@ -19,6 +19,15 @@ const PAGE = 100;
 const MAX_LIMIT = 200; // backend cap for GET /runs?limit=
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+const VIEWS: { value: RunView; label: string; hint: string }[] = [
+  { value: "active", label: "Runs", hint: "Runs that are not archived or in the trash" },
+  { value: "archived", label: "Archived", hint: "Kept intact, hidden from the main list" },
+  { value: "trash", label: "Trash", hint: "Deleted runs; restorable until they are purged" },
+];
+const DONE: Record<Exclude<RunAction, "delete">, string> = {
+  archive: "Archived", unarchive: "Unarchived", trash: "Moved to the trash:", restore: "Restored",
+};
 
 function TableSkeleton() {
   return (
@@ -53,7 +62,7 @@ function DeleteDialog({ runs, open, onOpenChange, onDeleted }: {
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={`Delete ${plural(n, "run")}?`}
-      description="Their timelines, artifacts and exports are removed permanently. This can't be undone."
+      description="Their timelines, artifacts and exports are removed permanently. This can't be undone. (Move to trash instead to keep a way back.)"
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -75,8 +84,11 @@ export default function RunsList() {
   const status = params.get("status") ?? "";
   const mode = params.get("mode") ?? "";
   const search = params.get("q") ?? "";
+  const view = (VIEWS.find((v) => v.value === params.get("view"))?.value ?? "active") as RunView;
   const [limit, setLimit] = useState(PAGE);
-  const q = useRunsList({ status, mode, limit });
+  const q = useRunsList({ status, mode, limit, view: view === "active" ? undefined : view });
+  const act = useRunsAction();
+  const emptyTrash = useEmptyTrash();
   const wide = useMediaQuery("(min-width: 640px)");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
@@ -89,7 +101,34 @@ export default function RunsList() {
       return next;
     }, { replace: key === "q" });
   };
-  const clearFilters = () => setParams(new URLSearchParams());
+  const clearFilters = () => setParams(view === "active" ? new URLSearchParams() : new URLSearchParams({ view }));
+  const setView = (v: RunView) => {
+    setSelected(new Set());
+    setParam("view", v === "active" ? "" : v);
+  };
+  const apply = async (action: Exclude<RunAction, "delete">) => {
+    const res = await act.mutateAsync({ ids: chosen.map((r) => r.id), action });
+    if (res.deleted.length) {
+      const ids = res.deleted;
+      toast({
+        tone: "success", title: `${DONE[action]} ${plural(ids.length, "run")}`,
+        ...(action === "trash" ? { action: { label: "Undo", run: () => void act.mutateAsync({ ids, action: "restore" }) } } : {}),
+      });
+    }
+    if (res.failed.length) {
+      toast({ tone: "danger", title: `${plural(res.failed.length, "run")} could not be updated`, body: errorMessage(res.failed[0]!.error) });
+    }
+    setSelected((s) => new Set([...s].filter((id) => !res.deleted.includes(id))));
+  };
+  const empty = async () => {
+    try {
+      const r = await emptyTrash.mutateAsync();
+      toast({ tone: "success", title: `Deleted ${plural(r.deleted, "run")} permanently` });
+      setSelected(new Set());
+    } catch (e) {
+      toast({ tone: "danger", title: "Could not empty the trash", body: errorMessage(e) });
+    }
+  };
 
   const runs = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -115,13 +154,20 @@ export default function RunsList() {
 
   return (
     <Page>
-      <PageHeader title="Runs" description="Every council run you've started, newest first."
+      <PageHeader title="Runs" description={view === "trash"
+        ? "Runs in the trash are deleted permanently after the retention period (30 days by default)."
+        : view === "archived" ? "Archived runs are kept intact and hidden from the main list." : "Every council run you've started, newest first."}
         actions={
           <>
+            {view === "trash" && Boolean(q.data?.length) && (
+              <Button variant="danger" icon={Trash2} loading={emptyTrash.isPending} onClick={() => void empty()}>Empty trash</Button>
+            )}
             <Button icon={RefreshCw} loading={q.isFetching && !q.isLoading} onClick={() => void q.refetch()}>Refresh</Button>
             <ButtonLink to="/" variant="primary" icon={Plus}>New run</ButtonLink>
           </>
         } />
+
+      <SegmentedTabs label="Run list" value={view} onChange={setView} options={VIEWS} idPrefix="runs-view" panelId="runs-panel" className="mb-4" />
 
       {showFilters && (
         <FilterBar label="Filter runs" className="mb-4" onClear={clearFilters} canClear={filtered}>
@@ -152,12 +198,25 @@ export default function RunsList() {
           <div className="ml-auto flex items-center gap-2">
             <span className="text-sm font-medium tabular">{chosen.length} selected</span>
             <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear selection</Button>
-            <Button size="sm" variant="danger" icon={Trash2} onClick={() => setConfirming(true)}>Delete</Button>
+            {view === "active" && (
+              <Button size="sm" icon={Archive} loading={act.isPending} onClick={() => void apply("archive")}>Archive</Button>
+            )}
+            {view === "archived" && (
+              <Button size="sm" icon={ArchiveRestore} loading={act.isPending} onClick={() => void apply("unarchive")}>Unarchive</Button>
+            )}
+            {view === "trash" ? (
+              <>
+                <Button size="sm" icon={RotateCcw} loading={act.isPending} onClick={() => void apply("restore")}>Restore</Button>
+                <Button size="sm" variant="danger" icon={Trash2} onClick={() => setConfirming(true)}>Delete forever</Button>
+              </>
+            ) : (
+              <Button size="sm" variant="danger" icon={Trash2} loading={act.isPending} onClick={() => void apply("trash")}>Move to trash</Button>
+            )}
           </div>
         )}
       </div>
 
-      <Card as="div" className="overflow-hidden">
+      <Card as="div" className="overflow-hidden" id="runs-panel" role="tabpanel" aria-labelledby={`runs-view-tab-${view}`}>
         {q.isLoading ? (
           <div role="status" aria-label="Loading runs"><TableSkeleton /></div>
         ) : q.error ? (
@@ -166,6 +225,10 @@ export default function RunsList() {
           filtered ? (
             <EmptyState icon={SearchX} title="No runs match these filters" body="Try another status or mode, or clear the search."
               action={<Button onClick={clearFilters} icon={X}>Clear filters</Button>} />
+          ) : view === "archived" ? (
+            <EmptyState icon={Archive} title="No archived runs" body="Archive finished runs to keep them without cluttering the main list." />
+          ) : view === "trash" ? (
+            <EmptyState icon={Trash2} title="The trash is empty" body="Runs you move to the trash show up here until they are purged." />
           ) : (
             <EmptyState icon={History} title="No runs yet" body="Start a run from Home and it will show up here."
               action={<ButtonLink to="/" icon={Plus}>Start a run</ButtonLink>} />
