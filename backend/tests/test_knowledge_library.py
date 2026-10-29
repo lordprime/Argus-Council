@@ -1,6 +1,7 @@
 """Research library (auto-captured sources), text/URL documents and run-linked knowledge."""
 
 import asyncio
+import uuid
 from types import SimpleNamespace
 
 import httpx
@@ -162,7 +163,7 @@ async def test_link_knowledge_before_and_during_a_run(app, client, auth):
         "mode": "chat",
         "provider": "gated",
         "model": "m",
-        "knowledge_base_ids": [later["id"][:-1] + "0"],
+        "knowledge_base_ids": [str(uuid.uuid4())],  # an id nobody owns
     }
     assert (await client.post("/api/v1/runs", headers=auth, json=bad)).status_code == 404
 
