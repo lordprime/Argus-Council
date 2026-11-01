@@ -11,24 +11,22 @@ from __future__ import annotations
 import io
 import math
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-import reportlab
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from reportlab.graphics import shapes
 
 from argus.core.logging import get_logger
+from argus.reports import fonts
 
 log = get_logger(__name__)
 
 SUPERSAMPLE = 2
-_FONT_DIR = Path(reportlab.__file__).parent / "fonts"
 _FONT_FILES = {
-    "bold": "VeraBd.ttf",
-    "italic": "VeraIt.ttf",
-    "bolditalic": "VeraBI.ttf",
-    "regular": "Vera.ttf",
+    "bold": fonts.path(fonts.SANS_BOLD),
+    "italic": fonts.path(fonts.SANS_ITALIC),
+    "bolditalic": fonts.path(fonts.SANS_BOLD_ITALIC),
+    "regular": fonts.path(fonts.SANS),
 }
 
 Matrix = tuple[float, float, float, float, float, float]
@@ -63,7 +61,7 @@ def _mult(a: Matrix, b: Matrix) -> Matrix:
 @lru_cache(maxsize=64)
 def _font(style: str, px: int) -> Any:
     try:
-        return ImageFont.truetype(str(_FONT_DIR / _FONT_FILES[style]), max(px, 1))
+        return ImageFont.truetype(str(_FONT_FILES[style]), max(px, 1))
     except OSError:
         return ImageFont.load_default(size=max(px, 1))
 

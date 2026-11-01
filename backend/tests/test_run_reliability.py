@@ -663,7 +663,14 @@ async def test_approval_timeout_is_a_setting(client, auth, app):
 async def test_approval_wait_is_capped_by_the_remaining_runtime(client, auth, app):
     _tool_run_setup(app, "apruntime")
     cid = await _tool_council(
-        client, auth, "apruntime", {"oversight": {"monitor_sensitivity": "off"}, "max_runtime_minutes": 0.02}
+        client,
+        auth,
+        "apruntime",
+        {
+            "oversight": {"monitor_sensitivity": "off"},
+            "max_runtime_minutes": 0.02,
+            "extensions": {"enabled": False},  # halt instead of asking to raise the runtime limit
+        },
     )
     rid = (await client.post(API, headers=auth, json={"topic": "ship it", "council_id": cid})).json()["id"]
     run = await wait_status(client, auth, rid, timeout=5)

@@ -69,12 +69,14 @@ export interface MemoryItem {
 }
 
 /** Accepted upload types. PDFs must have a text layer (scans without OCR have no text to index). */
-export const ACCEPT = ".md,.markdown,.txt,.text,.html,.htm,.pdf,text/markdown,text/plain,text/html,application/pdf";
+export const ACCEPT =
+  ".md,.markdown,.txt,.text,.html,.htm,.pdf,.csv,.tsv,.xlsx,text/markdown,text/plain,text/html,application/pdf," +
+  "text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const OK_EXT = /\.(md|markdown|txt|text|html?|pdf)$/i;
+const OK_EXT = /\.(md|markdown|txt|text|html?|pdf|csv|tsv|xlsx)$/i;
 
 export function fileProblem(file: File): string | null {
-  if (!OK_EXT.test(file.name)) return "Unsupported file type — use .md, .txt, .html or .pdf.";
+  if (!OK_EXT.test(file.name)) return "Unsupported file type — use .md, .txt, .html, .pdf, .csv or .xlsx.";
   if (file.size > MAX_FILE_BYTES) return "File is larger than the 5 MB limit.";
   if (file.size === 0) return "File is empty.";
   return null;

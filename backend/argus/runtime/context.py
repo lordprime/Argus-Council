@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import mimetypes
 import time
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from argus.core.metrics import APPROVALS, VIOLATIONS
 from argus.db.models import Artifact
 from argus.runtime.events import Actor, EventSink
-from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Violation
+from argus.runtime.guardrails import LIMIT_LABELS, GuardrailBreach, GuardrailEngine, Violation
 from argus.services.llm import LLMRouter, UsageLedger
 
 
@@ -226,6 +227,12 @@ def _diff_stats(old: str | None, new: str) -> tuple[int, int]:
     return added, removed
 
 
+def _fmt(value: float | None) -> str:
+    if value is None:
+        return "unlimited"
+    return f"{value:,.2f}".rstrip("0").rstrip(".") if value % 1 else f"{int(value):,}"
+
+
 @dataclass
 class Approval:
     id: str
@@ -325,8 +332,14 @@ class RunContext:
         self.notes: list[dict[str, Any]] = []
         self.sources: dict[str, dict[str, Any]] = {}
         self.controls = Controls()
-        # Paused time does not count toward max_runtime_minutes.
-        engine.paused_s = self.controls.paused_s
+        # Paused time, and time spent waiting for the user to raise a limit, does not count
+        # toward max_runtime_minutes.
+        self._limit_wait_s = 0.0
+        self._limit_wait_since: float | None = None
+        engine.paused_s = lambda: self.controls.paused_s() + self._limit_waiting_s()
+        self._extend_lock = asyncio.Lock()
+        self.extensions: dict[str, int] = defaultdict(int)  # limit rule -> times raised
+        self.extension_declined: set[str] = set()
         self.approvals: dict[str, Approval] = {}
         self.approval_timeout_s = approval_timeout_s
         self.depth = depth
@@ -349,7 +362,69 @@ class RunContext:
             if member_id is None or member_id not in self.controls.held_members:
                 break
             await asyncio.sleep(0.05)
-        self.engine.enforce_limits()
+        v = self.engine.check_limits()
+        while v is not None:
+            exceeded = functools.partial(self.engine.exceeded, v.rule)
+            if not await self.extend_limit(v.rule, still_exceeded=exceeded):
+                raise GuardrailBreach(v)
+            v = self.engine.check_limits()
+
+    def _limit_waiting_s(self) -> float:
+        since = self._limit_wait_since
+        return self._limit_wait_s + (self.engine.clock() - since if since is not None else 0.0)
+
+    async def extend_limit(self, rule: str, actor: Actor | None = None, *, still_exceeded: Any) -> bool:
+        """Ask the user to raise ``rule`` now that the run hit it. True when the run may go on.
+
+        One request at a time: agents that hit the same limit wait for the first one's answer and
+        re-check (``still_exceeded``) before asking again. A rejection, an expired request or the
+        last allowed extension stops further asks for that limit; the run then halts as before.
+        """
+        if not self.engine.can_extend(rule) or self.depth > 0:
+            return False
+        async with self._extend_lock:
+            if not still_exceeded():
+                return True  # raised while this agent waited for the lock
+            policy = self.engine.rails.extensions
+            if rule in self.extension_declined or self.extensions[rule] >= policy.max_extensions:
+                return False
+            current = self.engine.limit(rule)
+            proposed = self.engine.proposed_limit(rule)
+            label, unit = LIMIT_LABELS[rule]
+            summary = (
+                f"The run reached its {label} ({_fmt(current)} {unit}). Raise it to "
+                f"{_fmt(proposed)} {unit} so the council can finish? "
+                f"(extension {self.extensions[rule] + 1} of {policy.max_extensions})"
+            )
+            self._limit_wait_since = self.engine.clock()
+            try:
+                decision = await self.request_approval(
+                    actor or Actor.system(), summary, ["limit_extension"], max_wait_s=self.approval_timeout_s
+                )
+            finally:
+                self._limit_wait_s += self.engine.clock() - self._limit_wait_since
+                self._limit_wait_since = None
+            if decision.get("decision") != "approved":
+                self.extension_declined.add(rule)
+                return False
+            edited = (decision.get("edited_args") or {}).get("limit")
+            if isinstance(edited, int | float) and not isinstance(edited, bool) and edited > (current or 0):
+                proposed = float(edited)
+            self.engine.set_limit(rule, proposed)
+            self.extensions[rule] += 1
+            await self.sink.emit(
+                "guardrail.extended",
+                {
+                    "rule": rule,
+                    "from": current,
+                    "to": self.engine.limit(rule),
+                    "extensions": self.extensions[rule],
+                    "max_extensions": policy.max_extensions,
+                },
+                actor=Actor.user(),
+            )
+            await self.budget_update()
+            return not still_exceeded()
 
     async def violation(self, v: Violation, target: dict[str, Any] | None = None, actor: Actor | None = None):
         VIOLATIONS.labels(v.rule, v.action).inc()
@@ -364,7 +439,13 @@ class RunContext:
 
     # -------------------------------------------------- approvals
     async def request_approval(
-        self, member: Actor, summary: str, risk: list[str], tool_call_id: str | None = None
+        self,
+        member: Actor,
+        summary: str,
+        risk: list[str],
+        tool_call_id: str | None = None,
+        *,
+        max_wait_s: float | None = None,
     ) -> dict[str, Any]:
         aid = f"apr_{uuid.uuid4().hex[:12]}"
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -385,8 +466,11 @@ class RunContext:
             },
             actor=member,
         )
-        # The run's runtime limit keeps running while it waits: never wait past it.
+        # The run's runtime limit keeps running while it waits: never wait past it. A request to
+        # raise a limit passes ``max_wait_s``: its wait is not counted toward the runtime.
         remaining = self.engine.rails.max_runtime_minutes * 60 - self.engine.runtime_s
+        if max_wait_s is not None:
+            remaining = max_wait_s
         wait_s = max(min(self.approval_timeout_s, remaining), 0.0)
         try:
             decision = await asyncio.wait_for(fut, timeout=wait_s)

@@ -21,7 +21,9 @@ from argus.core.errors import ArgusError
 from argus.db.base import utcnow
 from argus.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, MemoryItem
 from argus.knowledge.bm25 import Doc, rank
+from argus.knowledge.tables import TABLE_TYPES, chunk_rows, strip_repeated_heads
 from argus.knowledge.text import (
+    CHUNK_OVERLAP,
     TooLarge,
     UnsupportedType,
     chunk_text,
@@ -149,7 +151,7 @@ async def _store(
     source_url: str | None = None,
     run_id: uuid.UUID | None = None,
 ) -> KnowledgeDocument:
-    pieces = chunk_text(text)
+    pieces = chunk_rows(text) if content_type in TABLE_TYPES else chunk_text(text)
     if not pieces:
         raise ArgusError("The document contains no text")
     existing = await kb_chunk_count(db, kb.id)
@@ -380,6 +382,75 @@ async def search(db: AsyncSession, kb_ids: Sequence[uuid.UUID], query: str, k: i
             }
         )
     return {"query": query, "terms": terms, "results": results}
+
+
+def _join_overlapping(chunks: list[str]) -> str:
+    """Rejoin consecutive ``chunk_text`` windows, dropping the overlap each repeats of the last."""
+    out = ""
+    for chunk in chunks:
+        if out:
+            head = chunk[:60]
+            pos = out.rfind(head, max(0, len(out) - CHUNK_OVERLAP - 120)) if head else -1
+            if pos != -1 and chunk.startswith(out[pos:]):
+                chunk = chunk[len(out) - pos :]
+                out += chunk
+                continue
+            out += "\n"
+        out += chunk
+    return out
+
+
+async def read_document(
+    db: AsyncSession,
+    kb_ids: Sequence[uuid.UUID],
+    document: str,
+    *,
+    start: int = 0,
+    max_chars: int = 20_000,
+) -> dict[str, Any] | None:
+    """A document of ``kb_ids`` (already ownership-checked), by id or file name, read in order
+    from chunk ``start`` up to about ``max_chars``. Spreadsheets come back as their full rows."""
+    if not kb_ids:
+        return None
+    q = (
+        select(KnowledgeDocument, KnowledgeBase)
+        .join(KnowledgeBase, KnowledgeBase.id == KnowledgeDocument.kb_id)
+        .where(KnowledgeDocument.kb_id.in_(list(kb_ids)))
+    )
+    try:
+        q = q.where(KnowledgeDocument.id == uuid.UUID(document))
+    except ValueError:
+        q = q.where(func.lower(KnowledgeDocument.filename) == document.strip().lower())
+    row = (await db.execute(q.order_by(KnowledgeDocument.created_at.desc()).limit(1))).first()
+    if row is None:
+        return None
+    doc, kb = row
+    texts: list[str] = []
+    used, nxt = 0, start
+    rows = await db.execute(
+        select(KnowledgeChunk.idx, KnowledgeChunk.text)
+        .where(KnowledgeChunk.document_id == doc.id, KnowledgeChunk.idx >= start)
+        .order_by(KnowledgeChunk.idx)
+    )
+    for idx, text in rows:
+        if texts and used + len(text) > max_chars:
+            break
+        texts.append(text)
+        used += len(text)
+        nxt = idx + 1
+    table = doc.content_type in TABLE_TYPES
+    return {
+        "kb_name": kb.name,
+        "document_id": str(doc.id),
+        "filename": doc.filename,
+        "title": doc.title,
+        "source_url": doc.source_url,
+        "content_type": doc.content_type,
+        "chunk_count": doc.chunk_count,
+        "start": start,
+        "next": nxt if nxt < doc.chunk_count else None,
+        "text": strip_repeated_heads(texts) if table else _join_overlapping(texts),
+    }
 
 
 # ------------------------------------------------------------------ memory

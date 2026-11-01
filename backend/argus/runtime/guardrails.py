@@ -69,6 +69,33 @@ class ReportPolicy(_Strict):
     human_checkins: bool = False  # the user approves the outline in the approval queue
 
 
+ExtendableLimit = Literal[
+    "max_steps", "max_agent_iterations", "max_runtime_minutes", "budget.tokens", "budget.usd"
+]
+
+
+class LimitExtension(_Strict):
+    """Raising a limit the run hits, with the user's approval, instead of halting.
+
+    Each extension adds ``factor`` of the limit the run started with. Money (``budget.usd``) is
+    opt-in. Sub-councils never extend: they stay inside their parent's ceilings.
+    """
+
+    enabled: bool = True
+    limits: list[ExtendableLimit] = Field(
+        default_factory=lambda: ["max_steps", "max_agent_iterations", "max_runtime_minutes", "budget.tokens"]
+    )
+    factor: float = Field(default=0.5, gt=0, le=4)
+    max_extensions: int = Field(default=3, ge=0, le=20)  # per limit, per run
+
+
+class ContextPolicy(_Strict):
+    """How an agent's working history is kept within a model's context window."""
+
+    condense: bool = True  # summarise older turns once truncating tool output is not enough
+    budget_chars: int = Field(default=120_000, ge=20_000, le=2_000_000)
+
+
 class Guardrails(_Strict):
     budget: Budget = Field(default_factory=Budget)
     max_steps: int = Field(default=80, ge=1, le=10_000)
@@ -86,6 +113,8 @@ class Guardrails(_Strict):
     sandbox: SandboxPolicy = Field(default_factory=SandboxPolicy)
     oversight: Oversight = Field(default_factory=Oversight)
     report: ReportPolicy = Field(default_factory=ReportPolicy)
+    extensions: LimitExtension = Field(default_factory=LimitExtension)
+    context: ContextPolicy = Field(default_factory=ContextPolicy)
 
     @classmethod
     def resolve(cls, *layers: dict[str, Any] | None) -> Guardrails:
@@ -119,7 +148,18 @@ class Guardrails(_Strict):
             )
         data["skills"]["deny"] = sorted(set(self.skills.deny) | set(parent.skills.deny))
         data["approval_required"] = sorted(set(self.approval_required) | set(parent.approval_required))
+        data["extensions"]["enabled"] = False  # a sub-council halts at its ceilings
         return Guardrails.model_validate(data)
+
+
+# Extendable limits as people read them: (name, unit).
+LIMIT_LABELS: dict[str, tuple[str, str]] = {
+    "max_steps": ("step limit", "steps"),
+    "max_agent_iterations": ("per-agent turn limit", "turns"),
+    "max_runtime_minutes": ("runtime limit", "minutes"),
+    "budget.tokens": ("token budget", "tokens"),
+    "budget.usd": ("spend budget", "USD"),
+}
 
 
 def _deep_merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
@@ -249,6 +289,8 @@ class GuardrailEngine:
         self.usage = Usage()
         self.inflight = Usage()
         self.parent = parent
+        # The limits the run started with: each extension adds a share of these.
+        self.original = {rule: self.limit(rule) for rule in LIMIT_LABELS}
 
     # -------------------------------------------------- accounting
     def record_usage(self, usage: Usage) -> None:
@@ -272,6 +314,61 @@ class GuardrailEngine:
         self.usage = self.usage + amount
         child.parent = None  # anything the child records later no longer reaches this tree
         return amount
+
+    # -------------------------------------------------- limit extensions
+    def limit(self, rule: str) -> float | None:
+        """The current value of an extendable limit (``None``: unlimited)."""
+        if rule == "budget.usd":
+            return self.rails.budget.usd
+        if rule == "budget.tokens":
+            return self.rails.budget.tokens
+        return getattr(self.rails, rule)
+
+    def set_limit(self, rule: str, value: float) -> None:
+        if rule == "budget.usd":
+            self.rails.budget.usd = round(float(value), 4)
+        elif rule == "budget.tokens":
+            self.rails.budget.tokens = int(value)
+        elif rule == "max_runtime_minutes":
+            self.rails.max_runtime_minutes = float(value)
+        else:
+            setattr(self.rails, rule, int(value))
+
+    def can_extend(self, rule: str) -> bool:
+        """Whether the user may be asked to raise ``rule`` (never in a sub-council)."""
+        policy = self.rails.extensions
+        return (
+            policy.enabled
+            and self.parent is None
+            and rule in policy.limits
+            and self.limit(rule) is not None
+            and policy.max_extensions > 0
+        )
+
+    def exceeded(self, rule: str) -> bool:
+        """Whether this engine's own ``rule`` limit is exceeded now."""
+        limit = self.limit(rule)
+        if limit is None:
+            return False
+        used = self.total_usage
+        observed = {
+            "max_steps": self.steps,
+            "max_runtime_minutes": self.runtime_s / 60,
+            "budget.tokens": used.total_tokens,
+            "budget.usd": used.cost_usd,
+        }.get(rule)
+        return observed is not None and observed > limit
+
+    def proposed_limit(self, rule: str) -> float:
+        """The limit after one more extension: ``factor`` of the starting limit on top."""
+        current = float(self.limit(rule) or 0)
+        base = float(self.original.get(rule) or current or 1)
+        step = base * self.rails.extensions.factor
+        if rule == "budget.usd":
+            return round(current + max(step, 0.01), 4)
+        if rule == "max_runtime_minutes":
+            return round(current + max(step, 1.0), 2)
+        return float(int(current + max(round(step), 1)))
 
     def record_step(self) -> None:
         self.steps += 1

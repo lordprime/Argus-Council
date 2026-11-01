@@ -17,6 +17,8 @@ from typing import Any
 
 from markdown_it import MarkdownIt
 
+from argus.reports import fonts
+
 FORMATS = {
     "md": ("text/markdown", "md"),
     "txt": ("text/plain", "txt"),
@@ -293,7 +295,7 @@ def _rl_markup(spans: list[Span]) -> str:
     for s in spans:
         t = html.escape(s.text).replace("\n", "<br/>")
         if s.code:
-            t = f'<font face="Courier">{t}</font>'
+            t = f'<font face="{fonts.MONO}">{t}</font>'
         if s.bold:
             t = f"<b>{t}</b>"
         if s.italic:
@@ -307,7 +309,6 @@ def _rl_markup(spans: list[Span]) -> str:
 def to_pdf(blocks: list[Block], title: str) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
     from reportlab.platypus import (
         HRFlowable,
@@ -321,7 +322,7 @@ def to_pdf(blocks: list[Block], title: str) -> bytes:
         TableStyle,
     )
 
-    styles = getSampleStyleSheet()
+    styles = fonts.stylesheet()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,

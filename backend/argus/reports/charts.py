@@ -23,6 +23,7 @@ from reportlab.graphics.widgets.markers import makeMarker
 from reportlab.lib import colors
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
+from argus.reports import fonts
 from argus.reports.model import MAX_SERIES, Chart, Finding, QARound, Recommendation, Risk
 
 # Categorical slots, light surface (fixed order; never cycled).
@@ -34,7 +35,8 @@ ACCENT = "#4338ca"  # the Argus brand indigo (headings, rules), never a data col
 
 SERIES = [colors.HexColor(h) for h in SERIES_HEX]
 STATUS = {k: colors.HexColor(v) for k, v in STATUS_HEX.items()}
-FONT, FONT_BOLD = "Helvetica", "Helvetica-Bold"
+fonts.register()
+FONT, FONT_BOLD = fonts.SANS, fonts.SANS_BOLD
 
 WIDTH, HEIGHT = 440, 230
 
