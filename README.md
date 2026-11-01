@@ -48,13 +48,15 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 | **Oversight** | A thought bus with deterministic guardrails, a loop detector and overseer agents; hold, correct, release, halt and message from the UI or API |
 | **Guardrails and approvals** | Budgets in dollars and tokens, step, runtime, parallelism and file limits, tool, skill and domain allow and deny lists, content policy, and human approval for risky tools (with argument editing) |
 | **Sub-councils** | Members delegate self-contained tasks to child councils with clamped guardrails, a depth limit and budget charge-back |
+| **Model choice** | Each seat gets the model most competent for its role, weighed against its expected input and output token cost and the run's budget (`quality`, `balanced` or `economy`); unassigned steps go to the best-fitting member by competence, load and cost |
+| **Reports** | Research and general runs deliver a structured report built by specialist agents (outline, data, parallel sections, editing), with check-ins, a review-and-revise loop until it passes its quality checks, charts, tables, a risk matrix and a QA appendix ([docs](https://lordprime.github.io/Argus-Council/concepts/reports/)) |
 | **Models** | Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp, any OpenAI-compatible endpoint, and an offline `mock` provider; retries, fallbacks, caching, cost accounting and health checks |
 | **CLI agents** | Opt-in seats on Claude Code, the Codex CLI or the Gemini CLI, signed in with your own account or a CLI API key, mixed with API-key seats and falling back between them ([docs](https://github.com/lordprime/Argus-Council/blob/main/docs/cli-agents.md)) |
 | **Skills** | `SKILL.md` packages loaded on demand, six built-ins, an eight-skill marketplace, import and export, version history and restore |
 | **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory |
 | **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call |
 | **Run views** | Timeline, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
-| **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, regenerated on demand |
+| **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, rendered from the structured report, checked after rendering and regenerated on demand |
 | **Operations** | Webhooks, templates with variables, in-app notifications, Prometheus metrics, an audit log, insights, data retention, account export and deletion, and deploy, update, rollback, backup and restore scripts |
 
 ## Architecture

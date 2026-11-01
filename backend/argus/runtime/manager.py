@@ -392,21 +392,23 @@ class RunManager:
         )
 
     async def _auto_export(self, ctx: RunContext, markdown: str) -> None:
-        from argus.services.exports import export_markdown
+        from argus.services.exports import export_markdown, export_report
 
         meta = {"run_id": str(ctx.run_id), "mode": ctx.mode, "topic": ctx.topic}
+        report = ctx.extra.get("report")
         for fmt in ctx.outputs:
             if fmt == "md":
                 continue  # the Markdown deliverable is already in the workspace
             try:
-                await export_markdown(ctx.workspace, markdown, fmt, title=ctx.topic, run_meta=meta)
+                if report is not None:
+                    await export_report(ctx.workspace, report, fmt)
+                else:
+                    await export_markdown(ctx.workspace, markdown, fmt, title=ctx.topic, run_meta=meta)
             except Exception as exc:
                 log.warning("run.export_failed", format=fmt, error=str(exc)[:200])
 
     async def export(self, run_id: uuid.UUID, fmt: str) -> dict[str, Any]:
-        """Export the deliverable of a live or finished run."""
-        from argus.services.exports import export_markdown
-
+        """Export the deliverable of a live or finished run (its structured report when it has one)."""
         async with self.sessionmaker() as s:
             run = await s.get(Run, run_id)
         if run is None:
@@ -416,7 +418,7 @@ class RunManager:
         meta = {"run_id": str(run.id), "mode": run.mode, "topic": run.topic}
         live = self.live.get(run_id)
         if live is not None:
-            return await export_markdown(live.ctx.workspace, run.result, fmt, title=run.topic, run_meta=meta)
+            return await _export_deliverable(live.ctx.workspace, run.result, fmt, run.topic, meta)
         lock = self._offline_locks.get(run_id)
         if lock is None:
             lock = self._offline_locks[run_id] = asyncio.Lock()
@@ -428,7 +430,7 @@ class RunManager:
             from argus.runtime.context import Workspace
 
             ws = Workspace(run.id, self.sessionmaker, sink, engine, self.blob_root)
-            return await export_markdown(ws, run.result, fmt, title=run.topic, run_meta=meta)
+            return await _export_deliverable(ws, run.result, fmt, run.topic, meta)
 
     async def shutdown(self) -> None:
         tasks = [lr.task for lr in self.live.values() if lr.task]
@@ -660,3 +662,21 @@ async def list_active(sessionmaker: async_sessionmaker, owner_id: uuid.UUID) -> 
             select(Run).where(Run.owner_id == owner_id, Run.status.in_(("running", "paused")))
         )
         return list(rows.scalars())
+
+
+async def _export_deliverable(
+    ws: Any, markdown: str, fmt: str, title: str, meta: dict[str, Any]
+) -> dict[str, Any]:
+    """Export a run's report (``report.json``) when it has a valid one, else its Markdown result."""
+    from pydantic import ValidationError
+
+    from argus.reports.model import Report
+    from argus.services.exports import export_markdown, export_report
+
+    art = await ws.read("report.json")
+    if art is not None and art.content:
+        try:
+            return await export_report(ws, Report.model_validate_json(art.content), fmt)
+        except ValidationError:
+            log.warning("run.report_unreadable", run_id=meta.get("run_id"))
+    return await export_markdown(ws, markdown, fmt, title=title, run_meta=meta)

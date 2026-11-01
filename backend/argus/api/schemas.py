@@ -279,6 +279,9 @@ class SeatIn(BaseModel):
         return v
 
 
+ModelStrategy = Literal["quality", "balanced", "economy"]
+
+
 class PlanIn(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=20_000)
@@ -289,6 +292,12 @@ class PlanIn(BaseModel):
     auto_council: bool = True
     auto_models: bool = True
     roles: list[str] | None = Field(default=None, max_length=64, description="Fixed roles (only pick models)")
+    model_strategy: ModelStrategy = Field(
+        default="balanced", description="How model choice trades competence against cost"
+    )
+    budget_usd: float | None = Field(
+        default=5.0, ge=0, description="The run's dollar budget the council is fitted to (null: none)"
+    )
 
 
 class RunIn(BaseModel):
@@ -309,6 +318,10 @@ class RunIn(BaseModel):
     seats: list[SeatIn] | None = Field(default=None, min_length=1, max_length=64)
     auto_council: bool = Field(default=False, description="Compose the council's roles for this task")
     auto_models: bool = Field(default=False, description="Pick a model for every seat by its role")
+    model_strategy: ModelStrategy = Field(
+        default="balanced",
+        description="With auto_models: quality, balanced or economy (competence against cost)",
+    )
 
     _guardrails = field_validator("guardrails")(_valid_guardrails)
 

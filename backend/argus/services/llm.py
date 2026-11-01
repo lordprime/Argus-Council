@@ -36,6 +36,7 @@ from argus.providers.cli.provider import CLI_PROVIDERS
 from argus.providers.health import HealthResult, failure
 from argus.providers.mock import MockProvider
 from argus.providers.pricing import register_pricing
+from argus.providers.profiles import register_profile
 from argus.providers.types import CompletionRequest, CompletionResponse, StreamEvent, Usage
 
 log = get_logger(__name__)
@@ -181,6 +182,8 @@ class LLMRouter:
                 cache_read=p.get("cache_read"),
                 cache_write=p.get("cache_write"),
             )
+        for model, data in settings.model_profiles.items():
+            register_profile(model, data)
 
     # ------------------------------------------------------------ resolution
     async def resolve(self, db: AsyncSession | None, owner_id: uuid.UUID | None, name: str) -> Provider:

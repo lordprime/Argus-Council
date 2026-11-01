@@ -8934,6 +8934,31 @@
             ],
             "title": "Roles",
             "description": "Fixed roles (only pick models)"
+          },
+          "model_strategy": {
+            "type": "string",
+            "enum": [
+              "quality",
+              "balanced",
+              "economy"
+            ],
+            "title": "Model Strategy",
+            "description": "How model choice trades competence against cost",
+            "default": "balanced"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd",
+            "description": "The run's dollar budget the council is fitted to (null: none)",
+            "default": 5.0
           }
         },
         "type": "object",
@@ -9997,6 +10022,17 @@
             "title": "Auto Models",
             "description": "Pick a model for every seat by its role",
             "default": false
+          },
+          "model_strategy": {
+            "type": "string",
+            "enum": [
+              "quality",
+              "balanced",
+              "economy"
+            ],
+            "title": "Model Strategy",
+            "description": "With auto_models: quality, balanced or economy (competence against cost)",
+            "default": "balanced"
           }
         },
         "type": "object",

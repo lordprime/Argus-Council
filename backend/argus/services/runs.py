@@ -83,6 +83,14 @@ def _name_seats(seats: list[autocouncil.PlannedSeat]) -> None:
             s.name = title if taken[s.role] == 1 else f"{title} {taken[s.role]}"
 
 
+def _budget_usd(mode: str, manager: RunManager, guardrails: dict[str, Any]) -> float | None:
+    """The dollar budget the run will get, so the planned council can be fitted to it."""
+    try:
+        return Guardrails.resolve(mode_defaults(mode, manager), guardrails).budget.usd
+    except ValidationError:
+        return None  # reported properly when the run's guardrails are resolved
+
+
 def mode_defaults(mode: str, manager: RunManager) -> dict:
     """Base guardrail layer per mode (council and run settings override it)."""
     from argus.sandbox.client import RemoteSandbox
@@ -153,6 +161,8 @@ async def create_and_start_run(
             roles=None if data.auto_council else roster_for(data.mode, size),
             auto_roles=data.auto_council,
             auto_models=data.auto_models,
+            strategy=data.model_strategy,
+            budget_usd=_budget_usd(data.mode, manager, data.guardrails),
         )
         if not plan.seats or not all(s.provider and s.model for s in plan.seats):
             raise ArgusError(

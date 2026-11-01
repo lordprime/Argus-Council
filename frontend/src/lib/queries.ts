@@ -116,7 +116,13 @@ export interface NewRun {
   /** Let the server compose the roles for this task / pick a model for every seat. */
   auto_council?: boolean;
   auto_models?: boolean;
+  /** With auto_models: how model choice trades competence against cost. */
+  model_strategy?: ModelStrategy;
 }
+
+export type ModelStrategy = "quality" | "balanced" | "economy";
+export type ReportDepth = "brief" | "standard" | "extensive";
+export type CostBasis = "listed" | "reference" | "estimated" | "subscription" | "self_hosted";
 
 export type ModelTier = "strong" | "balanced" | "fast";
 
@@ -129,6 +135,12 @@ export interface PlannedSeat {
   model: string;
   tier: ModelTier;
   overseer: boolean;
+  /** 0-100: how competent the model is at this seat's job. */
+  competence: number;
+  /** Expected spend of the seat over a run, in USD. */
+  est_usd: number;
+  cost_basis: CostBasis | "";
+  model_reason: string;
 }
 
 export interface CouncilPlan {
@@ -138,6 +150,10 @@ export interface CouncilPlan {
   planner: "llm" | "heuristic" | "roster";
   planner_route: { provider: string; model: string } | null;
   notes: string[];
+  strategy: ModelStrategy;
+  budget_usd: number | null;
+  /** Expected spend of all seats over a run, in USD. */
+  estimated_usd: number;
 }
 
 export interface PlanRequest {
@@ -149,6 +165,8 @@ export interface PlanRequest {
   model?: string;
   auto_council: boolean;
   auto_models: boolean;
+  model_strategy?: ModelStrategy;
+  budget_usd?: number | null;
   roles?: string[];
 }
 

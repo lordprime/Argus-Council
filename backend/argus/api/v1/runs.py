@@ -81,6 +81,8 @@ async def plan_run(data: PlanIn, principal: CurrentPrincipal, db: DbDep, request
         roles=data.roles,
         auto_roles=data.auto_council and data.roles is None,
         auto_models=data.auto_models,
+        strategy=data.model_strategy,
+        budget_usd=data.budget_usd,
     )
     return plan.as_dict()
 

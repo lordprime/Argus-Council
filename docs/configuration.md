@@ -56,6 +56,7 @@ those are. To set any other variable in the stack, add it to the `api` service's
 | `ARGUS_ENABLE_MOCK_PROVIDER` | unset | yes | The offline `mock` provider; unset means on only for `ARGUS_ENV=test`, so installs never offer it |
 | `ARGUS_KNOWLEDGE_CAPTURE_ENABLED` | `true` | yes | Keep every page agents read (`web_fetch`) in each user's *Research library* knowledge base |
 | `ARGUS_MODEL_PRICING` | `{}` | | JSON map of model to prices, overriding the built-in table for cost accounting |
+| `ARGUS_MODEL_PROFILES` | `{}` | | JSON map of model to competence (`reasoning`, `coding`, `writing`, `speed`, 0-100) and reference prices (`input`, `output` per Mtok) used to pick models; see [Automatic councils and models](concepts/councils.md#automatic-councils-and-models) |
 | `ARGUS_SEARCH_PROVIDER` | unset | yes | `searxng`, `tavily` or `brave` for `web_search` |
 | `ARGUS_SEARCH_API_KEY` | unset | yes | API key for Tavily or Brave |
 | `ARGUS_SEARXNG_URL` | unset | yes | Base URL of a SearXNG instance |
