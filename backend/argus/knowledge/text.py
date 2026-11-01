@@ -9,6 +9,16 @@ from pathlib import PurePosixPath
 
 from bs4 import BeautifulSoup
 
+from argus.knowledge.tables import (
+    CSV_TYPE,
+    TABLE_TYPES,
+    TSV_TYPE,
+    XLSX_TYPE,
+    TableError,
+    TableTooLarge,
+    table_text,
+)
+
 CHUNK_CHARS = 800
 CHUNK_OVERLAP = 150
 
@@ -22,6 +32,15 @@ TEXT_TYPES = {
     ".htm": "text/html",
 }
 _DECLARED_OK = {"text/markdown", "text/x-markdown", "text/plain", "text/html", "application/octet-stream", ""}
+
+# Spreadsheets: extension -> canonical type, and what browsers and OSes declare for each. Windows
+# reports .csv as application/vnd.ms-excel.
+TABLE_EXTENSIONS = {".csv": CSV_TYPE, ".tsv": TSV_TYPE, ".xlsx": XLSX_TYPE}
+_TABLE_DECLARED_OK = {
+    CSV_TYPE: {CSV_TYPE, "application/csv", "text/plain", "application/vnd.ms-excel", "text/x-csv"},
+    TSV_TYPE: {TSV_TYPE, "text/plain", "text/tsv"},
+    XLSX_TYPE: {XLSX_TYPE, "application/zip", "application/x-zip-compressed"},
+}
 
 PDF_TYPE = "application/pdf"
 _PDF_DECLARED_OK = {PDF_TYPE, "application/x-pdf", "application/octet-stream", ""}
@@ -70,6 +89,13 @@ def detect_type(filename: str, declared: str | None) -> str:
         return PDF_TYPE
     if declared in (PDF_TYPE, "application/x-pdf"):
         raise UnsupportedType(f"A PDF must have a .pdf file name, not '{ext or 'none'}'")
+    if ext in TABLE_EXTENSIONS:
+        ctype = TABLE_EXTENSIONS[ext]
+        if declared not in _TABLE_DECLARED_OK[ctype] | {"application/octet-stream", ""}:
+            raise UnsupportedType(f"Content type '{declared}' does not match a {ext} file")
+        return ctype
+    if ext in (".xls", ".xlsm", ".xlsb", ".ods"):
+        raise UnsupportedType(f"'{ext}' workbooks are not supported: save the sheet as .xlsx or .csv")
     ctype = TEXT_TYPES.get(ext)
     if ctype is None:
         raise UnsupportedType(f"Unsupported file type '{ext or declared or 'unknown'}'")
@@ -108,6 +134,14 @@ def _pdf_text(data: bytes) -> str:
 def extract_text(data: bytes, content_type: str) -> str:
     if content_type == PDF_TYPE:
         return _normalise(_pdf_text(data))
+    if content_type in TABLE_TYPES:
+        # Kept line by line (one row per line): chunk_rows splits it on those lines.
+        try:
+            return table_text(data, content_type)
+        except TableTooLarge as exc:
+            raise TooLarge(str(exc)) from exc
+        except TableError as exc:
+            raise UnsupportedType(str(exc)) from exc
     if b"\x00" in data[:8192]:
         raise UnsupportedType("File looks binary, not text")
     try:

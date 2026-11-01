@@ -1,6 +1,7 @@
 // Role identity: color + glyph so role is never conveyed by color alone (ui-spec §7.3).
 
 import {
+  BadgeCheck,
   Blocks,
   Bot,
   Code2,
@@ -14,7 +15,10 @@ import {
   Radar,
   Scale,
   Search,
+  Sheet,
   Shield,
+  Telescope,
+  TrendingUp,
   User,
   type LucideIcon,
 } from "lucide-react";
@@ -43,6 +47,10 @@ export const ROLE_STYLES: Record<string, RoleStyle> = {
   critic: { icon: Scale, fg: "text-orange-700 dark:text-orange-300", bg: "bg-orange-100 dark:bg-orange-900/60", bar: "bg-orange-700 dark:bg-orange-300", border: "border-l-orange-700 dark:border-l-orange-300" },
   monitor: { icon: Radar, fg: "text-cyan-700 dark:text-cyan-300", bg: "bg-cyan-100 dark:bg-cyan-900/60", bar: "bg-cyan-700 dark:bg-cyan-300", border: "border-l-cyan-700 dark:border-l-cyan-300" },
   security: { icon: Shield, fg: "text-rose-700 dark:text-rose-300", bg: "bg-rose-100 dark:bg-rose-900/60", bar: "bg-rose-700 dark:bg-rose-300", border: "border-l-rose-700 dark:border-l-rose-300" },
+  scout: { icon: Telescope, fg: "text-pink-700 dark:text-pink-300", bg: "bg-pink-100 dark:bg-pink-900/60", bar: "bg-pink-700 dark:bg-pink-300", border: "border-l-pink-700 dark:border-l-pink-300" },
+  market_analyst: { icon: TrendingUp, fg: "text-green-700 dark:text-green-300", bg: "bg-green-100 dark:bg-green-900/60", bar: "bg-green-700 dark:bg-green-300", border: "border-l-green-700 dark:border-l-green-300" },
+  fact_checker: { icon: BadgeCheck, fg: "text-yellow-700 dark:text-yellow-300", bg: "bg-yellow-100 dark:bg-yellow-900/60", bar: "bg-yellow-700 dark:bg-yellow-300", border: "border-l-yellow-700 dark:border-l-yellow-300" },
+  data_analyst: { icon: Sheet, fg: "text-purple-700 dark:text-purple-300", bg: "bg-purple-100 dark:bg-purple-900/60", bar: "bg-purple-700 dark:bg-purple-300", border: "border-l-purple-700 dark:border-l-purple-300" },
   remote: { icon: Globe, fg: "text-slate-600 dark:text-slate-300", bg: "bg-slate-100 dark:bg-slate-800/60", bar: "bg-slate-600 dark:bg-slate-300", border: "border-l-slate-600 dark:border-l-slate-300" },
   user: { icon: User, fg: "text-indigo-700 dark:text-indigo-300", bg: "bg-indigo-100 dark:bg-indigo-900/60", bar: "bg-indigo-700 dark:bg-indigo-300", border: "border-l-indigo-700 dark:border-l-indigo-300" },
 };

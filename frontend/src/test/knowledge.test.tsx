@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { highlight } from "@/features/knowledge/highlight";
-import type { KnowledgeBase, KnowledgeDocument } from "@/features/knowledge/types";
+import { fileProblem, type KnowledgeBase, type KnowledgeDocument } from "@/features/knowledge/types";
 import KnowledgePage from "@/routes/knowledge/Knowledge";
 
 const json = (body: unknown, status = 200) =>
@@ -219,5 +219,14 @@ describe("Knowledge page", () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/v1/knowledge-bases", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Fresh", description: "" }) })),
     );
+  });
+});
+
+describe("fileProblem", () => {
+  it("accepts spreadsheets and refuses legacy workbooks", () => {
+    expect(fileProblem(new File(["a,b\n1,2"], "quotes.csv", { type: "text/csv" }))).toBeNull();
+    expect(fileProblem(new File(["a\tb"], "quotes.TSV"))).toBeNull();
+    expect(fileProblem(new File(["PK"], "totals.xlsx"))).toBeNull();
+    expect(fileProblem(new File(["x"], "old.xls"))).toMatch(/Unsupported file type/);
   });
 });

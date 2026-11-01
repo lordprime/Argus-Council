@@ -36,8 +36,10 @@ through their parent).
 
 Which tools a seat may call comes from its role's defaults (listed by `GET /api/v1/roles`) or
 the seat's own `tools`, always within the run's guardrails. Most roles get notes, artifacts,
-skills, `knowledge_search`, `memory_*` and the `mcp__*` tools of your MCP servers; the
-researcher and assistant add the web tools and `remote_agent`, the coder and tester add `fs_*`
+skills, `knowledge_search`, `knowledge_read`, `memory_*` and the `mcp__*` tools of your MCP
+servers; the researcher and assistant add the web tools (including `news_search` and
+`market_data`) and `remote_agent`; the scout, market analyst and fact checker are built around the
+live web tools, and the data analyst around `knowledge_read`; the coder and tester add `fs_*`
 and `shell`, and the chair adds `remote_agent` and `subcouncil`. Of the overseers, the critic
 and monitor have no tools and the security officer can only read files, notes and artifacts.
 
@@ -51,7 +53,23 @@ changed files are versioned back. Because the sandbox is isolated, coding counci
 `guardrails.network.allow_domains`, rejects hosts that resolve to private, loopback, link-local
 or metadata addresses (checked again on every redirect), caps size and content types, strips
 scripts and navigation, and treats page text as untrusted data. `web_search` uses SearXNG, Tavily
-or Brave (`ARGUS_SEARCH_PROVIDER`).
+or Brave (`ARGUS_SEARCH_PROVIDER`); without one configured there is no general web search.
+
+**Live data.** Two keyless tools work without a search provider and under the same network checks
+as `web_fetch` (allowed domains, private-address blocking, per-redirect checks):
+
+- `market_data(symbols, period)`: the latest quote, or a daily history (`5d` to `5y`) with first,
+  last, low and high, for up to 10 symbols per call. Stocks (`AAPL`, `RELIANCE.NS`), indices
+  (`^NSEI`), FX (`USDINR=X`), crypto (`BTC-USD`) and futures (`GC=F`), from the Yahoo Finance
+  chart API with Stooq as a fallback for plain quotes. Every answer carries the market time and
+  the retrieval time, and each symbol that fails says so rather than being filled in.
+- `news_search(query, when, region)`: recent articles from the Google News feed (last day, week,
+  month or any time), with outlet and publication time. The feed's DOCTYPE is removed before
+  parsing, so no XML entity is ever expanded.
+
+Both record every data URL as a numbered source. With `network.allow_domains` narrowed, add
+`query1.finance.yahoo.com`, `stooq.com` and `news.google.com` for them to work. `web_fetch` also
+reads CSV, TSV, RSS and Atom documents (for example a statistics agency's CSV download).
 
 ## Stepping in
 

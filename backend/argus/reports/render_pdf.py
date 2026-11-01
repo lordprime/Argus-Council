@@ -18,8 +18,9 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
     BaseDocTemplate,
     CondPageBreak,
@@ -41,6 +42,7 @@ from reportlab.platypus.tableofcontents import TableOfContents
 
 from argus.exporters import _rl_markup
 from argus.reports import charts as ch
+from argus.reports import fonts
 from argus.reports.inline import spans
 from argus.reports.model import CITATION, Block, Metric, Report, Section, numbering
 
@@ -48,6 +50,8 @@ PAGE_W, PAGE_H = A4
 MARGIN = 2 * cm
 FRAME_W = PAGE_W - 2 * MARGIN
 PASS_SCORE = 85.0
+# A dash between two figures (a range): the place a KPI value may wrap.
+_RANGE_DASH = re.compile(r"(?<=\d)\s*([\u2013\u2014-])\s*(?=\D?\d)")
 
 ACCENT = colors.HexColor(ch.ACCENT)
 INK, INK_2, INK_3 = colors.HexColor(ch.INK), colors.HexColor(ch.INK_2), colors.HexColor(ch.INK_3)
@@ -67,11 +71,11 @@ PRIORITY_STATUS = {"high": "critical", "medium": "warning", "low": "good"}
 
 
 def _styles() -> dict[str, ParagraphStyle]:
-    base = getSampleStyleSheet()
+    base = fonts.stylesheet()
     body = ParagraphStyle(
         "Body",
         parent=base["BodyText"],
-        fontName="Helvetica",
+        fontName=fonts.SANS,
         fontSize=10,
         leading=14.6,
         textColor=INK,
@@ -80,7 +84,7 @@ def _styles() -> dict[str, ParagraphStyle]:
     s = {
         "body": body,
         "lead": ParagraphStyle(
-            "Lead", parent=body, fontName="Helvetica-Oblique", textColor=INK_2, fontSize=10.5
+            "Lead", parent=body, fontName=fonts.SANS_ITALIC, textColor=INK_2, fontSize=10.5
         ),
         "small": ParagraphStyle(
             "Small", parent=body, fontSize=8.5, leading=11.5, textColor=INK_2, spaceAfter=2
@@ -92,7 +96,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "head": ParagraphStyle(
             "Head",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=8.6,
             leading=11,
             textColor=colors.white,
@@ -101,7 +105,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "caption": ParagraphStyle(
             "Caption",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=9,
             leading=12,
             textColor=INK,
@@ -115,7 +119,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h1": ParagraphStyle(
             "H1",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=17,
             leading=21,
             textColor=ACCENT,
@@ -126,7 +130,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h2": ParagraphStyle(
             "H2",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=13,
             leading=17,
             textColor=INK,
@@ -137,7 +141,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h3": ParagraphStyle(
             "H3",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=10.5,
             leading=14,
             textColor=INK,
@@ -146,7 +150,7 @@ def _styles() -> dict[str, ParagraphStyle]:
             spaceAfter=3,
         ),
         "kpi": ParagraphStyle(
-            "KPI", parent=body, fontName="Helvetica-Bold", fontSize=17, leading=20, spaceAfter=0
+            "KPI", parent=body, fontName=fonts.SANS_BOLD, fontSize=17, leading=20, spaceAfter=0
         ),
         "kpilabel": ParagraphStyle(
             "KPILabel", parent=body, fontSize=8, leading=10, textColor=INK_2, spaceAfter=0
@@ -154,7 +158,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "eyebrow": ParagraphStyle(
             "Eyebrow",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=9,
             leading=12,
             textColor=colors.white,
@@ -162,7 +166,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "covertitle": ParagraphStyle(
             "CoverTitle",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=27,
             leading=32,
             textColor=colors.white,
@@ -186,12 +190,12 @@ def _styles() -> dict[str, ParagraphStyle]:
             spaceAfter=10,
         ),
         "quote": ParagraphStyle(
-            "Quote", parent=body, fontName="Helvetica-Oblique", textColor=INK_2, leftIndent=12
+            "Quote", parent=body, fontName=fonts.SANS_ITALIC, textColor=INK_2, leftIndent=12
         ),
         "toc0": ParagraphStyle(
             "TOC0",
             parent=body,
-            fontName="Helvetica-Bold",
+            fontName=fonts.SANS_BOLD,
             fontSize=10,
             leading=13,
             spaceBefore=4,
@@ -280,7 +284,7 @@ class _Doc(BaseDocTemplate):
         canv.setFillColor(colors.HexColor("#3730a3"))
         canv.rect(0, PAGE_H - 11 * cm, PAGE_W, 0.25 * cm, stroke=0, fill=1)
         canv.setFillColor(INK_3)
-        canv.setFont("Helvetica", 7.5)
+        canv.setFont(fonts.SANS, 7.5)
         canv.drawString(
             MARGIN,
             1.1 * cm,
@@ -294,7 +298,7 @@ class _Doc(BaseDocTemplate):
         canv.setLineWidth(0.5)
         top = PAGE_H - MARGIN + 0.25 * cm
         canv.line(MARGIN, top, PAGE_W - MARGIN, top)
-        canv.setFont("Helvetica", 7.8)
+        canv.setFont(fonts.SANS, 7.8)
         canv.setFillColor(INK_2)
         title = self.report.title if len(self.report.title) < 90 else self.report.title[:87] + "…"
         canv.drawString(MARGIN, top + 4, title)
@@ -472,15 +476,20 @@ class _Builder:
     def kpis(self, metrics: list[Metric]) -> None:
         if not metrics:
             return
+        metrics = metrics[:8]
+        per_row = min(4, len(metrics))
+        gap = 6
+        col_w = (FRAME_W - gap * (per_row - 1)) / per_row
         cells = []
-        for m in metrics[:8]:
+        for m in metrics:
             arrow = {"up": "▲", "down": "▼", "flat": "▬"}.get(m.trend, "")
             delta = " ".join(x for x in [arrow, html.escape(m.delta)] if x)
-            value = html.escape(m.value) + (
+            style, text = self._kpi_fit(m.value, col_w - 9 - 6)
+            value = html.escape(text) + (
                 f'<font size="9" color="#52514e"> {html.escape(m.unit)}</font>' if m.unit else ""
             )
             inner = [
-                Paragraph(value, self.s["kpi"]),
+                Paragraph(value, style),
                 Paragraph(html.escape(m.label), self.s["kpilabel"]),
             ]
             if delta:
@@ -488,11 +497,9 @@ class _Builder:
             if m.note:
                 inner.append(Paragraph(f"<i>{html.escape(m.note)}</i>", self.s["kpilabel"]))
             cells.append(inner)
-        per_row = 4 if len(cells) >= 4 else len(cells)
         rows = [cells[i : i + per_row] for i in range(0, len(cells), per_row)]
         rows[-1] += [""] * (per_row - len(rows[-1]))
-        gap = 6
-        t = Table(rows, colWidths=[(FRAME_W - gap * (per_row - 1)) / per_row] * per_row, hAlign="LEFT")
+        t = Table(rows, colWidths=[col_w] * per_row, hAlign="LEFT")
         cmds: list[tuple[Any, ...]] = [("VALIGN", (0, 0), (-1, -1), "TOP")]
         for ri, row in enumerate(rows):
             for ci, cell in enumerate(row):
@@ -506,6 +513,21 @@ class _Builder:
                     ]
         t.setStyle(TableStyle(cmds))
         self.story += [t, Spacer(1, 12)]
+
+    def _kpi_fit(self, value: str, width: float) -> tuple[ParagraphStyle, str]:
+        """The KPI style and text for ``value`` in a card ``width`` wide. A value that overflows
+        shrinks (down to 10pt) so it never breaks mid-number: a dashed range such as ``₹80,000-₹1,07,900``
+        may break after its dash, and the size is set so the longest unbreakable piece fits."""
+        base = self.s["kpi"]
+        whole = stringWidth(value, base.fontName, base.fontSize)
+        if whole <= width:
+            return base, value
+        text, target = value, whole
+        if whole * 10 / base.fontSize > width:  # will not fit on one line even at 10pt
+            text = _RANGE_DASH.sub(r"\1 ", value)
+            target = max(stringWidth(w, base.fontName, base.fontSize) for w in text.split())
+        size = max(10.0, min(base.fontSize, base.fontSize * width / target))
+        return ParagraphStyle("KPIFit", parent=base, fontSize=size, leading=size * 1.2), text
 
     def callout(self, b: Block) -> None:
         bg, edge, label = TONES.get(b.tone, TONES["info"])

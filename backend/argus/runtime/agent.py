@@ -20,11 +20,19 @@ from argus.core.errors import NotFound
 from argus.core.logging import get_logger
 from argus.core.metrics import TOOL_CALLS, TOOL_LATENCY, tool_label
 from argus.providers.base import ProviderError
+from argus.providers.cli.provider import CLI_PROVIDERS
 from argus.providers.types import CompletionRequest, CompletionResponse, Message, ToolCall
 from argus.runtime.context import Correction, RunContext
 from argus.runtime.events import Actor
 from argus.runtime.guardrails import GuardrailBreach
-from argus.runtime.history import compact_history
+from argus.runtime.history import (
+    CONDENSE_SYSTEM,
+    compact_history,
+    condense_split,
+    fold_summary,
+    history_chars,
+    render_for_summary,
+)
 from argus.runtime.oversight import Thought, ThoughtBus
 from argus.services.llm import Route
 from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
@@ -32,6 +40,7 @@ from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
 log = get_logger(__name__)
 
 PREVIEW_CHARS = 2000
+CONDENSE_MAX_TOKENS = 2_000
 # The skill index is re-sent every turn; descriptions (up to 20,000 words) are cut to this there and
 # use_skill returns them in full.
 SKILL_SUMMARY_CHARS = 600
@@ -125,6 +134,7 @@ class AgentRunner:
         self.tools = tools
         self.bus = bus
         self.council_brief = council_brief
+        self._summary = ""  # the latest condensed record of this task's earlier turns
 
     # ------------------------------------------------------------ prompts
     def _system_prompt(self, extra: str = "") -> str:
@@ -162,7 +172,8 @@ class AgentRunner:
                 )
                 parts.append(
                     "\nKnowledge the user linked to this run. Search it with knowledge_search "
-                    f"(knowledge_bases=[name]) before the web, and cite what you use:\n{lines}"
+                    "(knowledge_bases=[name]) before the web, read whole documents and spreadsheets "
+                    f"with knowledge_read, and cite what you use:\n{lines}"
                 )
             parts.append(
                 "\nknowledge_search also covers the research library: every source earlier runs read."
@@ -419,6 +430,83 @@ class AgentRunner:
         result.content = cleaned
         return await finish("error" if result.is_error else "ok", result, t0)
 
+    # ------------------------------------------------------------ context
+    async def _fit_context(self, messages: list[Message], task_message: str, step_id: str | None) -> None:
+        """Keep the history inside the context budget: cut old tool output, then condense."""
+        policy = self.ctx.engine.rails.context
+        compact_history(messages, budget_chars=policy.budget_chars)
+        if policy.condense and history_chars(messages) > policy.budget_chars:
+            await self._condense(messages, task_message, step_id)
+
+    async def _condense(self, messages: list[Message], task_message: str, step_id: str | None) -> bool:
+        """Summarise the older turns with the seat's own model and fold them into the task message.
+
+        CLI seats are skipped: their vendor session keeps (and compacts) its own context. A failed
+        summary is not fatal; the agent goes on with the truncated history.
+        """
+        if self.member.provider in CLI_PROVIDERS:
+            return False
+        cut = condense_split(messages)
+        if cut is None:
+            return False
+        before = history_chars(messages)
+        prior = f"Earlier condensed record:\n{self._summary}\n\n" if self._summary else ""
+        req = CompletionRequest(
+            model=self.member.model,
+            messages=[
+                Message.system(CONDENSE_SYSTEM),
+                Message.user(
+                    f"{prior}The agent's task:\n{task_message[:6_000]}\n\n"
+                    f"Work to condense:\n{render_for_summary(messages[2:cut])}"
+                ),
+            ],
+            max_tokens=CONDENSE_MAX_TOKENS,
+            metadata={
+                "phase": "condense",
+                "role": self.member.role,
+                "member": self.member.name,
+                "topic": self.ctx.topic,
+                "mode": self.ctx.mode,
+                "cache": False,
+            },
+        )
+        try:
+            resp = await self.ctx.llm.complete(
+                req,
+                Route(self.member.provider, self.member.model),
+                owner_id=self.ctx.owner_id,
+                fallbacks=[f for f in self.member.fallbacks if f.provider not in CLI_PROVIDERS],
+            )
+        except Exception as exc:
+            log.warning("agent.condense_failed", member=self.member.name, error=str(exc)[:200])
+            return False
+        # Spend counts toward the budget; a condensation is not a step of the run.
+        self.ctx.ledger.record(resp)
+        self.ctx.engine.record_usage(resp.usage)
+        spent = self.ctx.by_member[self.member.id]
+        spent["usd"] += resp.usage.cost_usd
+        spent["tokens"] += resp.usage.total_tokens
+        summary = (resp.content or "").strip()
+        if not summary or resp.finish_reason == "error":
+            return False
+        self._summary = summary
+        messages[1] = Message.user(fold_summary(task_message, summary))
+        del messages[2:cut]
+        await self.ctx.sink.emit(
+            "context.condensed",
+            {
+                "member_id": self.member.id,
+                "removed_messages": cut - 2,
+                "chars_before": before,
+                "chars_after": history_chars(messages),
+                "summary_chars": len(summary),
+            },
+            actor=self.member.actor,
+            step_id=step_id,
+        )
+        await self.ctx.budget_update()
+        return True
+
     # ------------------------------------------------------------ main loop
     def _apply_corrections(self, messages: list[Message]) -> list[Correction]:
         one_shot, _ = self.ctx.corrections_for(self.member.id)
@@ -445,17 +533,24 @@ class AgentRunner:
         phase: str = "execute",
     ) -> AgentOutcome:
         rails = self.ctx.engine.rails
-        messages: list[Message] = [
-            Message.system(self._system_prompt()),
-            Message.user(
-                (f"Context from the council so far:\n{context}\n\n" if context else "")
-                + f"Your task:\n{task}"
-            ),
-        ]
+        task_message = (f"Context from the council so far:\n{context}\n\n" if context else "") + (
+            f"Your task:\n{task}"
+        )
+        messages: list[Message] = [Message.system(self._system_prompt()), Message.user(task_message)]
+        self._summary = ""
         last_text = ""
         tool_calls = 0
         corrections_this_thought = 0
-        for iteration in range(1, rails.max_agent_iterations + 1):
+        iteration = 0
+        while True:
+            iteration += 1
+            # Read the limit each turn: the user may raise it (for every agent) mid-run.
+            if iteration > rails.max_agent_iterations and not await self.ctx.extend_limit(
+                "max_agent_iterations",
+                self.member.actor,
+                still_exceeded=lambda n=iteration: n > rails.max_agent_iterations,
+            ):
+                break
             await self.ctx.checkpoint(self.member.id)
             messages[0] = Message.system(self._system_prompt())  # picks up new standing orders
             applied = self._apply_corrections(messages)
@@ -465,7 +560,7 @@ class AgentRunner:
                     {"correction_id": c.id, "outcome": "applied"},
                     actor=self.member.actor,
                 )
-            compact_history(messages)  # bound what each turn re-sends (see runtime/history.py)
+            await self._fit_context(messages, task_message, step_id)  # see runtime/history.py
             thought_id, event_id, resp = await self._think(messages, step_id, phase)
             last_text = resp.content or last_text
             thought = Thought(
@@ -536,7 +631,7 @@ class AgentRunner:
         return AgentOutcome(
             last_text,
             ok=bool(last_text),
-            iterations=rails.max_agent_iterations,
+            iterations=iteration - 1,
             tool_calls=tool_calls,
             reason="iteration_limit",
         )

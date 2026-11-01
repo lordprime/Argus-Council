@@ -34,6 +34,10 @@ _TEXT_TYPES = (
     "text/xml",
     "text/markdown",
     "application/xhtml+xml",
+    "text/csv",
+    "text/tab-separated-values",
+    "application/rss+xml",
+    "application/atom+xml",
 )
 
 Resolver = Callable[[str], Awaitable[list[str]]]
@@ -101,8 +105,11 @@ async def fetch_raw(
     block_private: bool,
     client: httpx.AsyncClient,
     resolver: Resolver,
+    types: tuple[str, ...] = _TEXT_TYPES,
 ) -> tuple[str, str, str]:
-    """GET a text document, re-checking every redirect hop. Returns (final url, content type, body)."""
+    """GET a text document, re-checking every redirect hop. Returns (final url, content type, body).
+
+    ``types`` are the content-type prefixes accepted (an empty or missing type is always accepted)."""
     for _ in range(MAX_REDIRECTS + 1):
         await check_url(url, allow_domains, block_private, resolver)
         async with client.stream("GET", url, follow_redirects=False) as resp:
@@ -112,7 +119,7 @@ async def fetch_raw(
             if resp.status_code >= 400:
                 raise FetchBlocked(f"HTTP {resp.status_code} from {urlparse(url).hostname}")
             ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-            if ctype and not ctype.startswith(_TEXT_TYPES):
+            if ctype and not ctype.startswith(types):
                 raise FetchBlocked(f"Unsupported content type '{ctype}'")
             chunks, size = [], 0
             async for chunk in resp.aiter_bytes():
@@ -130,6 +137,47 @@ def readable(raw: str, ctype: str) -> tuple[str, str]:
     if "html" in ctype or raw.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
         return html_to_text(raw)
     return "", raw
+
+
+async def cite(ctx: ToolCallContext, url: str, title: str, snippet: str) -> dict[str, Any]:
+    """The run's citation for ``url``, recording it (and telling the UI) the first time it is seen."""
+    sources = ctx.run.sources
+    source = sources.get(url)
+    if source is None:
+        source = {
+            "source_id": f"src_{len(sources) + 1}",
+            "n": len(sources) + 1,
+            "url": url,
+            "title": title or urlparse(url).hostname,
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        }
+        sources[url] = source
+        await ctx.run.sink.emit(
+            "citation.added", {**source, "snippet": snippet[:280], "claim_refs": []}, step_id=ctx.step_id
+        )
+    return source
+
+
+async def guarded_fetch(
+    url: str,
+    ctx: ToolCallContext,
+    *,
+    client_factory: Callable[[], httpx.AsyncClient],
+    resolver: Resolver,
+    allow_private: bool,
+    types: tuple[str, ...] = _TEXT_TYPES,
+) -> tuple[str, str, str]:
+    """``fetch_raw`` under the run's network policy (allowed domains, private-address blocking)."""
+    policy = ctx.run.engine.rails.network
+    async with client_factory() as client:
+        return await fetch_raw(
+            url,
+            allow_domains=policy.allow_domains,
+            block_private=policy.block_private_ips or not allow_private,
+            client=client,
+            resolver=resolver,
+            types=types,
+        )
 
 
 class WebFetch(Tool):
@@ -160,16 +208,13 @@ class WebFetch(Tool):
         self.capture = capture
 
     async def fetch(self, url: str, ctx: ToolCallContext) -> tuple[str, str, str]:
-        policy = ctx.run.engine.rails.network
-        block_private = policy.block_private_ips or not self.allow_private
-        async with self.client_factory() as client:
-            return await fetch_raw(
-                url,
-                allow_domains=policy.allow_domains,
-                block_private=block_private,
-                client=client,
-                resolver=self.resolver,
-            )
+        return await guarded_fetch(
+            url,
+            ctx,
+            client_factory=self.client_factory,
+            resolver=self.resolver,
+            allow_private=self.allow_private,
+        )
 
     async def _capture(self, ctx: ToolCallContext, url: str, title: str, text: str) -> None:
         from argus.knowledge.service import capture_source
@@ -195,20 +240,7 @@ class WebFetch(Tool):
             await self._capture(ctx, final_url, title, text)
         truncated = len(text) > args.max_chars
         text = text[: args.max_chars]
-        sources = ctx.run.sources
-        source = sources.get(final_url)
-        if source is None:
-            source = {
-                "source_id": f"src_{len(sources) + 1}",
-                "n": len(sources) + 1,
-                "url": final_url,
-                "title": title or urlparse(final_url).hostname,
-                "retrieved_at": datetime.now(UTC).isoformat(),
-            }
-            sources[final_url] = source
-            await ctx.run.sink.emit(
-                "citation.added", {**source, "snippet": text[:280], "claim_refs": []}, step_id=ctx.step_id
-            )
+        source = await cite(ctx, final_url, title, text)
         header = f"[Source {source['n']}] {source['title']} — {final_url}\n\n"
         return ToolResult(
             header + text + ("\n\n[truncated]" if truncated else ""),
@@ -293,11 +325,17 @@ class WebSearch(Tool):
 
 
 def web_tools(settings: Any) -> list[Tool]:
+    from argus.tools.market import MarketData, NewsSearch
+
+    allow_private = bool(getattr(settings, "web_fetch_allow_private_urls", False))
     tools: list[Tool] = [
         WebFetch(
-            allow_private=bool(getattr(settings, "web_fetch_allow_private_urls", False)),
+            allow_private=allow_private,
             capture=bool(getattr(settings, "knowledge_capture_enabled", True)),
-        )
+        ),
+        # Keyless public data sources, so live market data and news work without a search provider.
+        MarketData(allow_private=allow_private),
+        NewsSearch(allow_private=allow_private),
     ]
     provider = getattr(settings, "search_provider", None)
     if provider:

@@ -40,7 +40,7 @@ chair and not the overseers).
 | Mode | Roster in priority order | Ad-hoc size |
 | --- | --- | --- |
 | `general` | chair, analyst, critic, monitor, writer, researcher, security, designer | 5 |
-| `research` | chair, researcher, analyst, critic, writer, monitor, researcher, security | 6 |
+| `research` | chair, researcher, analyst, critic, writer, monitor, scout, security | 6 |
 | `coding` | chair, architect, coder, tester, security, monitor, critic, coder, designer | 6 |
 | `chat` | assistant, monitor, critic, researcher | 2 |
 
@@ -59,6 +59,10 @@ The ad-hoc size applies when a run has no `council_id` and no `size`.
 | `tester` | | Writes and runs tests; reports failures with reproduction steps |
 | `designer` | | Shapes UX, UI and presentation quality of deliverables |
 | `assistant` | | General conversational helper |
+| `scout` | | Gathers live information from the web and the news: what is true now, with as-of dates |
+| `market_analyst` | | Pulls live quotes, price history, FX and crypto rates, and reads them against the news |
+| `fact_checker` | | Verifies figures, dates and claims against live primary sources before they are used |
+| `data_analyst` | | Reads spreadsheets and tables in full and computes totals, ranges and comparisons |
 | `critic` | yes | Challenges reasoning and outputs; finds errors, gaps and weak evidence |
 | `monitor` | yes | Watches every thought for drift, loops and guardrail breaches |
 | `security` | yes | Reviews actions and code for safety, secrets leakage and dangerous operations |

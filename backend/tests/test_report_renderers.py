@@ -293,3 +293,29 @@ def test_txt_has_ascii_bars_and_wraps(make):
         assert "<https://example.com/s>" in txt
     lines = [ln for ln in txt.splitlines() if not ln.startswith(("=", "-"))]
     assert max(len(ln) for ln in lines) <= 130
+
+
+def test_pdf_embeds_a_unicode_font_so_currency_symbols_survive():
+    """Helvetica only encodes WinAnsi: the rupee sign used to print as a black box."""
+    from pypdf import PdfReader
+
+    from argus.reports.render_pdf import to_pdf
+
+    report = Report.model_validate(
+        {
+            "title": "Build prices to 13 December",
+            "executive_summary": "The RX 9070 XT was quoted at ₹80,000 to ₹1,07,900 → watch it.",
+            "metrics": [{"label": "GPU quote range", "value": "₹80,000 to ₹1,07,900"}],
+            "sections": [{"heading": "Quotes", "blocks": [{"type": "code", "text": "total = ₹3,08,000"}]}],
+        }
+    )
+    reader = PdfReader(io.BytesIO(to_pdf(report)))
+    text = "".join(page.extract_text() for page in reader.pages)
+    assert "₹80,000" in text and "₹3,08,000" in text and "→" in text
+    used = {
+        str(font["/BaseFont"])
+        for page in reader.pages
+        for font in (page["/Resources"].get("/Font") or {}).values()
+        if "/BaseFont" in font.get_object()
+    }
+    assert {"DejaVuSans", "DejaVuSans-Bold", "DejaVuSansMono"} <= {f.split("+")[-1] for f in used}

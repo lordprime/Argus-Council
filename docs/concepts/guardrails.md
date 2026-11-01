@@ -48,6 +48,12 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `report.max_review_rounds` | `3` | Review-and-revise rounds before delivery (0 to 6) |
 | `report.pass_score` | `85` | Quality score a report needs to pass |
 | `report.human_checkins` | `false` | Pause for your approval of the report outline |
+| `extensions.enabled` | `true` | Ask to raise a limit the run reaches instead of halting (below) |
+| `extensions.limits` | `max_steps`, `max_agent_iterations`, `max_runtime_minutes`, `budget.tokens` | Limits that may be raised; add `budget.usd` to be asked about spend too |
+| `extensions.factor` | `0.5` | Each raise adds this share of the starting limit |
+| `extensions.max_extensions` | `3` | Raises per limit per run |
+| `context.condense` | `true` | Summarise an agent's older history when it outgrows the budget (below) |
+| `context.budget_chars` | `120000` | History size each agent turn re-sends before trimming and condensing |
 
 ```json
 {
@@ -98,6 +104,30 @@ expire. Calls to MCP servers can also need approval through the server's
 
 ## Limits and halting
 
-Budget, steps, runtime and file size are checked throughout. A breach raises a violation event
-and halts the run with status `halted` and the violation as its error. The budget meter in the run
+Budget, steps, runtime and file size are checked throughout. When the run reaches a limit listed
+in `extensions.limits`, it first asks you, in the approval queue (risk `limit_extension`), whether
+to raise it, by `extensions.factor` of the starting limit (80 steps become 120, then 160):
+
+- **Approve** and the run carries on under the new limit (a `guardrail.extended` event records it).
+  Agents that hit the same limit at the same time share one request. Time spent waiting for your
+  answer does not count toward the runtime limit. Through the API, an approval may set the new
+  value itself with `edited_args: {"limit": N}`.
+- **Reject**, or let the request expire, and the run halts as before; it does not ask again for that
+  limit. After `extensions.max_extensions` raises it halts without asking.
+
+The same applies per agent: an agent that reaches `max_agent_iterations` while still calling tools
+asks to raise it (for the whole run) rather than stopping mid-task. Sub-councils never ask: they
+halt at their limits, which stay within their parent's.
+
+A breach that is not raised halts the run with status `halted` and the violation as its error. The budget meter in the run
 workspace shows spend against the limits live (from ephemeral `budget.update` events).
+
+## Context condensation
+
+Each agent turn re-sends the agent's history. Past `context.budget_chars`, older tool outputs are
+first cut to a short preview (the newest three and any loaded skill stay whole). If the history is
+still too long, one call on the agent's own model summarises the middle of it (the facts, figures,
+sources and decisions so far, and what remains) into its task message, keeping the latest two turns
+verbatim; a `context.condensed` event records how much was folded. The call counts toward the
+budget but not toward `max_steps`. Seats that run through a CLI agent keep their own session
+context and are not condensed, and a failed summary leaves the trimmed history as it was.

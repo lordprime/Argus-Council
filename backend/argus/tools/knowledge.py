@@ -114,6 +114,70 @@ class KnowledgeSearch(Tool):
         return ToolResult("\n\n".join(lines), data={"results": citations, "terms": found["terms"]})
 
 
+class KnowledgeRead(Tool):
+    name = "knowledge_read"
+    description = (
+        "Read a whole document from the user's knowledge bases in order, by file name or document id "
+        "(as knowledge_search cites it). Spreadsheets (CSV, XLSX) come back row by row with every "
+        "column labelled: read them in full before computing totals, ranges or comparisons. Long "
+        "documents are paged: pass the returned `next` as `start` to continue."
+    )
+
+    class Args(BaseModel):
+        document: str = Field(min_length=1, max_length=300, description="File name or document id")
+        knowledge_base: str | None = Field(default=None, max_length=200, description="Knowledge base name")
+        start: int = Field(default=0, ge=0, le=100_000, description="Chunk to start from")
+        max_chars: int = Field(default=20_000, ge=1_000, le=60_000)
+
+    async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
+        kbs: dict[str, uuid.UUID] = (await _scope(ctx))["kbs"]
+        if args.knowledge_base is not None:
+            if args.knowledge_base not in kbs:
+                return ToolResult.error(
+                    f"Unknown or not permitted knowledge base: {args.knowledge_base}. "
+                    f"Available: {', '.join(sorted(kbs))}"
+                )
+            ids = [kbs[args.knowledge_base]]
+        else:
+            ids = list(kbs.values())
+        async with ctx.run.sessionmaker() as s:
+            doc = await service.read_document(
+                s, ids, args.document, start=args.start, max_chars=args.max_chars
+            )
+        if doc is None:
+            return ToolResult.error(
+                f"No document '{args.document}' in: {', '.join(sorted(kbs)) or 'no knowledge bases'}. "
+                "Use knowledge_search to find file names."
+            )
+        url = doc["source_url"] or f"kb://{doc['kb_name']}/{doc['filename']}"
+        sources = ctx.run.sources
+        source = sources.get(url)
+        if source is None:
+            source = {
+                "source_id": f"src_{len(sources) + 1}",
+                "n": len(sources) + 1,
+                "url": url,
+                "title": f"{doc['title'] or doc['filename']} ({doc['kb_name']})",
+                "retrieved_at": datetime.now(UTC).isoformat(),
+            }
+            sources[url] = source
+            snip = doc["text"][:280]
+            await ctx.run.sink.emit(
+                "citation.added", {**source, "snippet": snip, "claim_refs": []}, step_id=ctx.step_id
+            )
+        more = (
+            f"\n\n[chunks {doc['start']}-{doc['next'] - 1} of {doc['chunk_count']}; "
+            f"continue with start={doc['next']}]"
+            if doc["next"] is not None
+            else ""
+        )
+        header = f"[Source {source['n']}] {doc['kb_name']}/{doc['filename']} ({doc['content_type']})\n\n"
+        return ToolResult(
+            header + doc["text"] + more,
+            data={k: doc[k] for k in ("document_id", "filename", "kb_name", "start", "next", "chunk_count")},
+        )
+
+
 class MemoryWrite(Tool):
     name = "memory_write"
     description = (
@@ -181,4 +245,4 @@ class MemorySearch(Tool):
 
 
 def knowledge_tools() -> list[Tool]:
-    return [KnowledgeSearch(), MemoryWrite(), MemorySearch()]
+    return [KnowledgeSearch(), KnowledgeRead(), MemoryWrite(), MemorySearch()]

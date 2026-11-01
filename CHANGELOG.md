@@ -55,6 +55,24 @@ All notable changes to this project are documented here. The format follows
   (sub-councils and you on boards of their own), and conduits are routed in gutters, through gaps
   and along spines with their own lanes instead of cutting across platforms.
 
+- **Live web data**: `market_data` (quotes and daily history for stocks, indices, FX, crypto and
+  futures, from the Yahoo Finance chart API with a Stooq fallback) and `news_search` (Google News,
+  by recency and region). Both are keyless, so they work without a search provider, run under the
+  same network checks as `web_fetch` and record every data URL as a source with its retrieval time.
+  `web_fetch` also reads CSV, TSV, RSS and Atom documents.
+- **New roles**: `scout` (live web and news gathering), `market_analyst` (live market data),
+  `fact_checker` (verifies figures and claims against live sources) and `data_analyst` (works over
+  spreadsheets in full). Auto councils pick them from the topic; the research roster's second
+  researcher is now a scout.
+- **Spreadsheets in knowledge bases**: `.csv`, `.tsv` and `.xlsx` uploads, every sheet stored row by
+  row with each cell labelled by its column and chunked on row boundaries. `knowledge_read` reads a
+  whole document or sheet in order, so agents can compute over full tables.
+- **Raising limits instead of halting**: a run that reaches its step, per-agent iteration, runtime or
+  token limit asks you in the approval queue to raise it (`guardrails.extensions`); approve and it
+  carries on, reject and it halts as before. Waiting does not count toward the runtime.
+- **Context condensation**: an agent whose history outgrows `guardrails.context.budget_chars`, after
+  old tool outputs are trimmed, has the middle of it summarised into its task by its own model.
+
 ### Changed
 
 - `deploy.sh` is the single install-and-update command: it runs every pending migration as an
@@ -66,6 +84,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- PDF reports print the rupee sign and other non-Latin-1 characters instead of black boxes: reports
+  and charts embed DejaVu Sans (shipped with the backend) in place of the standard Helvetica and
+  Courier. KPI cards shrink a long value to fit and break a range after its dash, never mid-number.
+- `pypdf` 6.21.4 fixes three denial-of-service issues in PDF parsing (CVE-2026-119203,
+  CVE-2026-119204, CVE-2026-119205) that failed the image scan.
 - OpenAI's reasoning models (GPT-5, o-series) work: the official API is sent `max_completion_tokens`
   instead of `max_tokens`, and no `temperature` for models that only take the default. Any
   OpenAI-compatible endpoint that rejects either parameter with a 400 is retried once with the

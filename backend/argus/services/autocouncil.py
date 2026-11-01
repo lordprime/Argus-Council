@@ -60,6 +60,10 @@ ROLE_TIER: dict[str, Tier] = {
     "architect": "strong",
     "coder": "strong",
     "researcher": "balanced",
+    "scout": "balanced",
+    "market_analyst": "balanced",
+    "fact_checker": "balanced",
+    "data_analyst": "strong",
     "writer": "balanced",
     "tester": "balanced",
     "designer": "balanced",
@@ -95,6 +99,10 @@ ROLE_NEEDS: dict[str, RoleNeed] = {
     "architect": RoleNeed({"reasoning": 0.5, "coding": 0.5}, 80, 90, 12_000, 2_500, 3),
     "coder": RoleNeed({"coding": 0.8, "reasoning": 0.2}, 80, 90, 20_000, 4_000, 8),
     "researcher": RoleNeed({"reasoning": 0.4, "writing": 0.3, "speed": 0.3}, 65, 75, 24_000, 1_500, 8),
+    "scout": RoleNeed({"reasoning": 0.4, "writing": 0.2, "speed": 0.4}, 62, 75, 24_000, 1_500, 10),
+    "market_analyst": RoleNeed({"reasoning": 0.6, "writing": 0.2, "speed": 0.2}, 70, 82, 14_000, 1_500, 6),
+    "fact_checker": RoleNeed({"reasoning": 0.6, "speed": 0.4}, 68, 80, 16_000, 1_000, 6),
+    "data_analyst": RoleNeed({"reasoning": 0.6, "coding": 0.2, "writing": 0.2}, 75, 86, 24_000, 2_000, 4),
     "writer": RoleNeed({"writing": 0.8, "reasoning": 0.2}, 72, 85, 30_000, 6_000, 3),
     "tester": RoleNeed({"coding": 0.6, "reasoning": 0.3, "speed": 0.1}, 68, 80, 16_000, 2_000, 5),
     "designer": RoleNeed({"writing": 0.5, "reasoning": 0.3, "coding": 0.2}, 65, 78, 10_000, 2_000, 3),
@@ -500,6 +508,32 @@ _KEYWORDS: list[tuple[re.Pattern[str], list[str], str]] = [
         ),
         ["researcher", "researcher", "analyst"],
         "the task needs sources gathered and weighed",
+    ),
+    (
+        re.compile(
+            r"\b(stocks?|shares?|tickers?|equit(y|ies)|prices?|pricing|markets?|crypto\w*|bitcoin|forex|fx|"
+            r"exchange rates?|currenc(y|ies)|earnings|commodit(y|ies)|nasdaq|nifty|sensex|s&p)\b"
+        ),
+        ["market_analyst"],
+        "the task depends on live market prices",
+    ),
+    (
+        re.compile(
+            r"\b(latest|today|todays|current|currently|live|news|this (week|month|year)|recent|recently|"
+            r"upcoming|this quarter)\b"
+        ),
+        ["scout"],
+        "the task needs current information from the web",
+    ),
+    (
+        re.compile(r"\b(csv|tsv|xlsx|xls|spreadsheets?|excel|sheets?|workbooks?|datasets?)\b"),
+        ["data_analyst"],
+        "the task works from tabular data",
+    ),
+    (
+        re.compile(r"\b(verify|verified|fact[- ]?checks?\w*|accurate|accuracy|confirm|validate)\b"),
+        ["fact_checker"],
+        "claims must be verified against primary sources",
     ),
     (
         re.compile(r"\b(write|report|article|blog|essay|document|summar\w+|draft|plan|proposal)\b"),

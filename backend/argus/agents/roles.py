@@ -37,6 +37,7 @@ ROLES: dict[str, Role] = {
             "the most suitable member, merge their outputs and decide when the deliverable is complete.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "notes_*",
                 "artifact_*",
@@ -55,9 +56,12 @@ ROLES: dict[str, Role] = {
             "citations, and flag conflicting or low-quality sources.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "web_search",
                 "web_fetch",
+                "news_search",
+                "market_data",
                 "notes_*",
                 "artifact_read",
                 "artifact_list",
@@ -75,6 +79,8 @@ ROLES: dict[str, Role] = {
             "uncertainty and identify gaps that need more research.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
+                "market_data",
                 "memory_*",
                 "notes_*",
                 "artifact_read",
@@ -92,6 +98,7 @@ ROLES: dict[str, Role] = {
             "format requested (text, markdown, LaTeX, PDF, HTML), preserving citations.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "notes_*",
                 "artifact_*",
@@ -108,6 +115,7 @@ ROLES: dict[str, Role] = {
             "Prefer simple designs that satisfy the requirements.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "fs_read",
                 "fs_list",
@@ -126,6 +134,7 @@ ROLES: dict[str, Role] = {
             "changes, run the code and tests, and report exactly what you ran and what it printed.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "fs_*",
                 "shell",
@@ -178,6 +187,7 @@ ROLES: dict[str, Role] = {
             "visual hierarchy, accessibility and usability.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "fs_read",
                 "notes_*",
@@ -194,15 +204,112 @@ ROLES: dict[str, Role] = {
             f"{_BASE}\nAs ASSISTANT you answer the user directly and helpfully.",
             default_tools=(
                 "knowledge_search",
+                "knowledge_read",
                 "memory_*",
                 "notes_*",
                 "artifact_*",
                 "web_search",
                 "web_fetch",
+                "news_search",
+                "market_data",
                 "use_skill",
                 "skill_read",
                 "mcp__*",
                 "remote_agent",
+            ),
+        ),
+        Role(
+            "scout",
+            "Web Scout",
+            "Gathers live information from the web and the news: what is true now, with as-of dates.",
+            f"{_BASE}\nAs WEB SCOUT you gather live, current information. Search the web and the news, "
+            "open the primary pages (official sites, filings, exchanges, regulators, vendors) rather than "
+            "relying on snippets, prefer the freshest authoritative source, and record for every fact the "
+            "source, its publication or as-of date and when you retrieved it. Say plainly when a source "
+            "is stale, paywalled or could not be reached; never fill a gap from memory.",
+            default_tools=(
+                "web_search",
+                "web_fetch",
+                "news_search",
+                "market_data",
+                "knowledge_search",
+                "knowledge_read",
+                "memory_*",
+                "notes_*",
+                "artifact_read",
+                "artifact_list",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+            ),
+        ),
+        Role(
+            "market_analyst",
+            "Market Data Analyst",
+            "Pulls live quotes, price history, FX and crypto rates, and reads them against the news.",
+            f"{_BASE}\nAs MARKET DATA ANALYST you fetch live market data with market_data (stocks, "
+            "indices, FX pairs such as USDINR=X, crypto, futures) and price history, compute changes, "
+            "ranges and trends from the returned numbers only, and relate moves to dated news. Always "
+            "state the currency, the market time of each quote and that quotes may be delayed. Never "
+            "estimate a price that was not returned, and never give personalised investment advice.",
+            default_tools=(
+                "market_data",
+                "news_search",
+                "web_search",
+                "web_fetch",
+                "knowledge_search",
+                "knowledge_read",
+                "memory_*",
+                "notes_*",
+                "artifact_read",
+                "artifact_list",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+            ),
+        ),
+        Role(
+            "fact_checker",
+            "Fact Checker",
+            "Verifies figures, dates and claims against live primary sources before they are used.",
+            f"{_BASE}\nAs FACT CHECKER you verify the specific figures, dates, names and claims the "
+            "council intends to use. Check each against a live primary source (and the user's "
+            "knowledge where it applies), record the verdict (confirmed, corrected, unverified) with "
+            "the source and its date, and give the corrected value when a claim is wrong.",
+            default_tools=(
+                "web_search",
+                "web_fetch",
+                "news_search",
+                "market_data",
+                "knowledge_search",
+                "knowledge_read",
+                "memory_*",
+                "notes_*",
+                "artifact_read",
+                "artifact_list",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
+            ),
+        ),
+        Role(
+            "data_analyst",
+            "Data Analyst",
+            "Reads spreadsheets and tables in full and computes totals, ranges and comparisons.",
+            f"{_BASE}\nAs DATA ANALYST you work from the user's tables (CSV and XLSX in their knowledge). "
+            "Read each relevant sheet in full with knowledge_read (page through it with `start`) rather "
+            "than relying on search snippets, then compute totals, ranges, averages and comparisons from "
+            "every row. Flag blank, zero, duplicated or implausible values and say which rows they are "
+            "in, and state exactly which rows and columns each figure comes from.",
+            default_tools=(
+                "knowledge_search",
+                "knowledge_read",
+                "memory_*",
+                "notes_*",
+                "artifact_*",
+                "use_skill",
+                "skill_read",
+                "mcp__*",
             ),
         ),
     ]
@@ -211,7 +318,7 @@ ROLES: dict[str, Role] = {
 # Ordered by priority: resizing down drops from the end, resizing up adds from here.
 DEFAULT_ROSTERS: dict[str, list[str]] = {
     "general": ["chair", "analyst", "critic", "monitor", "writer", "researcher", "security", "designer"],
-    "research": ["chair", "researcher", "analyst", "critic", "writer", "monitor", "researcher", "security"],
+    "research": ["chair", "researcher", "analyst", "critic", "writer", "monitor", "scout", "security"],
     "coding": ["chair", "architect", "coder", "tester", "security", "monitor", "critic", "coder", "designer"],
     "chat": ["assistant", "monitor", "critic", "researcher"],
 }
