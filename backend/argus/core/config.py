@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     # Keep every page agents read (web_fetch) in the owner's research library knowledge base.
     knowledge_capture_enabled: bool = True
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Competence (reasoning, coding, writing, speed: 0-100) and reference prices used to pick models.
+    model_profiles: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     # Research tools
     search_provider: Literal["searxng", "tavily", "brave"] | None = None

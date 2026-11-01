@@ -19,6 +19,8 @@ from argus.db.models import Run
 from argus.providers.types import Usage
 from argus.runtime.events import TERMINAL_STATUSES, Envelope
 from argus.runtime.guardrails import GuardrailEngine, Guardrails
+from argus.services import autocouncil
+from argus.services.llm import Route
 from argus.tools.base import Tool, ToolCallContext, ToolResult
 
 if TYPE_CHECKING:
@@ -106,6 +108,11 @@ class SubCouncilTool(Tool):
         member = self.manager.member(parent.run_id, ctx.member_id)
         provider, model = (member.provider, member.model) if member else ("mock", "mock-1")
         roster = ephemeral_roster(args.mode, args.size, provider, model)
+        # Each child seat gets the parent council's model that best fits its role within the child's
+        # budget (the delegating member's own model wins near-ties).
+        live = self.manager.live.get(parent.run_id)
+        routes = [(m.provider, m.model) for m in (live.members if live else [])] or [(provider, model)]
+        autocouncil.reassign_roster(roster, routes, budget_usd=usd, preferred=Route(provider, model))
         child_id = uuid.uuid4()
         async with parent.sessionmaker() as s:
             s.add(

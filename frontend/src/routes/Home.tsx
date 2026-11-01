@@ -16,7 +16,8 @@ import { SaveTemplateButton, TemplatePicker } from "@/features/templates/compone
 import { errorMessage } from "@/lib/api";
 import { providerKindLabel } from "@/lib/providers";
 import {
-  useCouncils, useCreateRun, usePlanCouncil, useProviderKinds, useProviders, useRoles, useRunsList, type CouncilPlan, type PlanRequest,
+  useCouncils, useCreateRun, usePlanCouncil, useProviderKinds, useProviders, useRoles, useRunsList, type CouncilPlan, type ModelStrategy,
+  type PlanRequest, type ReportDepth,
 } from "@/lib/queries";
 import type { Mode, OutputFormat } from "@/lib/types";
 
@@ -30,6 +31,14 @@ const PRESETS = {
   balanced: {},
   permissive: { budget: { usd: 20 }, max_steps: 200, oversight: { intercept_mode: "annotate", monitor_sensitivity: "low" } },
 } as const;
+const STRATEGIES: { value: ModelStrategy; label: string; hint: string }[] = [
+  { value: "quality", label: "Quality", hint: "The most competent model for every seat; cost counts little." },
+  { value: "balanced", label: "Balanced", hint: "Competence for each seat's job, weighed against what it will cost." },
+  { value: "economy", label: "Economy", hint: "The cheapest model that is still competent for each seat." },
+];
+const DEPTHS: { value: ReportDepth; label: string }[] = [
+  { value: "brief", label: "Brief" }, { value: "standard", label: "Standard" }, { value: "extensive", label: "Extensive" },
+];
 const APPROVALS = [
   { key: "shell", label: "Shell commands" },
   { key: "network_write", label: "Network writes" },
@@ -82,6 +91,9 @@ function Composer() {
   const [interceptMode, setInterceptMode] = useState("hold");
   const [approvals, setApprovals] = useState<string[]>(["shell", "package_install", "remote_agent", "network_write"]);
   const [route, setRoute] = useState(AUTO);
+  const [strategy, setStrategy] = useState<ModelStrategy>("balanced");
+  const [depth, setDepth] = useState<ReportDepth>("extensive");
+  const [checkins, setCheckins] = useState(false);
   const planner = usePlanCouncil();
   const [plan, setPlan] = useState<{ key: string; plan: CouncilPlan } | null>(null);
   const knowledge = useKnowledgeBases();
@@ -91,6 +103,9 @@ function Composer() {
   const autoCouncil = councilId === AUTO;
   const adHoc = !councilId || autoCouncil;
   const autoModels = adHoc && route === AUTO;
+  const reports = mode === "research" || mode === "general";
+  /** The run's dollar budget, which the planned council is fitted to. */
+  const budgetUsd = advanced ? Number(budget) || 5 : ((PRESETS[preset] as { budget?: { usd: number } }).budget?.usd ?? 5);
   useEffect(() => setSize(autoCouncil ? AUTO_MAX_SEATS : DEFAULT_SIZE[mode]), [mode, autoCouncil]);
   useEffect(() => {
     const prefill = (e: Event) => {
@@ -133,7 +148,7 @@ function Composer() {
     const [provider, model] = route === AUTO ? [undefined, undefined] : route.split("::");
     return {
       topic: topic.trim(), description, mode, max_size: size, provider, model,
-      auto_council: autoCouncil, auto_models: autoModels,
+      auto_council: autoCouncil, auto_models: autoModels, model_strategy: strategy, budget_usd: budgetUsd,
       ...(autoCouncil ? {} : { roles: roster }),
     };
   };
@@ -155,9 +170,13 @@ function Composer() {
       guardrails.oversight = { intercept_mode: interceptMode };
       guardrails.approval_required = approvals;
     }
+    if (reports) guardrails.report = { depth, human_checkins: checkins };
     const council = !adHoc
       ? { council_id: councilId }
-      : { size, ...(autoModels ? {} : { provider, model }), auto_council: autoCouncil, auto_models: autoModels };
+      : {
+          size, ...(autoModels ? { model_strategy: strategy } : { provider, model }),
+          auto_council: autoCouncil, auto_models: autoModels,
+        };
     return { topic: topic.trim(), description, mode, outputs, ...council, guardrails };
   };
 
@@ -201,12 +220,20 @@ function Composer() {
           {!councilId && (
             <SelectField label="Model" value={route} onChange={(e) => setRoute(e.target.value)}
               hint={noProviders ? "No provider connected yet."
-                : autoModels ? "Strong models for the chair, critics and builders; fast ones for overseers." : undefined}>
+                : autoModels ? "Each seat gets the model most competent for its job, weighed against its cost and your budget." : undefined}>
               <option value={AUTO}>Auto: best model per seat</option>
               {routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </SelectField>
           )}
         </div>
+
+        {autoModels && (
+          <div className="flex flex-col gap-1">
+            <Segmented label="Model choice" value={strategy} onChange={setStrategy}
+              options={STRATEGIES.map(({ value, label }) => ({ value, label }))} />
+            <p className="text-xs text-fg-subtle">{STRATEGIES.find((s) => s.value === strategy)?.hint} Budget ${budgetUsd}.</p>
+          </div>
+        )}
 
         {!councilId && (
           <div className="flex flex-col gap-2">
@@ -260,6 +287,17 @@ function Composer() {
             })}
           </div>
         </fieldset>
+
+        {reports && (
+          <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
+            <Segmented label="Report depth" value={depth} onChange={setDepth} options={DEPTHS} />
+            <p className="text-xs text-fg-subtle -mt-2">
+              Specialist agents outline, chart, draft and review the report in rounds until it passes its quality checks.
+            </p>
+            <Toggle label="Let me check the outline" checked={checkins} onChange={setCheckins}
+              hint="The run pauses once the outline is ready so you can approve it or send it back with notes." />
+          </div>
+        )}
 
         <div className="flex flex-col gap-2">
           <SelectField label="Guardrails" value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof PRESETS)}

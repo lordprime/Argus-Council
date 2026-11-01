@@ -37,6 +37,7 @@ nav:
   - Concepts:
       - Councils and Roles: concepts/councils.md
       - Runs and Modes: concepts/runs.md
+      - Reports: concepts/reports.md
       - Guardrails and Approvals: concepts/guardrails.md
       - Sub-councils: concepts/sub-councils.md
       - Skills: concepts/skills.md

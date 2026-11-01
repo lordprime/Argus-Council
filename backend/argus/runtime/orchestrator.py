@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,8 +13,10 @@ from argus.core.errors import NotFound
 from argus.core.logging import get_logger
 from argus.providers.base import ProviderError
 from argus.runtime.agent import AgentOutcome, AgentRunner, MemberSpec
-from argus.runtime.context import RunContext
+from argus.runtime.context import RunCancelled, RunContext
+from argus.runtime.guardrails import GuardrailBreach, ReportPolicy
 from argus.runtime.oversight import OverseerAgent, ThoughtBus, parse_json_object
+from argus.services.autocouncil import choose_assignee
 from argus.tools.base import ToolRegistry
 
 log = get_logger(__name__)
@@ -94,25 +97,34 @@ class CouncilOrchestrator:
         self.brief = f"Your council: {roster}. Mode: {ctx.mode}."
         self.steps: list[Step] = []
         self.plan_version = 0
+        self.load: Counter[str] = Counter()  # steps given to each member, for balancing
 
     def runner(self, member: MemberSpec) -> AgentRunner:
         return AgentRunner(member, self.ctx, self.tools, self.bus, self.brief)
 
     def _find(self, who: str | None) -> MemberSpec | None:
+        """The member a plan names, by name, id or role (the least loaded one when a role repeats)."""
         if not who:
             return None
         key = who.strip().lower()
         for m in self.workers:
             if m.name.lower() == key or m.id == who:
                 return m
-        for m in self.workers:
-            if m.role == key:
-                return m
+        same_role = [m for m in self.workers if m.role == key]
+        if same_role:
+            return min(same_role, key=lambda m: (self.load[m.id], same_role.index(m)))
         return None
 
-    def _round_robin(self, i: int) -> MemberSpec:
-        pool = [m for m in self.workers if m.role != "chair"] or self.workers
-        return pool[i % len(pool)]
+    def _assign(self, who: str | None, title: str, instructions: str) -> MemberSpec:
+        """Resolve a step's assignee; unnamed or unknown ones go to the best fit for the work."""
+        member = self._find(who) or choose_assignee(
+            f"{title}\n{instructions}",
+            [m for m in self.workers if m.role != "chair"] or self.workers,
+            self.load,
+            budget_usd=self.ctx.engine.rails.budget.usd,
+        )
+        self.load[member.id] += 1
+        return member
 
     # ------------------------------------------------------------ plan
     async def plan(self) -> list[Step]:
@@ -137,12 +149,13 @@ class CouncilOrchestrator:
             if sid in ids:
                 sid = f"{sid}_{i}"
             ids.add(sid)
+            title, instructions = str(s["title"])[:200], str(s.get("instructions") or s["title"])[:4000]
             steps.append(
                 Step(
                     sid,
-                    str(s["title"])[:200],
-                    str(s.get("instructions") or s["title"])[:4000],
-                    self._find(s.get("assignee")) or self._round_robin(i),
+                    title,
+                    instructions,
+                    self._assign(s.get("assignee"), title, instructions),
                     [str(d) for d in s.get("depends_on") or [] if isinstance(d, str | int)],
                 )
             )
@@ -153,9 +166,8 @@ class CouncilOrchestrator:
             prev: str | None = None
             for i, (title, role, instr) in enumerate(defaults):
                 sid = f"s{i + 1}"
-                steps.append(
-                    Step(sid, title, instr, self._find(role) or self._round_robin(i), [prev] if prev else [])
-                )
+                assignee = self._assign(role, title, instr)
+                steps.append(Step(sid, title, instr, assignee, [prev] if prev else []))
                 prev = sid
         self.steps = _break_cycles(steps)
         await self._emit_plan()
@@ -345,15 +357,68 @@ class CouncilOrchestrator:
         return approved, critiques
 
     # ------------------------------------------------------------ run
+    def report_policy(self) -> ReportPolicy | None:
+        """The report pipeline's policy when this run delivers a report (research and general runs by
+        default; never sub-councils, whose deliverable goes back to their parent as text)."""
+        policy = self.ctx.engine.rails.report
+        enabled = policy.enabled if policy.enabled is not None else self.ctx.mode in ("research", "general")
+        return policy if enabled and self.ctx.depth == 0 else None
+
     async def run(self, max_revisions: int = 1) -> str:
         await self.plan()
         await self.execute()
+        policy = self.report_policy()
+        if policy is not None:
+            return await self.run_report(policy, max_revisions)
         deliverable = await self.synthesise()
         for _ in range(max_revisions):
             approved, critiques = await self.vote(deliverable)
             if approved:
                 break
             deliverable = await self.synthesise(critiques)
+        name = DELIVERABLE_NAMES.get(self.ctx.mode, "deliverable.md")
+        await self.ctx.workspace.write(
+            name, deliverable, by=self.writer.name, kind="document", mime="text/markdown"
+        )
+        return deliverable
+
+    async def run_report(self, policy: ReportPolicy, max_revisions: int) -> str:
+        """Build the structured report with the report agents, put it to the council's vote, and save
+        it (``report.json``) beside its Markdown rendition (the run's result)."""
+        from argus.reports.pipeline import ReportPipeline
+        from argus.reports.render_text import to_markdown
+
+        pipeline = ReportPipeline(self, policy)
+        try:
+            report = await pipeline.build()
+        except (RunCancelled, GuardrailBreach):
+            raise
+        except Exception as exc:  # the report must never cost the run its result
+            log.warning("orchestrator.report_failed", error=f"{type(exc).__name__}: {str(exc)[:300]}")
+            await self.ctx.sink.emit(
+                "report.stage", {"stage": "pipeline", "status": "failed", "detail": type(exc).__name__}
+            )
+            report = pipeline.from_deliverable(await self.synthesise())
+        deliverable = to_markdown(report)
+        for _ in range(max_revisions):
+            approved, critiques = await self.vote(deliverable)
+            await pipeline.checkin(
+                "council vote", "council", "approved" if approved else "revised", critiques
+            )
+            if approved:
+                break
+            report = await pipeline.revise_after_vote(critiques)
+            deliverable = to_markdown(report)
+        report = pipeline.finish(report)
+        deliverable = to_markdown(report)
+        self.ctx.extra["report"] = report
+        await self.ctx.workspace.write(
+            "report.json",
+            report.model_dump_json(indent=2),
+            by=self.writer.name,
+            kind="document",
+            mime="application/json",
+        )
         name = DELIVERABLE_NAMES.get(self.ctx.mode, "deliverable.md")
         await self.ctx.workspace.write(
             name, deliverable, by=self.writer.name, kind="document", mime="text/markdown"

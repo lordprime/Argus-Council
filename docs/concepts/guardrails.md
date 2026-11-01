@@ -43,6 +43,11 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `oversight.monitor_sensitivity` | `medium` | `off`, `low`, `medium` or `high`: which thoughts overseers review (below) |
 | `oversight.loop_threshold` | `3` | Repeats of the same thought that count as a loop |
 | `oversight.max_corrections_per_thought` | `2` | Regenerations a held thought gets |
+| `report.enabled` | `null` | Build a structured report: `null` means research and general runs ([Reports](reports.md)) |
+| `report.depth` | `extensive` | `brief`, `standard` or `extensive` |
+| `report.max_review_rounds` | `3` | Review-and-revise rounds before delivery (0 to 6) |
+| `report.pass_score` | `85` | Quality score a report needs to pass |
+| `report.human_checkins` | `false` | Pause for your approval of the report outline |
 
 ```json
 {

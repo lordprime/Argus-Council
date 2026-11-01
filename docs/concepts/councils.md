@@ -66,6 +66,59 @@ The ad-hoc size applies when a run has no `council_id` and no `size`.
 `GET /api/v1/roles` returns the roles with their descriptions and default tools. Only the chair
 has the `subcouncil` tool by default ([Sub-councils](sub-councils.md)).
 
+## Automatic councils and models
+
+A run without a council can have its council composed for the task (`RunIn.auto_council`, *Council:
+Auto* in the composer) and a model picked for every seat (`RunIn.auto_models`, *Model: Auto*).
+`POST /runs/plan` previews both; send its `seats` back as `RunIn.seats` to start exactly that council.
+
+**Roles.** A planner model reads the topic and description and picks the roles, how many of each and a
+focus per seat, always with a chair and an overseer. It is told what a seat costs with your connected
+models and the run's budget, so it sizes the council to what the task is worth. With no model
+reachable, a keyword planner composes the council instead.
+
+**Models.** Every role states what it needs from a model: which competences matter (reasoning,
+coding, writing, speed), the floor below which a model is unfit for the seat, and how many tokens a
+seat typically reads and writes over a run. Monitors, for example, read every thought: many small
+calls, so speed and input price dominate. Every model you can use is scored for each seat:
+
+```text
+utility = competence for the role (full credit up to the role's target, a quarter above it,
+                                   a double penalty below its floor)
+        - strategy weight x the seat's expected spend / the run's budget
+        + 5 for the provider you picked
+        - 3 for a subscription CLI account (no per-token cost, but usage limits)
+        - 0.75 per seat already on the same model (spreads load and rate limits)
+```
+
+A seat's expected spend is `calls x (input tokens x input price + output tokens x output price)`,
+using the billing price when Argus knows it, a public list price for popular models otherwise, and a
+deliberately high estimate from the model's name as a last resort (flagged in the plan's notes).
+Subscription CLI accounts and self-hosted endpoints cost nothing per token. Competence comes from
+built-in profiles of known models and, for anything else, from its name and parameter size; override
+or extend both with `ARGUS_MODEL_PROFILES` ([Configuration](../configuration.md)).
+
+| Strategy (`model_strategy`) | Strategy weight | Effect |
+| --- | --- | --- |
+| `quality` | 10 | The most competent model for every seat; cost breaks near-ties |
+| `balanced` (default) | 50 | Competence for the seat's job, weighed against its cost |
+| `economy` | 200 | The cheapest model that is still competent for the seat |
+
+**Fitting the budget.** The seats may plan to spend 80% of the run's dollar budget; the rest is
+headroom. Over that, Argus applies the cheapest downgrades first (the least utility lost per dollar
+saved, never below a role's floor while a competent model exists), and an automatically composed
+council then sheds optional seats (repeated roles first, never the chair or its last overseer). The
+plan shows each seat's competence, expected spend and price basis, the total, and a note for every
+change.
+
+**Steps.** When the chair's plan does not name a member for a step, the step goes to the member whose
+model is most competent for that kind of work (from its wording), favouring the role it names, net of
+the steps the member already has and its cost per call. A step that names a role held by several
+members goes to the least loaded of them.
+
+**Sub-councils** give each child seat the parent council's model that best fits its role within the
+child's budget ([Sub-councils](sub-councils.md)).
+
 ## What a run takes from a council
 
 When a run starts, Argus copies the council's enabled seats into the run as a snapshot, so later

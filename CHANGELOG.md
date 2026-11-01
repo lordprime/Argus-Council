@@ -15,9 +15,32 @@ All notable changes to this project are documented here. The format follows
   chair and an overseer; with no model reachable a keyword planner does it instead. Preview the
   council before starting, or let the server plan when the run starts (`RunIn.auto_council`,
   `POST /runs/plan`, explicit `RunIn.seats`).
-- **Auto models per seat** (*Model: Auto*): every seat gets a model matching its responsibility from
-  the providers you have connected: strong models for the chair, analysts, critics, architects and
-  coders, balanced ones for researchers and writers, fast ones for the monitor (`RunIn.auto_models`).
+- **Auto models per seat** (*Model: Auto*): every seat gets a model from the providers you have
+  connected (`RunIn.auto_models`), chosen by **competence for the role against expected cost**. Each
+  role states the competences it needs (reasoning, coding, writing, speed), a floor and how many
+  input and output tokens a seat uses over a run; each model has a competence profile and a price per
+  input and output token (billing price, public list price, or a flagged name-based estimate; free
+  for subscription CLI accounts and self-hosted endpoints). A strategy (`model_strategy`: `quality`,
+  `balanced`, `economy`) sets the trade-off, and the council is fitted to the run's dollar budget by
+  the cheapest downgrades first and, for an auto council, by shedding optional seats. The planner is
+  told what seats cost, the plan preview shows each seat's competence and expected spend and the
+  total, and `ARGUS_MODEL_PROFILES` overrides competence and reference prices.
+- **Competence-aware step assignment**: a step the chair's plan does not assign goes to the member
+  most competent for that kind of work, net of load and cost (no more round robin); a role held by
+  several members goes to the least loaded. Sub-councils pick a model per child seat from the parent
+  council's models within the child's budget.
+- **Structured reports** for research and general runs ([Reports](docs/concepts/reports.md)): a
+  pipeline of specialised agents (architect, data analyst, parallel section authors, editor, reviewer,
+  revisers) builds `report.json` with an outline check-in (validator, independent reviewer and,
+  with `guardrails.report.human_checkins`, you), analyst-only chart data, a review loop of autofix,
+  a deterministic validator (structure, data shapes, citations, provenance of numbers, placeholders)
+  and a reviewer agent that revises flagged sections until the report passes (rolling back any
+  revision that scores worse), budget-aware fallbacks at every stage, and a quality-assurance
+  appendix. Rendered to PDF (cover, linked contents, lists of figures and tables, bookmarks, KPI
+  cards, vector charts, risk matrix), self-contained HTML (inline SVG charts with data tables, dark
+  mode), DOCX (charts as images), LaTeX (pgfplots), Markdown (Mermaid), text (ASCII charts) and JSON;
+  every export is read back and checked, and retried more conservatively when it fails
+  (`guardrails.report`: `depth`, `max_review_rounds`, `pass_score`, `human_checkins`).
 
 - **Research library**: every page agents read is captured, with its source URL and the run that
   read it, into a per-user knowledge base that every later run searches. Deduplicated by URL and

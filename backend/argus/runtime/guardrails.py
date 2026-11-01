@@ -59,6 +59,16 @@ class Oversight(_Strict):
     max_corrections_per_thought: int = Field(default=2, ge=0, le=10)
 
 
+class ReportPolicy(_Strict):
+    """How research and general runs build their report (see ``argus.reports.pipeline``)."""
+
+    enabled: bool | None = None  # None: on for research and general runs, off for coding and chat
+    depth: Literal["brief", "standard", "extensive"] = "extensive"
+    max_review_rounds: int = Field(default=3, ge=0, le=6)
+    pass_score: float = Field(default=85, ge=0, le=100)
+    human_checkins: bool = False  # the user approves the outline in the approval queue
+
+
 class Guardrails(_Strict):
     budget: Budget = Field(default_factory=Budget)
     max_steps: int = Field(default=80, ge=1, le=10_000)
@@ -75,6 +85,7 @@ class Guardrails(_Strict):
     content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
     sandbox: SandboxPolicy = Field(default_factory=SandboxPolicy)
     oversight: Oversight = Field(default_factory=Oversight)
+    report: ReportPolicy = Field(default_factory=ReportPolicy)
 
     @classmethod
     def resolve(cls, *layers: dict[str, Any] | None) -> Guardrails:
