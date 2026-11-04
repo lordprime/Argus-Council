@@ -15,7 +15,7 @@ x-hardening: &hardening
 services:
   postgres:
     <<: *hardening
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     user: "70:70" # postgres user in the alpine image; avoids granting chown/setuid capabilities
     environment:
       POSTGRES_DB: argus
