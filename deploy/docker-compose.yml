@@ -32,7 +32,7 @@ services:
 
   redis:
     <<: *hardening
-    image: redis:7-alpine
+    image: redis:8-alpine
     # noeviction: idempotency records, refresh-token revocations and stream tickets must never be
     # evicted (every key has a TTL, so volatile-* policies would evict them too). When memory is
     # full, writes fail instead: the API skips LLM caching, rate-limits per process and answers 503
