@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 `backend/pyproject.toml`; the docs banner (`overrides/main.html`) and the `copyright` line in
 `mkdocs.yml` repeat it.
 
+## [0.1.2] - 2026-11-05
+
+### Security
+
+- `SKILL.md` frontmatter is split with a line scan instead of a regular expression that backtracked
+  quadratically: a file opening with `---` followed by many `\n ` pairs kept a worker busy for
+  minutes at the 400,000-character limit (CodeQL `py/polynomial-redos`).
+- Skill validation errors and the agent runner's error events return a message written for the
+  caller instead of the exception's text (CodeQL `py/stack-trace-exposure`). An invalid YAML
+  frontmatter error names the problem and its line and column, and no longer quotes the input back.
+- API keys are hashed with PBKDF2-SHA256 instead of plain SHA-256 (CodeQL
+  `py/weak-sensitive-data-hashing`). Existing keys keep working: migration 0019 marks them
+  `sha256` in the new `api_keys.hash_scheme` column, and each is re-hashed with PBKDF2 on its first
+  use. The SHA-256 fallback goes once no `sha256` rows remain.
+- Every URL fetched by `web_fetch`, the live data tools and knowledge-base URL imports, and every
+  redirect they follow, must be a plain `http(s)` URL: a host name or IP literal, an optional port,
+  and no user info, whitespace, control characters or backslashes. Those are where Python's and
+  httpx's URL parsers can disagree about the host (CodeQL `py/full-ssrf`).
+- `minimatch` 11.0.4 replaces 10.2.6 under `typescript-eslint` through an npm override, fixing a
+  denial of service through glob-pattern amplification (GHSA-g3hv-75wg-m249). `npm audit` reports
+  no vulnerabilities.
+
+- The web image's runtime stage is never taken from the build cache (CI and `scripts/build.sh`), so
+  its `apk upgrade` always installs current Alpine fixes. A cached layer had kept libexpat 2.9.0
+  (CVE-2026-113351, CVE-2026-117610, CVE-2026-118370, all fixed in 2.10.0), which failed the Trivy
+  scan in CI's docker job.
+
+### Changed
+
+- The CodeQL workflow pins `actions/checkout` and `github/codeql-action` to commit SHAs, like every
+  other workflow.
+
 ## [0.1.0] - 2026-11-03
 
 ### Added
@@ -171,4 +203,5 @@ All notable changes to this project are documented here. The format follows
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
   models often send, instead of failing with "Input should be a valid list".
 
-[0.1.0]: https://github.com/lordprime/Argus-Council/commits/main
+[0.1.2]: https://github.com/lordprime/Argus-Council/compare/v0.1.0...v0.1.2
+[0.1.0]: https://github.com/lordprime/Argus-Council/releases/tag/v0.1.0
