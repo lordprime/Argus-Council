@@ -16,7 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from argus.cache.store import Cache
 from argus.core.config import Settings
 from argus.core.errors import Forbidden, RateLimited, Unauthorized
-from argus.core.security import API_KEY_PREFIX, decode_token, hash_api_key
+from argus.core.security import (
+    API_KEY_PREFIX,
+    API_KEY_SCHEME,
+    LEGACY_API_KEY_SCHEME,
+    decode_token,
+    hash_api_key,
+    legacy_hash_api_key,
+)
 from argus.db.models import ApiKey, User
 from argus.services.sessions import session_revoked
 
@@ -76,10 +83,25 @@ class Principal:
             raise Forbidden(f"Missing scope: {scope}")
 
 
+async def _legacy_api_key(db: AsyncSession, token: str) -> ApiKey | None:
+    """A key stored before 0.1.2 (SHA-256), re-hashed with PBKDF2 on this, its first use since."""
+    key = (
+        await db.execute(
+            select(ApiKey).where(
+                ApiKey.hash_scheme == LEGACY_API_KEY_SCHEME, ApiKey.key_hash == legacy_hash_api_key(token)
+            )
+        )
+    ).scalar_one_or_none()
+    if key is not None:
+        key.key_hash = hash_api_key(token)
+        key.hash_scheme = API_KEY_SCHEME
+    return key
+
+
 async def _principal_from_api_key(db: AsyncSession, token: str) -> Principal:
     key = (
         await db.execute(select(ApiKey).where(ApiKey.key_hash == hash_api_key(token)))
-    ).scalar_one_or_none()
+    ).scalar_one_or_none() or await _legacy_api_key(db, token)
     now = datetime.now(UTC)
     if key is None or key.revoked:
         raise Unauthorized("Invalid API key")

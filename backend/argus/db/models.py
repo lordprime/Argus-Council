@@ -75,6 +75,8 @@ class ApiKey(IdMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120))
     prefix: Mapped[str] = mapped_column(String(32), index=True)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # How key_hash was computed: "pbkdf2", or "sha256" for a key from before 0.1.2 not yet used since.
+    hash_scheme: Mapped[str] = mapped_column(String(16), default="pbkdf2")
     scopes: Mapped[list[Any]] = mapped_column(default=list)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

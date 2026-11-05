@@ -29,6 +29,11 @@ WRITE_SCOPES = (
     "knowledge:write",
 )
 API_KEY_PREFIX = "argus_"
+API_KEY_SALT = b"argus-council/api-key"
+API_KEY_ROUNDS = 10_000
+# ``ApiKey.hash_scheme`` values: keys created before 0.1.2 are "sha256" until first used.
+API_KEY_SCHEME = "pbkdf2"
+LEGACY_API_KEY_SCHEME = "sha256"
 
 # "mfa": a short-lived proof that the password was right, exchanged for real tokens at
 # POST /auth/mfa/verify together with a second-factor code. It authenticates nothing else.
@@ -88,13 +93,23 @@ def decode_token(settings: Settings, token: str, expected_type: TokenType) -> di
 
 
 def generate_api_key() -> tuple[str, str, str]:
-    """Return ``(plaintext, prefix, sha256_hash)``. Only the hash is stored."""
+    """Return ``(plaintext, prefix, key_hash)``. Only the hash is stored."""
     raw = secrets.token_urlsafe(32)
     plaintext = f"{API_KEY_PREFIX}{raw}"
     return plaintext, plaintext[: len(API_KEY_PREFIX) + 8], hash_api_key(plaintext)
 
 
 def hash_api_key(plaintext: str) -> str:
+    """PBKDF2-SHA256 with a fixed salt, so a key is still found by an indexed lookup on its hash.
+
+    A key carries 256 random bits, so guessing it is hopeless however fast the hash is; the
+    modest work factor keeps every authenticated request cheap. 32 bytes, 64 hex characters."""
+    return hashlib.pbkdf2_hmac("sha256", plaintext.encode(), API_KEY_SALT, API_KEY_ROUNDS).hex()
+
+
+def legacy_hash_api_key(plaintext: str) -> str:
+    """How keys were hashed before 0.1.2 (plain SHA-256). Used only to recognise such a key once,
+    on its first use, and re-hash it with :func:`hash_api_key`."""
     return hashlib.sha256(plaintext.encode()).hexdigest()
 
 

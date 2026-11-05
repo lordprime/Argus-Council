@@ -59,7 +59,8 @@ for svc in "${services[@]}"; do
   dockerfile=()
   case "$svc" in
     api) context="$ROOT/backend" ;;
-    web) context="$ROOT/frontend" ;;
+    # Never reuse a cached runtime stage: its `apk upgrade` would replay an old run and miss OS fixes.
+    web) context="$ROOT/frontend" dockerfile=(--no-cache-filter runtime) ;;
     runner) context="$ROOT/backend" dockerfile=(-f "$ROOT/backend/docker/runner.Dockerfile") ;;
   esac
   log "building argus-council/$svc:$version"

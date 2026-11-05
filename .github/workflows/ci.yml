@@ -120,6 +120,9 @@ jobs:
           tags: argus-council/web:ci
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+          # The runtime stage runs `apk upgrade`; from the cache it would replay an old upgrade and
+          # ship packages fixed since (Trivy fails the job). It is small, so always rebuild it.
+          no-cache-filters: runtime
       - name: Build agent runner image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

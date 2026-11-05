@@ -164,6 +164,46 @@ async def test_web_fetch_blocks_redirect_to_private():
     assert res.is_error and "private" in res.content
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://user:pw@ex.com/",
+        "http://ex.com\\@evil.com/",
+        "http://ex.com/a b",
+        "http://ex.com/\r\nHost: evil",
+        "file:///etc/passwd",
+        "//ex.com/",
+    ],
+)
+async def test_web_fetch_refuses_ambiguous_url_shapes(url):
+    res = await _fetcher(lambda r: httpx.Response(200, text="never")).invoke({"url": url}, _Ctx())
+    assert res.is_error and "http(s)" in res.content
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "HTTPS://Ex.com",
+        "https://ex.com.:8443/a/b?q=1&r=%20#frag",
+        "http://[2606:4700::1111]/",
+        "https://bücher.de/straße",
+    ],
+)
+async def test_web_fetch_accepts_plain_url_shapes(url):
+    res = await _fetcher(lambda r: httpx.Response(200, text="ok")).invoke({"url": url}, _Ctx())
+    assert not res.is_error, res.content
+
+
+async def test_web_fetch_refuses_redirect_to_ambiguous_url():
+    def handler(req):
+        if req.url.path == "/start":
+            return httpx.Response(302, headers={"location": "http://ex.com\\@evil.com/"})
+        return httpx.Response(200, text="never")
+
+    res = await _fetcher(handler).invoke({"url": "https://ex.com/start"}, _Ctx())
+    assert res.is_error and "http(s)" in res.content
+
+
 async def test_web_fetch_rejects_binary_and_caps_size():
     res = await _fetcher(
         lambda r: httpx.Response(200, content=b"\x00", headers={"content-type": "image/png"})

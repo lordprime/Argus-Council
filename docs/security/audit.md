@@ -573,8 +573,9 @@ and `owner_id`, and a mismatch returns 404.
   random per-process secret.
 - **Passwords:** Argon2id (argon2-cffi defaults) with rehash-on-login. Minimum length is 12
   characters. Login equalises timing and answers unknown and wrong credentials the same way.
-- **API keys:** 256-bit `token_urlsafe` values. Only the SHA-256 is stored, the prefix is
-  displayed, and keys support expiry and revocation.
+- **API keys:** 256-bit `token_urlsafe` values. Only a PBKDF2-SHA256 hash is stored (keys from
+  before 0.1.2 kept a plain SHA-256 and are re-hashed on first use), the prefix is displayed, and
+  keys support expiry and revocation.
 - **Secrets:** stored secrets are Fernet-encrypted at rest.
   - Provider keys are shown only as a hint of 3 + 4 characters, and MCP headers only by name.
   - The remote-agent token is reported only as `has_token`.

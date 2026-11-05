@@ -40,6 +40,18 @@ _TEXT_TYPES = (
     "application/atom+xml",
 )
 
+# The only URL shape fetched: http(s), a host name or IP literal, an optional port, then a path,
+# query or fragment free of whitespace, control characters and backslashes. Anything else (user
+# info, backslashes, stray spaces) is where Python's and httpx's URL parsers can disagree about
+# the host, which would let a URL pass ``check_url`` for one host and connect to another. Each part
+# ends where the next one's first character begins, so matching is linear.
+_URL_SHAPE = (
+    r"https?://"
+    r"(?:[\w-]+(?:\.[\w-]+)*\.?|\[[0-9a-f:.]+\])"
+    r"(?::\d{1,5})?"
+    r"(?:[/?#][^\s\x00-\x1f\x7f\\]*)?"
+)
+
 Resolver = Callable[[str], Awaitable[list[str]]]
 
 
@@ -111,6 +123,9 @@ async def fetch_raw(
 
     ``types`` are the content-type prefixes accepted (an empty or missing type is always accepted)."""
     for _ in range(MAX_REDIRECTS + 1):
+        # Checked here, where the request is made, so every redirect hop is held to it too.
+        if not re.fullmatch(_URL_SHAPE, url, re.IGNORECASE):
+            raise FetchBlocked("Only plain http(s) URLs without spaces or backslashes can be fetched")
         await check_url(url, allow_domains, block_private, resolver)
         async with client.stream("GET", url, follow_redirects=False) as resp:
             if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:

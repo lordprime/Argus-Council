@@ -1,3 +1,7 @@
+from sqlalchemy import select
+
+from argus.core.security import hash_api_key, legacy_hash_api_key
+from argus.db.models import ApiKey
 from tests.conftest import register_and_login
 
 
@@ -67,6 +71,24 @@ async def test_api_key_lifecycle(client, auth):
     assert "key" not in listed[0] and listed[0]["prefix"] == key[:14]
     assert (await client.delete(f"/api/v1/auth/api-keys/{listed[0]['id']}", headers=auth)).status_code == 204
     assert (await client.get("/api/v1/auth/me", headers=kh)).status_code == 401
+
+
+async def test_legacy_sha256_api_key_works_and_is_rehashed(client, auth, app):
+    key = (await client.post("/api/v1/auth/api-keys", json={"name": "old"}, headers=auth)).json()["key"]
+    # Store it the way keys were stored before 0.1.2.
+    async with app.state.db.sessionmaker() as s:
+        row = (await s.execute(select(ApiKey))).scalar_one()
+        row.key_hash, row.hash_scheme = legacy_hash_api_key(key), "sha256"
+        await s.commit()
+
+    assert (await client.get("/api/v1/auth/me", headers={"X-API-Key": key})).status_code == 200
+    async with app.state.db.sessionmaker() as s:
+        row = (await s.execute(select(ApiKey))).scalar_one()
+        assert (row.key_hash, row.hash_scheme) == (hash_api_key(key), "pbkdf2")
+    assert (await client.get("/api/v1/auth/me", headers={"X-API-Key": key})).status_code == 200
+    # A wrong key is not let in through the legacy lookup.
+    bad = {"X-API-Key": key[:-1] + ("A" if key[-1] != "A" else "B")}
+    assert (await client.get("/api/v1/auth/me", headers=bad)).status_code == 401
 
 
 async def test_registration_can_be_disabled(settings):

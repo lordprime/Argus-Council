@@ -11,7 +11,7 @@ Multi-user, multi-agent LLM council platform. A FastAPI backend authenticates us
 
 - User accounts: email, display name, Argon2id password hashes (Postgres)
 - JWT access (60 min) / refresh (14 d) tokens; refresh token in browser sessionStorage; revocation state in Redis
-- API keys (SHA-256 hashes stored, plaintext shown once) with scopes
+- API keys (PBKDF2-SHA256 hashes stored, plaintext shown once) with scopes
 - LLM provider API keys, MCP headers, remote-agent tokens, webhook secrets (Fernet-encrypted, key from ARGUS_ENCRYPTION_KEY or ARGUS_SECRET_KEY)
 - Run topics, agent transcripts, artifacts and blobs (Postgres + /data volume)
 - Knowledge-base documents and memory items
