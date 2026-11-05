@@ -20,14 +20,15 @@ BRAND = ROOT / "docs" / "brand"
 ASSETS = ROOT / "docs" / "assets"
 PUBLIC = ROOT / "frontend" / "public"
 
-# Palette (also documented in docs/brand/README.md)
-INDIGO = "#4338CA"  # Argus indigo: lids and seats on light backgrounds; app accent (light)
-IRIS = "#8B93F8"  # Iris: lids and seats on dark backgrounds; app accent (dark)
-AMBER = "#F5A524"  # Watch amber: the pupil, the human in the loop
-AMBER_DARK_BG = "#FBBF24"
-NIGHT = "#0F1024"  # dark surfaces
-INK = "#1B1D3A"  # wordmark on light backgrounds
-PAPER = "#F6F7FC"  # light surfaces
+# Palette (also documented in docs/brand/README.md). Matches frontend/src/styles/tokens.css:
+# the warm-paper editorial identity (wine accent, warm ink and paper, not indigo/cool-gray).
+INDIGO = "#7A2048"  # Argus wine: lids and seats on light backgrounds; app accent (light)
+IRIS = "#E08AA5"  # Rose: lids and seats on dark backgrounds; app accent (dark)
+AMBER = "#D9A454"  # Watch amber: the pupil, the human in the loop
+AMBER_DARK_BG = "#D8A056"
+NIGHT = "#14110E"  # dark surfaces
+INK = "#1C1813"  # wordmark on light backgrounds
+PAPER = "#F7F4EE"  # light surfaces
 WHITE = "#FFFFFF"
 
 SEATS = 8
@@ -127,7 +128,7 @@ def social() -> str:
     font = "font-family=\"Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif\""
     lines = ("A council of LLM agents that plans,", "debates, votes and delivers,", "with you in the loop.")
     tspans = "".join(f'<tspan x="{x}" dy="{0 if i == 0 else 40}">{t}</tspan>' for i, t in enumerate(lines))
-    body.append(f'<text x="{x}" y="370" {font} font-size="29" fill="#D9DCFF">{tspans}</text>')
+    body.append(f'<text x="{x}" y="370" {font} font-size="29" fill="#F0D9DE">{tspans}</text>')
     body.append(
         f'<text x="{x}" y="514" {font} font-size="22" fill="{IRIS}">'
         "Self-hosted. Multi-provider. Tamper-evident.</text>"
@@ -165,7 +166,7 @@ def main() -> None:
         BRAND / "argus-mark-dark.svg": svg(64, 64, eye(32, 32, 1, IRIS, IRIS, AMBER_DARK_BG), "Argus Council"),
         BRAND / "argus-mark-mono.svg": svg(
             64, 64, eye(32, 32, 1, "currentColor", "currentColor", "currentColor"), "Argus Council",
-            ' fill="currentColor" style="color:#1B1D3A"'),
+            f' fill="currentColor" style="color:{INK}"'),
         BRAND / "argus-lockup-light.svg": lockup(INDIGO, INDIGO, AMBER, INK, INDIGO),
         BRAND / "argus-lockup-dark.svg": lockup(IRIS, IRIS, AMBER_DARK_BG, WHITE, IRIS),
         BRAND / "argus-lockup-mono.svg": lockup(INK, INK, INK, INK, INK),
