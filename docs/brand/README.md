@@ -21,7 +21,7 @@ python3 tools/build_brand.py
 | `argus-lockup-light.svg` | Mark and wordmark, horizontal, on light backgrounds |
 | `argus-lockup-dark.svg` | Mark and wordmark, horizontal, on dark backgrounds |
 | `argus-lockup-mono.svg` | Lockup in one colour |
-| `favicon.svg`, `favicon.ico` | The app icon: the mark in white on an indigo tile (ICO holds 16, 32 and 48 px) |
+| `favicon.svg`, `favicon.ico` | The app icon: the mark in white on a wine tile (ICO holds 16, 32 and 48 px) |
 | `png/` | Raster exports: favicons (16, 32, 48), `apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png`, the mark at 512 px, and `social-preview.png` |
 | `social-preview.svg`, `png/social-preview.png` | 1280 x 640 GitHub social preview |
 
@@ -34,14 +34,17 @@ into `favicon.ico`. Re-export the PNGs whenever the geometry changes.
 
 ## Colours
 
+Matches the web app's own palette (`frontend/src/styles/tokens.css`): a warm-paper editorial
+identity, not the indigo/cool-gray the product shipped with before.
+
 | Name | Hex | Role |
 | --- | --- | --- |
-| Argus indigo | `#4338CA` | Lids and seats on light backgrounds, the icon tile, the web app's light accent |
-| Iris | `#8B93F8` | Lids and seats on dark backgrounds, the web app's dark accent |
-| Watch amber | `#F5A524` | The pupil on light backgrounds and on the icon tile |
-| Watch amber (dark) | `#FBBF24` | The pupil on dark backgrounds |
-| Ink | `#1B1D3A` | Wordmark on light backgrounds, monochrome variants |
-| Night | `#0F1024` | Dark surfaces such as the social preview |
+| Argus wine | `#7A2048` | Lids and seats on light backgrounds, the icon tile, the web app's light accent |
+| Rose | `#E08AA5` | Lids and seats on dark backgrounds, the web app's dark accent |
+| Watch amber | `#D9A454` | The pupil on light backgrounds and on the icon tile |
+| Watch amber (dark) | `#D8A056` | The pupil on dark backgrounds |
+| Ink | `#1C1813` | Wordmark on light backgrounds, monochrome variants |
+| Night | `#14110E` | Dark surfaces such as the social preview |
 
 Amber is used only for the pupil. It is the one warm point in the identity and stands for the
 person in the loop, so do not use it for decoration elsewhere.

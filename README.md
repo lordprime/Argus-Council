@@ -8,8 +8,8 @@
 <p align="center">
   <a href="https://github.com/lordprime/Argus-Council/actions/workflows/ci.yml"><img src="https://github.com/lordprime/Argus-Council/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/lordprime/Argus-Council/actions/workflows/pages.yml"><img src="https://github.com/lordprime/Argus-Council/actions/workflows/pages.yml/badge.svg?branch=main" alt="Docs"></a>
-  <a href="https://lordprime.github.io/Argus-Council/"><img src="https://img.shields.io/badge/docs-lordprime.github.io%2FArgus--Council-4338CA" alt="Documentation"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4338CA" alt="MIT License"></a>
+  <a href="https://lordprime.github.io/Argus-Council/"><img src="https://img.shields.io/badge/docs-lordprime.github.io%2FArgus--Council-7A2048" alt="Documentation"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7A2048" alt="MIT License"></a>
 </p>
 
 <p align="center"><b>A council of LLM agents that plans, debates, votes and delivers, with you in the loop.</b></p>
