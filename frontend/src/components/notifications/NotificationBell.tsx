@@ -124,7 +124,7 @@ export function NotificationBell() {
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content align="end" sideOffset={6} aria-label="Notifications"
-            className="z-popover w-[min(24rem,calc(100vw-1rem))] rounded-lg border border-border bg-surface shadow-2 flex flex-col max-h-[70vh]">
+            className="pop-fx z-popover w-[min(24rem,calc(100vw-1rem))] rounded-lg border border-border bg-surface shadow-2 flex flex-col max-h-[70vh]">
             <div className="flex items-center gap-2 px-3 h-10 border-b border-border">
               <h2 className="text-sm font-semibold">Notifications</h2>
               <Button size="sm" variant="ghost" icon={CheckCheck} className="ml-auto" disabled={!unread}

@@ -76,7 +76,7 @@ const THEMES: { v: Theme; label: string; icon: LucideIcon }[] = [
 
 const menuItem = cn("flex items-center gap-2 rounded-md px-2 h-8 text-sm outline-none data-[highlighted]:bg-surface-2 cursor-pointer",
   "[@media(pointer:coarse)]:h-11");
-const menuPanel = "z-popover min-w-52 rounded-lg border border-border bg-surface shadow-2 p-1";
+const menuPanel = "pop-fx z-popover min-w-52 rounded-lg border border-border bg-surface shadow-2 p-1";
 
 function ThemeItems() {
   const { theme, setTheme } = useUi();
@@ -266,8 +266,8 @@ function SideNav() {
             <li key={n.to}>
               <Link to={n.to} aria-current={active ? "page" : undefined} title={navCollapsed ? n.label : undefined}
                 aria-label={navCollapsed ? n.label : undefined}
-                className={cn("flex items-center gap-3 rounded-md h-9 pl-[10px] pr-3 text-sm border-l-2 transition-colors duration-fast",
-                  active ? "border-accent bg-surface-2 text-fg font-medium" : "border-transparent text-fg-muted hover:bg-surface-2 hover:text-fg")}>
+                className={cn("flex items-center gap-3 rounded-md h-9 px-3 text-sm transition-colors duration-fast",
+                  active ? "bg-surface-2 text-fg font-medium" : "text-fg-muted hover:bg-surface-2 hover:text-fg")}>
                 <n.icon className={cn("size-4 shrink-0", active && "text-accent")} aria-hidden />
                 {!navCollapsed && n.label}
               </Link>

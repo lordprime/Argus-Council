@@ -618,7 +618,7 @@ export function InterventionBar({ runId, members, disabled, status, followUp }: 
           </Popover.Trigger>
           <Popover.Portal>
             <Popover.Content side="top" align="start" sideOffset={6} aria-label="Message options"
-              className="z-popover w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-surface shadow-2 p-3 flex flex-col gap-1">
+              className="pop-fx z-popover w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-surface shadow-2 p-3 flex flex-col gap-1">
               {selects}
             </Popover.Content>
           </Popover.Portal>

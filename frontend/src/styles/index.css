@@ -24,6 +24,11 @@
     outline: 2px solid rgb(var(--focus-ring));
     outline-offset: 2px;
   }
+  /* Browser surfaces that ship with their own defaults, themed from the palette (craft floor). */
+  ::selection {
+    background: rgb(var(--accent-subtle));
+    color: rgb(var(--accent));
+  }
   .tabular {
     font-variant-numeric: tabular-nums;
   }
@@ -78,6 +83,59 @@
 .animate-enter { animation: argus-enter var(--dur-fast) var(--ease-out); }
 @keyframes argus-blink { 50% { opacity: 0; } }
 .caret::after { content: "▍"; animation: argus-blink 1s steps(1) infinite; }
+
+/* Overlay/panel entrance and exit, keyed off Radix's data-state so Presence waits for the exit to
+   finish before unmounting. Composite-only properties (opacity, transform) throughout — nothing here
+   triggers layout or paint (animation-performance). `both` holds each end so there is no flash of the
+   underlying (unanimated) style on the frame the state flips. */
+@keyframes argus-overlay-in { from { opacity: 0; } }
+@keyframes argus-overlay-out { to { opacity: 0; } }
+.overlay-fx[data-state="open"] { animation: argus-overlay-in var(--dur-base) var(--ease-out) both; }
+.overlay-fx[data-state="closed"] { animation: argus-overlay-out var(--dur-fast) var(--ease-out) both; }
+
+/* Centered dialogs scale in place (never from 0 — a visible shape even at its smallest, per the
+   craft floor's "nothing appears from nothing"); transform-origin stays center, unlike an anchored
+   popover, because a modal has no trigger to scale from. */
+@keyframes argus-dialog-in { from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); } }
+@keyframes argus-dialog-out { to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); } }
+.dialog-fx[data-state="open"] { animation: argus-dialog-in var(--dur-base) var(--ease-out) both; }
+.dialog-fx[data-state="closed"] { animation: argus-dialog-out var(--dur-fast) var(--ease-out) both; }
+
+/* Anchored popovers (dropdown menus, popovers) scale from the trigger's side, which Radix exposes as
+   this custom property, instead of the dialog's center-scale. */
+.pop-fx {
+  transform-origin: var(--radix-popover-content-transform-origin, var(--radix-dropdown-menu-content-transform-origin, center));
+}
+@keyframes argus-pop-in { from { opacity: 0; transform: scale(0.96); } }
+@keyframes argus-pop-out { to { opacity: 0; transform: scale(0.96); } }
+.pop-fx[data-state="open"] { animation: argus-pop-in var(--dur-fast) var(--ease-out) both; }
+.pop-fx[data-state="closed"] { animation: argus-pop-out var(--dur-fast) var(--ease-out) both; }
+
+/* Drawers slide from the edge they live on; an exit matches its entry (choreograph) rather than just
+   fading. */
+@keyframes argus-drawer-right-in { from { opacity: 0; transform: translateX(100%); } }
+@keyframes argus-drawer-right-out { to { opacity: 0; transform: translateX(100%); } }
+.drawer-fx-right[data-state="open"] { animation: argus-drawer-right-in var(--dur-base) var(--ease-out) both; }
+.drawer-fx-right[data-state="closed"] { animation: argus-drawer-right-out var(--dur-fast) var(--ease-out) both; }
+@keyframes argus-drawer-bottom-in { from { opacity: 0; transform: translateY(100%); } }
+@keyframes argus-drawer-bottom-out { to { opacity: 0; transform: translateY(100%); } }
+.drawer-fx-bottom[data-state="open"] { animation: argus-drawer-bottom-in var(--dur-base) var(--ease-out) both; }
+.drawer-fx-bottom[data-state="closed"] { animation: argus-drawer-bottom-out var(--dur-fast) var(--ease-out) both; }
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-enter, .caret::after, .animate-spin, .animate-pulse { animation: none !important; }
+  .animate-enter, .caret::after, .animate-spin, .animate-pulse,
+  .overlay-fx, .dialog-fx, .pop-fx, .drawer-fx-right, .drawer-fx-bottom {
+    animation: none !important;
+  }
+}
+:root[data-motion="reduced"] .animate-enter,
+:root[data-motion="reduced"] .caret::after,
+:root[data-motion="reduced"] .animate-spin,
+:root[data-motion="reduced"] .animate-pulse,
+:root[data-motion="reduced"] .overlay-fx,
+:root[data-motion="reduced"] .dialog-fx,
+:root[data-motion="reduced"] .pop-fx,
+:root[data-motion="reduced"] .drawer-fx-right,
+:root[data-motion="reduced"] .drawer-fx-bottom {
+  animation: none !important;
 }
