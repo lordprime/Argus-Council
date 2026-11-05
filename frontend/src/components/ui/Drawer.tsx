@@ -22,13 +22,13 @@ export function Drawer({ open, onOpenChange, title, description, side = "right",
   return (
     <RDialog.Root open={open} onOpenChange={onOpenChange}>
       <RDialog.Portal>
-        <RDialog.Overlay className="fixed inset-0 z-drawer bg-black/40" />
+        <RDialog.Overlay className="overlay-fx fixed inset-0 z-drawer bg-black/40" />
         <RDialog.Content
           {...(description ? {} : { "aria-describedby": undefined })}
-          className={cn("fixed z-drawer flex flex-col bg-surface border-border shadow-3 focus-visible:outline-none animate-enter",
+          className={cn("fixed z-drawer flex flex-col bg-surface border-border shadow-3 focus-visible:outline-none",
             side === "right"
-              ? "inset-y-0 right-0 w-full sm:w-[480px] sm:border-l"
-              : "inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t pb-[env(safe-area-inset-bottom)]",
+              ? "drawer-fx-right inset-y-0 right-0 w-full sm:w-[480px] sm:border-l"
+              : "drawer-fx-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t pb-[env(safe-area-inset-bottom)]",
             className)}>
           <div className="flex items-center gap-2 border-b border-border px-3 h-12 shrink-0">
             <RDialog.Title className="text-md font-semibold flex-1 truncate">{title}</RDialog.Title>

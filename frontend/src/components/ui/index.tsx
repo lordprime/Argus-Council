@@ -79,8 +79,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast",
-        "disabled:opacity-50 disabled:cursor-not-allowed min-w-6 min-h-6 whitespace-nowrap",
+        "inline-flex items-center justify-center rounded-md font-medium transition-[color,background-color,border-color,transform] duration-fast",
+        "disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 min-w-6 min-h-6 whitespace-nowrap active:scale-[0.97]",
         touchTarget,
         variants[variant],
         sizes[size],
@@ -101,7 +101,7 @@ export type ButtonSize = Size;
 
 /** Button classes for elements that must not be a <button> (router links styled as buttons, see ButtonLink). */
 export function buttonClass(variant: Variant = "secondary", size: Size = "md") {
-  return cn("inline-flex items-center justify-center rounded-md font-medium transition-colors duration-fast min-w-6 min-h-6 whitespace-nowrap",
+  return cn("inline-flex items-center justify-center rounded-md font-medium transition-[color,background-color,border-color,transform] duration-fast min-w-6 min-h-6 whitespace-nowrap active:scale-[0.97]",
     touchTarget, variants[variant], sizes[size]);
 }
 
@@ -548,7 +548,7 @@ export function PageHeader({ title, description, actions, eyebrow, meta, badge, 
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h1 className="text-xl break-words min-w-0">{title}</h1>
+            <h1 className="text-xl font-display break-words min-w-0">{title}</h1>
             {badge}
           </div>
           {description && <div className="text-sm text-fg-muted mt-1 max-w-prose">{description}</div>}
@@ -608,9 +608,9 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
   return (
     <RDialog.Root open={open} onOpenChange={onOpenChange}>
       <RDialog.Portal>
-        <RDialog.Overlay className="fixed inset-0 bg-black/40 z-dialog" />
+        <RDialog.Overlay className="overlay-fx fixed inset-0 bg-black/40 z-dialog" />
         <RDialog.Content
-          className={cn("fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-dialog w-[calc(100vw-2rem)] max-h-[90vh] overflow-auto",
+          className={cn("dialog-fx fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-dialog w-[calc(100vw-2rem)] max-h-[90vh] overflow-auto",
             "rounded-xl bg-surface border border-border shadow-3 p-5", wide ? "max-w-3xl" : "max-w-lg")}>
           <div className="flex items-start justify-between gap-4 mb-3">
             <div>

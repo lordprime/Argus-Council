@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 
 import { ModeLabel } from "@/components/run/ModeLabel";
 import { Button, Dialog, TextField } from "@/components/ui";
-import { RoleAvatar } from "@/components/ui/role";
+import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { roleTitle } from "@/features/councils/logic";
 import { cn } from "@/lib/cn";
 import type { Member, RoleInfo } from "@/lib/types";
@@ -46,12 +46,19 @@ export function RoleChip({ role, roles, overseer, tone, children }: {
   tone?: "add" | "remove";
   children?: ReactNode;
 }) {
+  // At rest, the chip's own pill carries the role's colour (the identity RoleAvatar already shows
+  // everywhere else: the rail, the seat list, the planned-council preview), rather than sitting
+  // neutral around a coloured icon. Add/remove still read as plain success/danger: those are edit
+  // states, not role identity, and must not compete with the role's own hue.
+  const s = roleStyle(role);
   return (
-    <li className={cn("inline-flex items-center gap-1.5 rounded-full border pl-1 pr-2.5 h-7 text-sm",
-      tone === "add" ? "border-success bg-success-subtle" : tone === "remove" ? "border-danger bg-danger-subtle line-through decoration-danger" : "border-border bg-surface-2")}>
-      {tone === "add" && <Plus className="size-3.5 text-success" aria-label="Add" />}
-      {tone === "remove" && <Minus className="size-3.5 text-danger" aria-label="Remove" />}
-      <RoleAvatar role={role} overseer={overseer} size={20} />
+    <li className={cn("inline-flex items-center gap-1.5 rounded-full border pl-1 pr-2.5 h-7 text-sm font-medium",
+      tone === "add" ? "border-success bg-success-subtle text-success" :
+      tone === "remove" ? "border-danger bg-danger-subtle text-danger line-through decoration-danger" :
+      cn("border-transparent", s.bg, s.fg))}>
+      {tone === "add" && <Plus className="size-3.5" aria-label="Add" />}
+      {tone === "remove" && <Minus className="size-3.5" aria-label="Remove" />}
+      <RoleAvatar role={role} overseer={overseer} size={20} onTint={!tone} />
       {children ?? roleTitle(roles, role)}
       {overseer && <Eye className="size-3.5 text-fg-subtle" aria-label="overseer" />}
     </li>

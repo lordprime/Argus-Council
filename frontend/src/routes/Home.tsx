@@ -201,65 +201,74 @@ function Composer() {
     <Card className="p-5">
       {/* ⌘↵ submits from any field in the composer. */}
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
-      <form onSubmit={submit} className="flex flex-col gap-5"
+      <form onSubmit={submit} className="flex flex-col gap-8"
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit(); }}>
-        <TextField label="Topic" required maxLength={200} autoFocus placeholder="What should the council work on?"
-          value={topic} onChange={(e) => setTopic(e.target.value)} />
-        <TextArea label="Description" maxLength={4000} placeholder="Details, constraints, what a great result looks like (Markdown)"
-          hint={`${description.length}/4000`} value={description} onChange={(e) => setDescription(e.target.value)} />
-        <Segmented label="Mode" value={mode} onChange={setMode} options={MODES} />
-        <p className="text-xs text-fg-subtle -mt-3">{MODES.find((m) => m.value === mode)?.hint}</p>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField label="Council" value={councilId} onChange={(e) => setCouncilId(e.target.value)}
-            hint={autoCouncil ? "Roles and their focus are chosen for this task." : undefined}>
-            <option value={AUTO}>Auto: compose for this task</option>
-            <option value="">Default roster for the mode</option>
-            {councils.data?.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.members.length} seats)</option>)}
-          </SelectField>
-          {!councilId && (
-            <SelectField label="Model" value={route} onChange={(e) => setRoute(e.target.value)}
-              hint={noProviders ? "No provider connected yet."
-                : autoModels ? "Each seat gets the model most competent for its job, weighed against its cost and your budget." : undefined}>
-              <option value={AUTO}>Auto: best model per seat</option>
-              {routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </SelectField>
-          )}
+        {/* The task itself: tightly grouped, since Topic, Description and Mode describe one thing.
+            Generous space separates this from the decisions that follow (layout.md: deliberate
+            tight/generous rhythm, not one gap value repeated until every group carries equal weight). */}
+        <div className="flex flex-col gap-4">
+          <TextField label="Topic" required maxLength={200} autoFocus placeholder="What should the council work on?"
+            value={topic} onChange={(e) => setTopic(e.target.value)} />
+          <TextArea label="Description" maxLength={4000} placeholder="Details, constraints, what a great result looks like (Markdown)"
+            hint={`${description.length}/4000`} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <div>
+            <Segmented label="Mode" value={mode} onChange={setMode} options={MODES} />
+            <p className="text-xs text-fg-subtle mt-1.5">{MODES.find((m) => m.value === mode)?.hint}</p>
+          </div>
         </div>
 
-        {autoModels && (
-          <div className="flex flex-col gap-1">
-            <Segmented label="Model choice" value={strategy} onChange={setStrategy}
-              options={STRATEGIES.map(({ value, label }) => ({ value, label }))} />
-            <p className="text-xs text-fg-subtle">{STRATEGIES.find((s) => s.value === strategy)?.hint} Budget ${budgetUsd}.</p>
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectField label="Council" value={councilId} onChange={(e) => setCouncilId(e.target.value)}
+              hint={autoCouncil ? "Roles and their focus are chosen for this task." : undefined}>
+              <option value={AUTO}>Auto: compose for this task</option>
+              <option value="">Default roster for the mode</option>
+              {councils.data?.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.members.length} seats)</option>)}
+            </SelectField>
+            {!councilId && (
+              <SelectField label="Model" value={route} onChange={(e) => setRoute(e.target.value)}
+                hint={noProviders ? "No provider connected yet."
+                  : autoModels ? "Each seat gets the model most competent for its job, weighed against its cost and your budget." : undefined}>
+                <option value={AUTO}>Auto: best model per seat</option>
+                {routes.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </SelectField>
+            )}
           </div>
-        )}
 
-        {!councilId && (
-          <div className="flex flex-col gap-2">
-            <Stepper label={autoCouncil ? "Max seats" : "Council size"} value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
-              hint={autoCouncil ? "The planner uses as few seats as the task needs, up to this." : `Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
-            {!autoCouncil && !freshPlan && (
-              <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
-                {roster.map((r, i) => <RoleChip key={`${r}-${i}`} role={r} roles={roles.data?.roles} overseer={overseers.has(r)} />)}
-              </ul>
-            )}
-            {(autoCouncil || autoModels) && (
-              <div className="flex flex-col gap-2">
-                <Button type="button" size="sm" variant="ghost" className="self-start -ml-2.5" icon={Sparkles}
-                  loading={planner.isPending} disabled={!request} onClick={preview}
-                  title={!request ? "Add a topic first" : undefined}>
-                  {freshPlan ? "Plan again" : autoCouncil ? "Preview the council" : "Preview the models"}
-                </Button>
-                {planner.error != null && <Callout tone="danger" title="Could not plan the council">{errorMessage(planner.error)}</Callout>}
-                {plan && <CouncilPlanPreview plan={plan.plan} stale={!freshPlan} />}
-                {!plan && autoCouncil && (
-                  <p className="text-xs text-fg-subtle">The council is composed when the run starts. Preview it to see the seats and models first.</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+          {autoModels && (
+            <div className="flex flex-col gap-1">
+              <Segmented label="Model choice" value={strategy} onChange={setStrategy}
+                options={STRATEGIES.map(({ value, label }) => ({ value, label }))} />
+              <p className="text-xs text-fg-subtle">{STRATEGIES.find((s) => s.value === strategy)?.hint} Budget ${budgetUsd}.</p>
+            </div>
+          )}
+
+          {!councilId && (
+            <div className="flex flex-col gap-2">
+              <Stepper label={autoCouncil ? "Max seats" : "Council size"} value={size} min={MIN_SEATS} max={MAX_SEATS} onChange={setSize}
+                hint={autoCouncil ? "The planner uses as few seats as the task needs, up to this." : `Between ${MIN_SEATS} and ${MAX_SEATS} seats.`} />
+              {!autoCouncil && !freshPlan && (
+                <ul className="flex flex-wrap gap-1.5" aria-label="Roster preview">
+                  {roster.map((r, i) => <RoleChip key={`${r}-${i}`} role={r} roles={roles.data?.roles} overseer={overseers.has(r)} />)}
+                </ul>
+              )}
+              {(autoCouncil || autoModels) && (
+                <div className="flex flex-col gap-2">
+                  <Button type="button" size="sm" variant="ghost" className="self-start -ml-2.5" icon={Sparkles}
+                    loading={planner.isPending} disabled={!request} onClick={preview}
+                    title={!request ? "Add a topic first" : undefined}>
+                    {freshPlan ? "Plan again" : autoCouncil ? "Preview the council" : "Preview the models"}
+                  </Button>
+                  {planner.error != null && <Callout tone="danger" title="Could not plan the council">{errorMessage(planner.error)}</Callout>}
+                  {plan && <CouncilPlanPreview plan={plan.plan} stale={!freshPlan} />}
+                  {!plan && autoCouncil && (
+                    <p className="text-xs text-fg-subtle">The council is composed when the run starts. Preview it to see the seats and models first.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-col gap-2">
           <KnowledgePicker legend="Knowledge to link" bases={knowledge.data ?? []} value={kbIds} onChange={setKbIds} />
@@ -273,64 +282,68 @@ function Composer() {
           )}
         </div>
 
-        <fieldset>
-          <legend className="text-sm font-medium mb-2">Deliverable formats</legend>
-          <div className="flex flex-wrap gap-2">
-            {FORMATS.map((f) => {
-              const on = outputs.includes(f.value);
-              return (
-                <Chip key={f.value} pressed={on}
-                  onPressedChange={(next) => setOutputs((o) => (next ? [...o, f.value] : o.filter((x) => x !== f.value)))}>
-                  {f.label}
-                </Chip>
-              );
-            })}
-          </div>
-        </fieldset>
+        <div className="flex flex-col gap-4">
+          <fieldset>
+            <legend className="text-sm font-medium mb-2">Deliverable formats</legend>
+            <div className="flex flex-wrap gap-2">
+              {FORMATS.map((f) => {
+                const on = outputs.includes(f.value);
+                return (
+                  <Chip key={f.value} pressed={on}
+                    onPressedChange={(next) => setOutputs((o) => (next ? [...o, f.value] : o.filter((x) => x !== f.value)))}>
+                    {f.label}
+                  </Chip>
+                );
+              })}
+            </div>
+          </fieldset>
 
-        {reports && (
-          <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
-            <Segmented label="Report depth" value={depth} onChange={setDepth} options={DEPTHS} />
-            <p className="text-xs text-fg-subtle -mt-2">
-              Specialist agents outline, chart, draft and review the report in rounds until it passes its quality checks.
-            </p>
-            <Toggle label="Let me check the outline" checked={checkins} onChange={setCheckins}
-              hint="The run pauses once the outline is ready so you can approve it or send it back with notes." />
-          </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <SelectField label="Guardrails" value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof PRESETS)}
-            hint="Budget, step limits and how strongly overseers intervene." className="sm:max-w-[calc(50%-0.5rem)]">
-            <option value="strict">Strict</option>
-            <option value="balanced">Balanced (default)</option>
-            <option value="permissive">Permissive</option>
-          </SelectField>
-          <Button type="button" variant="ghost" size="sm" className="self-start -ml-2.5" icon={advanced ? ChevronDown : ChevronRight}
-            onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced} aria-controls="advanced-guardrails">
-            {advanced ? "Hide advanced guardrails" : "Advanced guardrails"}
-          </Button>
+          {reports && (
+            <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
+              <Segmented label="Report depth" value={depth} onChange={setDepth} options={DEPTHS} />
+              <p className="text-xs text-fg-subtle -mt-2">
+                Specialist agents outline, chart, draft and review the report in rounds until it passes its quality checks.
+              </p>
+              <Toggle label="Let me check the outline" checked={checkins} onChange={setCheckins}
+                hint="The run pauses once the outline is ready so you can approve it or send it back with notes." />
+            </div>
+          )}
         </div>
-        {advanced && (
-          <div id="advanced-guardrails" className="grid gap-4 sm:grid-cols-3 rounded-lg bg-surface-2 p-4">
-            <TextField label="Budget (USD)" type="number" min="0" step="0.5" value={budget} onChange={(e) => setBudget(e.target.value)} />
-            <TextField label="Max steps" type="number" min="1" value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} />
-            <SelectField label="Overseer intercepts" value={interceptMode} onChange={(e) => setInterceptMode(e.target.value)}>
-              <option value="annotate">Annotate (comment only)</option>
-              <option value="hold">Hold (agent waits for correction)</option>
-              <option value="block">Block (discard step)</option>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
+            <SelectField label="Guardrails" value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof PRESETS)}
+              hint="Budget, step limits and how strongly overseers intervene." className="sm:max-w-[calc(50%-0.5rem)]">
+              <option value="strict">Strict</option>
+              <option value="balanced">Balanced (default)</option>
+              <option value="permissive">Permissive</option>
             </SelectField>
-            <fieldset className="sm:col-span-3">
-              <legend className="text-sm font-medium mb-2">Require my approval for</legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {APPROVALS.map((a) => (
-                  <Toggle key={a.key} label={a.label} checked={approvals.includes(a.key)}
-                    onChange={(on) => setApprovals((x) => (on ? [...x, a.key] : x.filter((k) => k !== a.key)))} />
-                ))}
-              </div>
-            </fieldset>
+            <Button type="button" variant="ghost" size="sm" className="self-start -ml-2.5" icon={advanced ? ChevronDown : ChevronRight}
+              onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced} aria-controls="advanced-guardrails">
+              {advanced ? "Hide advanced guardrails" : "Advanced guardrails"}
+            </Button>
           </div>
-        )}
+          {advanced && (
+            <div id="advanced-guardrails" className="grid gap-4 sm:grid-cols-3 rounded-lg bg-surface-2 p-4">
+              <TextField label="Budget (USD)" type="number" min="0" step="0.5" value={budget} onChange={(e) => setBudget(e.target.value)} />
+              <TextField label="Max steps" type="number" min="1" value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} />
+              <SelectField label="Overseer intercepts" value={interceptMode} onChange={(e) => setInterceptMode(e.target.value)}>
+                <option value="annotate">Annotate (comment only)</option>
+                <option value="hold">Hold (agent waits for correction)</option>
+                <option value="block">Block (discard step)</option>
+              </SelectField>
+              <fieldset className="sm:col-span-3">
+                <legend className="text-sm font-medium mb-2">Require my approval for</legend>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {APPROVALS.map((a) => (
+                    <Toggle key={a.key} label={a.label} checked={approvals.includes(a.key)}
+                      onChange={(on) => setApprovals((x) => (on ? [...x, a.key] : x.filter((k) => k !== a.key)))} />
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          )}
+        </div>
 
         {create.error && <Callout tone="danger" title="Could not start the run">{errorMessage(create.error)}</Callout>}
         {noProviders && (

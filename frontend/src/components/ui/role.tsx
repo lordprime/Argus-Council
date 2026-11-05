@@ -66,13 +66,18 @@ export function roleStyle(role?: string): RoleStyle {
   return { ...FALLBACK[h % FALLBACK.length]!, icon: Bot };
 }
 
-export function RoleAvatar({ role, overseer, size = 24, label }: { role?: string; overseer?: boolean; size?: number; label?: string }) {
+/**
+ * `onTint`: the avatar sits on a surface already tinted in the role's own colour (RoleChip's pill),
+ * so the circle itself switches to a plain surface fill instead of repeating that colour — otherwise
+ * the icon's own coloured disc disappears into a same-toned background.
+ */
+export function RoleAvatar({ role, overseer, size = 24, label, onTint }: { role?: string; overseer?: boolean; size?: number; label?: string; onTint?: boolean }) {
   const s = roleStyle(role);
   return (
     <span
       role="img"
       aria-label={label ?? `${role ?? "agent"}${overseer ? " (overseer)" : ""}`}
-      className={cn("inline-flex items-center justify-center rounded-full shrink-0", s.bg, s.fg,
+      className={cn("inline-flex items-center justify-center rounded-full shrink-0", onTint ? cn("bg-surface", s.fg) : cn(s.bg, s.fg),
         overseer && "outline outline-[1.5px] outline-dashed outline-offset-1 outline-current")}
       style={{ width: size, height: size }}
     >

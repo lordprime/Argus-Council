@@ -20,9 +20,9 @@ function AuthCard({ title, children }: { title: string; children: ReactNode }) {
       <Card className="w-full max-w-[400px] p-6" aria-labelledby="auth-title">
         <div className="flex items-center gap-2 mb-6">
           <img src="/favicon.svg" alt="" className="size-8" />
-          <span className="text-lg">Argus Council</span>
+          <span className="font-display text-lg tracking-[-0.01em]">Argus Council</span>
         </div>
-        <h1 id="auth-title" className="text-xl mb-4">{title}</h1>
+        <h1 id="auth-title" className="text-xl font-display mb-4">{title}</h1>
         {children}
       </Card>
     </main>

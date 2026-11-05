@@ -2,8 +2,9 @@
 
 import { Cpu, Gauge, Sparkles, Zap } from "lucide-react";
 
-import { RoleAvatar } from "@/components/ui/role";
+import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { Badge, Callout } from "@/components/ui";
+import { cn } from "@/lib/cn";
 import type { CostBasis, CouncilPlan, ModelTier } from "@/lib/queries";
 
 const TIER: Record<ModelTier, { label: string; icon: typeof Cpu; tone: "accent" | "neutral" | "info" }> = {
@@ -45,8 +46,10 @@ export function CouncilPlanPreview({ plan, stale }: { plan: CouncilPlan; stale?:
       <ul className="grid gap-2 sm:grid-cols-2">
         {plan.seats.map((s, i) => {
           const tier = TIER[s.tier] ?? TIER.balanced;
+          const role = roleStyle(s.role);
           return (
-            <li key={`${s.role}-${i}`} className="flex items-start gap-2.5 rounded-md border border-border bg-surface px-3 py-2">
+            <li key={`${s.role}-${i}`}
+              className={cn("flex items-start gap-2.5 rounded-md border border-border border-l-[3px] bg-surface px-3 py-2", role.border)}>
               <RoleAvatar role={s.role} overseer={s.overseer} size={24} />
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
