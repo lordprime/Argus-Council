@@ -103,7 +103,7 @@ def create_app(token: str | None = None, runner: Runner | None = None) -> FastAP
                     yield json.dumps(event, separators=(",", ":")).encode() + b"\n"
             except RunnerError as exc:
                 yield json.dumps(
-                    {"type": "argus.exit", "ok": False, "error": exc.code, "detail": str(exc)}
+                    {"type": "argus.exit", "ok": False, "error": exc.code, "detail": exc.message}
                 ).encode()
                 yield b"\n"
 
