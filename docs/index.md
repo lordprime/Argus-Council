@@ -15,8 +15,11 @@ text. Every thought passes a *thought bus* before it is acted on: guardrails and
 can annotate, hold or block it, risky tool calls wait for a human, and you can intercept and
 correct any agent, or the whole council, at any moment.
 
-!!! tip "Current version: 0.1.0"
-    **0.1.0** is the current version of the platform. Recent additions:
+!!! tip "Current version: 0.1.2"
+    **0.1.2** is a security release: API keys are hashed with PBKDF2 (existing keys keep working),
+    fetched URLs and every redirect must be plain `http(s)` URLs, `SKILL.md` parsing no longer
+    backtracks on crafted input, and the web image always takes current Alpine fixes. Recent
+    additions:
 
     * **[Skills marketplace](concepts/skills.md#marketplace)**: eight curated skills to install,
       plus version history and restore for every skill you edit.
@@ -27,7 +30,7 @@ correct any agent, or the whole council, at any moment.
     * **[Data retention, export and erasure](deployment.md#data-retention)**: scheduled pruning,
       a full account export and account deletion.
 
-    The full list is in the [changelog](https://github.com/lordprime/Argus-Council/blob/main/CHANGELOG.md).
+    The full list is in the [changelog](changelog.md).
 
 <iframe scrolling="no" class="argus-figure argus-figure--hero" src="assets/figures/hairline-council.html" title="Interactive drawing of a council table: the eye on the table follows the seat you point at" loading="lazy"></iframe>
 
