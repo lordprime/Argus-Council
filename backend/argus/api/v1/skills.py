@@ -45,7 +45,7 @@ def _parse(data: SkillIn) -> SkillPackage:
         pkg = parse_skill_md(data.skill_md)
         pkg.files = validate_files(data.files)
     except SkillError as exc:
-        raise InvalidSkill(str(exc)) from exc
+        raise InvalidSkill(exc.message) from exc
     return pkg
 
 
@@ -142,7 +142,7 @@ async def validate(data: SkillIn, _: CurrentPrincipal) -> dict:
         pkg = parse_skill_md(data.skill_md)
         pkg.files = validate_files(data.files)
     except SkillError as exc:
-        return {"valid": False, "errors": [str(exc)]}
+        return {"valid": False, "errors": [exc.message]}
     return {"valid": True, "errors": [], "skill": _summary(pkg, source="created")}
 
 
@@ -164,7 +164,7 @@ async def import_skill(principal: CurrentPrincipal, db: DbDep, file: UploadFile 
     try:
         pkg = load_zip(data)
     except SkillError as exc:
-        raise InvalidSkill(str(exc)) from exc
+        raise InvalidSkill(exc.message) from exc
     row = await _create(db, principal, pkg, source="upload", note="imported from archive")
     return _summary(from_row(row), source=row.source, shadows_builtin=row.name in builtin_skills())
 
@@ -219,7 +219,7 @@ async def install_marketplace_skill(name: str, principal: CurrentPrincipal, db: 
         pkg = parse_skill_md(src.render())
         pkg.files = validate_files(dict(src.files))
     except SkillError as exc:
-        raise InvalidSkill(str(exc)) from exc
+        raise InvalidSkill(exc.message) from exc
     row = await _create(
         db, principal, pkg, source="marketplace", note=f"installed from marketplace (v{pkg.version})"
     )
@@ -376,7 +376,7 @@ async def restore_version(name: str, n: int, principal: CurrentPrincipal, db: Db
         pkg = parse_skill_md(v.skill_md)
         pkg.files = validate_files(dict(v.files or {}))
     except SkillError as exc:
-        raise InvalidSkill(f"Version {n} no longer passes validation: {exc}") from exc
+        raise InvalidSkill(f"Version {n} no longer passes validation: {exc.message}") from exc
     if pkg.name != name:
         raise InvalidSkill("The stored version belongs to a different skill name")
     _apply(row, pkg)

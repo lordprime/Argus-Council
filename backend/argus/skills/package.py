@@ -51,7 +51,11 @@ _TEXT_SUFFIXES = {
 
 
 class SkillError(ValueError):
-    pass
+    """A problem with a skill the author can fix. ``message`` is written for them and safe to return."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 @dataclass
@@ -80,16 +84,35 @@ class SkillPackage:
         return f"---\n{head}\n---\n\n{self.body.strip()}\n"
 
 
+def split_frontmatter(text: str) -> tuple[str, str] | None:
+    """``(frontmatter, body)`` of a document opening with a ``---`` line and closing with another.
+
+    A line scan rather than a regex: a lazy ``(.*?)`` with ``\\s*`` around the fences backtracks
+    quadratically on input such as ``---`` followed by many ``\\n `` pairs."""
+    lines = text.removeprefix("﻿").split("\n")
+    if lines[0].rstrip() != "---":
+        return None
+    for i in range(2, len(lines)):
+        if lines[i].rstrip() == "---":
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1 :])
+    return None
+
+
 def parse_skill_md(text: str) -> SkillPackage:
     if len(text) > MAX_BODY:
         raise SkillError(f"SKILL.md is too large (at most {MAX_BODY:,} characters)")
-    m = re.match(r"^﻿?---\s*\n(.*?)\n---\s*(?:\n|$)(.*)$", text, re.S)
-    if not m:
+    parts = split_frontmatter(text)
+    if parts is None:
         raise SkillError("SKILL.md must start with YAML frontmatter delimited by '---'")
+    head, body = parts
     try:
-        fm = yaml.safe_load(m.group(1)) or {}
+        fm = yaml.safe_load(head) or {}
     except yaml.YAMLError as exc:
-        raise SkillError(f"Invalid YAML frontmatter: {exc}") from exc
+        # The parser's own text quotes the input back; keep only what it found and where.
+        problem = getattr(exc, "problem", None)
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 2}, column {mark.column + 1}" if mark else ""
+        raise SkillError(f"Invalid YAML frontmatter{where}" + (f": {problem}" if problem else "")) from exc
     if not isinstance(fm, dict):
         raise SkillError("Frontmatter must be a mapping")
     name = str(fm.get("name") or "").strip()
@@ -107,7 +130,7 @@ def parse_skill_md(text: str) -> SkillPackage:
         tools = [t.strip() for t in tools.split(",") if t.strip()]
     if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
         raise SkillError("allowed-tools must be a list of tool names")
-    body = m.group(2).strip()
+    body = body.strip()
     if not body:
         raise SkillError("SKILL.md needs instructions after the frontmatter")
     meta = fm.get("metadata") if isinstance(fm.get("metadata"), dict) else {}

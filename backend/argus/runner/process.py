@@ -61,9 +61,12 @@ _SECRET_RES = [
 
 
 class RunnerError(Exception):
+    """A refused request. ``code`` and ``message`` are written for the API and safe to return."""
+
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+        self.message = message
 
 
 def redact(text: str, secrets_: list[str] | None = None) -> str:

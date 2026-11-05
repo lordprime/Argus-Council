@@ -1,12 +1,13 @@
 import asyncio
 import io
 import json
+import time
 import zipfile
 
 import pytest
 
 from argus.providers.mock import MockProvider, council_responder
-from argus.skills.package import SkillError, load_zip, parse_skill_md, validate_files
+from argus.skills.package import SkillError, load_zip, parse_skill_md, split_frontmatter, validate_files
 
 GOOD = """---
 name: my-skill
@@ -49,6 +50,38 @@ def test_parse_good():
 def test_parse_errors(text, msg):
     with pytest.raises(SkillError, match=msg):
         parse_skill_md(text)
+
+
+@pytest.mark.parametrize(
+    "text,parts",
+    [
+        ("---\nname: a\n---\nbody", ("name: a", "body")),
+        ("﻿---  \r\nname: a\r\n---\r\nbody\r\n", ("name: a\r", "body\r\n")),
+        ("---\nname: a\n---", ("name: a", "")),
+        ("---\nname: a\n----\nmore\n---\nbody", ("name: a\n----\nmore", "body")),
+        ("---\n---\nbody", None),
+        ("---\nname: a\nbody", None),
+        (" ---\nname: a\n---\nbody", None),
+    ],
+)
+def test_split_frontmatter(text, parts):
+    assert split_frontmatter(text) == parts
+
+
+def test_frontmatter_scan_is_linear():
+    # The old regex took minutes on this (quadratic backtracking); the scan finishes at once.
+    text = "---\n" + "\n " * 190_000
+    start = time.perf_counter()
+    with pytest.raises(SkillError, match="frontmatter"):
+        parse_skill_md(text)
+    assert time.perf_counter() - start < 1
+
+
+def test_yaml_error_reports_position_without_echoing_input():
+    with pytest.raises(SkillError) as info:
+        parse_skill_md("---\nname: ok\nsecret: [unclosed\n---\nb")
+    assert "line 3" in info.value.message
+    assert "unclosed" not in info.value.message
 
 
 def test_skill_description_allows_20000_words():
