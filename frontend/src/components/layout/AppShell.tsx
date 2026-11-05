@@ -257,7 +257,7 @@ function SideNav() {
         navCollapsed ? "w-16" : "w-60")}>
       <div className="flex items-center gap-2 h-12 px-3 border-b border-border">
         <LogoMark />
-        {!navCollapsed && <span className="font-semibold">Argus Council</span>}
+        {!navCollapsed && <span className="font-display text-[0.9375rem] tracking-[-0.01em]">Argus Council</span>}
       </div>
       <ul className="flex flex-col gap-0.5 p-2">
         {NAV.map((n) => {
@@ -266,9 +266,9 @@ function SideNav() {
             <li key={n.to}>
               <Link to={n.to} aria-current={active ? "page" : undefined} title={navCollapsed ? n.label : undefined}
                 aria-label={navCollapsed ? n.label : undefined}
-                className={cn("flex items-center gap-3 rounded-md h-9 px-3 text-sm",
-                  active ? "bg-accent-subtle text-accent font-medium" : "text-fg-muted hover:bg-surface-2 hover:text-fg")}>
-                <n.icon className="size-4 shrink-0" aria-hidden />
+                className={cn("flex items-center gap-3 rounded-md h-9 pl-[10px] pr-3 text-sm border-l-2 transition-colors duration-fast",
+                  active ? "border-accent bg-surface-2 text-fg font-medium" : "border-transparent text-fg-muted hover:bg-surface-2 hover:text-fg")}>
+                <n.icon className={cn("size-4 shrink-0", active && "text-accent")} aria-hidden />
                 {!navCollapsed && n.label}
               </Link>
             </li>

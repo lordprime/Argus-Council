@@ -1,35 +1,40 @@
-/* Design tokens (docs/design/ui-spec.md §7). RGB triplets so Tailwind can apply alpha. */
+/* Design tokens (docs/design/ui-spec.md §7). RGB triplets so Tailwind can apply alpha.
+   Palette: warm-paper editorial — one ink, one accent (a deep wine), conventional status hues
+   warmed to sit on the same paper. Every text/UI pair below is checked against WCAG 1.4.3 (4.5:1)
+   or 1.4.11 (3:1 for non-text). */
 :root {
   --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Fraunces Variable", "Source Serif 4", Georgia, serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --canvas: 246 247 249;
+
+  --canvas: 247 244 238;
   --surface: 255 255 255;
-  --surface-2: 240 242 245;
-  --surface-3: 230 233 238;
-  --border: 220 224 230;
-  --border-strong: 138 147 163;
-  --text: 17 24 39;
-  --text-muted: 75 85 99;
-  --text-subtle: 95 104 120;
-  --accent: 67 56 202;
-  --accent-hover: 55 48 163;
+  --surface-2: 241 237 228;
+  --surface-3: 232 226 213;
+  --border: 227 221 208;
+  --border-strong: 150 140 122;
+  --text: 28 24 19;
+  --text-muted: 90 82 70;
+  --text-subtle: 115 106 91;
+  --accent: 122 32 72;
+  --accent-hover: 97 24 56;
   --accent-fg: 255 255 255;
-  --accent-subtle: 238 240 255;
-  --focus-ring: 67 56 202;
-  --success: 4 120 87;
-  --success-subtle: 231 246 239;
-  --warning: 180 83 9;
-  --warning-subtle: 254 243 226;
-  --danger: 185 28 28;
+  --accent-subtle: 248 235 238;
+  --focus-ring: 122 32 72;
+  --success: 62 107 61;
+  --success-subtle: 232 238 222;
+  --warning: 143 84 14;
+  --warning-subtle: 247 237 216;
+  --danger: 150 40 31;
   --danger-fg: 255 255 255;
-  --danger-subtle: 253 236 236;
-  --info: 3 105 161;
-  --info-subtle: 230 243 250;
-  --neutral: 75 85 99;
-  --neutral-subtle: 240 242 245;
-  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06);
-  --shadow-2: 0 4px 12px rgb(16 24 40 / 0.1);
-  --shadow-3: 0 12px 32px rgb(16 24 40 / 0.18);
+  --danger-subtle: 248 228 222;
+  --info: 31 92 120;
+  --info-subtle: 225 237 241;
+  --neutral: 90 82 70;
+  --neutral-subtle: 241 237 228;
+  --shadow-1: 0 1px 2px rgb(32 26 18 / 0.05);
+  --shadow-2: 0 6px 16px rgb(32 26 18 / 0.08);
+  --shadow-3: 0 16px 40px rgb(32 26 18 / 0.16);
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-slow: 260ms;
@@ -37,37 +42,36 @@
   color-scheme: light;
 }
 
-
 :root[data-theme="dark"] {
-  --canvas: 11 13 18;
-  --surface: 18 21 28;
-  --surface-2: 26 30 39;
-  --surface-3: 35 40 53;
-  --border: 42 48 60;
-  --border-strong: 90 100 118;
-  --text: 231 233 238;
-  --text-muted: 170 177 189;
-  --text-subtle: 140 149 165;
-  --accent: 139 147 248;
-  --accent-hover: 165 172 250;
-  --accent-fg: 11 13 18;
-  --accent-subtle: 30 33 64;
-  --focus-ring: 165 172 250;
-  --success: 52 211 153;
-  --success-subtle: 15 42 32;
-  --warning: 251 191 36;
-  --warning-subtle: 46 36 16;
-  --danger: 248 113 113;
-  /* Dark text on the light dark-mode red: white on #F87171 is only ~2.8:1. */
-  --danger-fg: 11 13 18;
-  --danger-subtle: 58 21 23;
-  --info: 56 189 248;
-  --info-subtle: 14 36 51;
-  --neutral: 170 177 189;
-  --neutral-subtle: 26 30 39;
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-2: 0 4px 12px rgb(0 0 0 / 0.4);
-  --shadow-3: 0 12px 32px rgb(0 0 0 / 0.5);
+  --canvas: 20 17 14;
+  --surface: 28 24 20;
+  --surface-2: 37 32 27;
+  --surface-3: 48 42 35;
+  --border: 58 51 43;
+  --border-strong: 116 105 90;
+  --text: 237 231 222;
+  --text-muted: 189 180 166;
+  --text-subtle: 160 150 135;
+  --accent: 224 138 165;
+  --accent-hover: 233 162 185;
+  --accent-fg: 20 17 14;
+  --accent-subtle: 45 27 34;
+  --focus-ring: 224 138 165;
+  --success: 134 189 116;
+  --success-subtle: 31 42 26;
+  --warning: 216 160 86;
+  --warning-subtle: 43 34 20;
+  --danger: 224 122 104;
+  /* Dark text on the light dark-mode red: ink-on-coral keeps the ratio above 4.5:1; white would not. */
+  --danger-fg: 20 17 14;
+  --danger-subtle: 43 24 20;
+  --info: 122 178 201;
+  --info-subtle: 24 36 41;
+  --neutral: 189 180 166;
+  --neutral-subtle: 37 32 27;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.55);
   color-scheme: dark;
 }
 

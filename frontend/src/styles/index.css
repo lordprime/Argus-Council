@@ -1,5 +1,8 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
+/* The "standard" cut only (variable weight + optical size), not the full axis set (soft/wonk/italic),
+   which the UI never uses — keeps the extra font request small. */
+@import "@fontsource-variable/fraunces/standard.css";
 @import "./tokens.css";
 
 @tailwind base;
@@ -52,8 +55,8 @@
   }
   /* :where() keeps these at class specificity so the size class Markdown puts on each heading (from its
      source level, after the heading offset) wins over the tag default. */
-  .prose-argus :where(h1) { @apply text-2xl mt-6 mb-3; }
-  .prose-argus :where(h2) { @apply text-xl mt-6 mb-2; }
+  .prose-argus :where(h1) { @apply text-2xl font-display mt-6 mb-3; }
+  .prose-argus :where(h2) { @apply text-xl font-display mt-6 mb-2; }
   .prose-argus :where(h3) { @apply text-lg mt-4 mb-2; }
   .prose-argus :where(h4, h5, h6) { @apply mt-4 mb-1.5; }
   .prose-argus p { @apply my-3; }
