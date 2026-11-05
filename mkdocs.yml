@@ -56,6 +56,7 @@ nav:
       - Security Audit: security/audit.md
       - Threat Model: security/threat-model.md
   - Brand: brand/README.md
+  - Changelog: changelog.md
 
 theme:
   name: material
@@ -109,6 +110,10 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
+  # docs/changelog.md includes the root CHANGELOG.md, so the changelog lives in one place.
+  - pymdownx.snippets:
+      base_path: [.]
+      check_paths: true
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -130,4 +135,4 @@ extra:
     - icon: fontawesome/brands/docker
       link: https://github.com/lordprime/Argus-Council/blob/main/deploy/docker-compose.yml
 
-copyright: Argus Council 0.1.0 · Copyright &copy; 2026 Abhishek Reddy Ramesh Reddy — MIT License
+copyright: Argus Council 0.1.2 · Copyright &copy; 2026 Abhishek Reddy Ramesh Reddy — MIT License

@@ -3,8 +3,10 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version lives in
-`backend/pyproject.toml`; the docs banner (`overrides/main.html`) and the `copyright` line in
-`mkdocs.yml` repeat it.
+`backend/pyproject.toml` (and its entry in `backend/uv.lock`); a release also bumps
+`backend/argus/__init__.py`, `frontend/package.json` (and `package-lock.json`), the docs banner
+(`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
+`mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
 ## [0.1.2] - 2026-11-05
 
@@ -125,7 +127,7 @@ All notable changes to this project are documented here. The format follows
   most competent for that kind of work, net of load and cost (no more round robin); a role held by
   several members goes to the least loaded. Sub-councils pick a model per child seat from the parent
   council's models within the child's budget.
-- **Structured reports** for research and general runs ([Reports](docs/concepts/reports.md)): a
+- **Structured reports** for research and general runs ([Reports](https://lordprime.github.io/Argus-Council/concepts/reports/)): a
   pipeline of specialised agents (architect, data analyst, parallel section authors, editor, reviewer,
   revisers) builds `report.json` with an outline check-in (validator, independent reviewer and,
   with `guardrails.report.human_checkins`, you), analyst-only chart data, a review loop of autofix,
