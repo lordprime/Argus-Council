@@ -36,7 +36,15 @@ from argus.db.models import Run, RunEvent
 log = get_logger(__name__)
 
 EPHEMERAL_TYPES = frozenset(
-    {"thought.delta", "tool.call.output", "budget.update", "subcouncil.event", "member.live", "graph.updated"}
+    {
+        "thought.delta",
+        "thought.reasoning.delta",
+        "tool.call.output",
+        "budget.update",
+        "subcouncil.event",
+        "member.live",
+        "graph.updated",
+    }
 )
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "halted"})
 

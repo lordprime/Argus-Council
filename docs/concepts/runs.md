@@ -73,7 +73,10 @@ The new run goes through the same sequence: plan, steps, report stages, votes. E
 old run finished is **replayed**: its recorded answer comes back at once, with no model call and no
 step counted. Only work that never finished calls a model. A run halted while writing its report
 therefore goes straight back to the report, with its research intact. Citations keep their
-numbers. Notes and workspace files carry over, but exports are made again. The timeline opens with
+numbers. The whole board carries over: step results, reviews and helpers' results as well as notes
+(every note is recorded as a `board.note` event). Workspace files carry over too, but exports are
+made again. Linked knowledge bases carry over, and one deleted since is left out instead of
+refusing the resume. The timeline opens with
 a *Resumed from the earlier run* row saying how much was reused.
 
 The debate and the council's growth resume too:
@@ -95,6 +98,25 @@ from the run's other events, and the report is built again.
 
 *Start a follow-up run* is different: it only copies the topic into Home, for a fresh run on the
 same subject.
+
+## Shared knowledge between runs
+
+What a council learns is not left behind in the run that learned it:
+
+* **The board is inherited.** A new run starts with the board of the latest earlier run of the same
+  council, or, for runs without a council, of your other runs without one. That's the 40 newest
+  notes, each marked *(earlier run)* and still credited to the member that wrote it. The timeline
+  opens with a *Started with the board of the earlier run* row.
+  * The next run inherits the same notes, so a chain of runs keeps building one board.
+  * Turn it off with `guardrails.graph.inherit_board: false`.
+* **All your knowledge is in reach.** Every run is told about all the knowledge it can search:
+  * the knowledge bases linked to it, which are searched first;
+  * every other knowledge base you added;
+  * the research library of sources earlier runs read.
+
+  `knowledge_search` covers all of it, unless a council limits its knowledge bases.
+* **The council's knowledge graph** recalls what earlier runs of the same council knew (see
+  [graph context](councils.md#the-council-knowledge-graph)).
 
 ## Modes and tools
 

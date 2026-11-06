@@ -490,6 +490,8 @@ class CouncilGraph:
         """Board notes not yet in the graph (the board is the run's ``ctx.notes``)."""
         notes = self.ctx.notes
         for note in notes[self._notes_seen :]:
+            if note.get("inherited_from"):
+                continue  # already in the council graph, from the run that wrote it
             title, body = str(note.get("title", "")), str(note.get("body", ""))
             author = str(note.get("author", ""))
             kind = (
@@ -913,11 +915,13 @@ class CouncilGraph:
         for n in reversed(notes):
             body = str(n.get("body", ""))
             short = summarize(body)
-            line = f"#{n['id']} [{n.get('author', '?')}] {n.get('title', '')}: {short}"
+            earlier = " (earlier run)" if n.get("inherited_from") else ""
+            line = f"#{n['id']} [{n.get('author', '?')}{earlier}] {n.get('title', '')}: {short}"
             if n.get("source"):
                 line += f" (source: {n['source']})"
             if len(short) < len(clean(body)):
-                line += f" [{self.note_key(n['id'])}]"
+                # An inherited note's node belongs to the run that wrote it: notes_read shows it whole.
+                line += " [notes_read]" if earlier else f" [{self.note_key(n['id'])}]"
             if used + len(line) > cap:
                 lines.append(
                     f"(+{len(notes) - len(lines)} older notes: notes_read or graph_query shows them)"

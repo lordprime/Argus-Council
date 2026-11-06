@@ -33,12 +33,14 @@ from argus.runtime.graph import graph_for
 from argus.runtime.guardrails import GuardrailBreach
 from argus.runtime.history import (
     CONDENSE_SYSTEM,
+    KEEP_RECENT_TOOL_RESULTS,
     compact_history,
     condense_split,
     fold_summary,
     history_chars,
     render_for_summary,
 )
+from argus.runtime.models import cheapest_strong
 from argus.runtime.oversight import Thought, ThoughtBus
 from argus.runtime.resume import TASK_EVENT, task_key
 from argus.services.llm import Route
@@ -68,6 +70,54 @@ def _conceal_args(member: MemberSpec, value: Any) -> Any:
     if isinstance(value, list):
         return [_conceal_args(member, v) for v in value]
     return value
+
+
+class _ReasoningStream:
+    """A member's streamed reasoning, as ``thought.reasoning.delta`` chunks may show it.
+
+    For a member with a secret stance the whole text so far is concealed on every chunk and the
+    last ``HOLD`` characters are held back, so a giveaway phrase split across chunks is replaced
+    before any of it is sent; the complete, concealed text arrives on ``thought.completed``.
+    """
+
+    HOLD = 160
+
+    def __init__(self, member: MemberSpec) -> None:
+        self.member = member
+        self._parts: list[str] = []
+        self._sent = 0
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+    def feed(self, chunk: str) -> str:
+        self._parts.append(chunk)
+        if not self.member.stance:
+            return chunk
+        shown = conceal(self.member, self.text)
+        upto = len(shown) - self.HOLD
+        if upto <= self._sent:
+            return ""
+        out, self._sent = shown[self._sent : upto], upto
+        return out
+
+
+# A provider refusing a prompt for its size (Anthropic, OpenAI-compatible, Gemini wording).
+_OVERFLOW = re.compile(
+    r"prompt is too long|context[_ ]length|maximum context|context window|too many (input )?tokens|"
+    r"input is too long|exceeds? the (model'?s? )?(context|token)|token limit|request too large|"
+    r"maximum number of tokens",
+    re.IGNORECASE,
+)
+OVERFLOW_RETRIES = 2
+PRESSURE_SQUEEZE = 0.6  # at the token ceiling, the history budget is 40% of its usual size
+MIN_OVERFLOW_BUDGET = 8_000
+
+
+def is_context_overflow(exc: ProviderError) -> bool:
+    status = getattr(exc, "status", None)
+    return (status in (None, 400, 413, 422)) and bool(_OVERFLOW.search(str(exc)))
 
 
 @dataclass
@@ -304,9 +354,23 @@ class AgentRunner:
                     "(knowledge_bases=[name]) before the web, read whole documents and spreadsheets "
                     f"with knowledge_read, and cite what you use:\n{lines}"
                 )
-            parts.append(
-                "\nknowledge_search also covers the research library: every source earlier runs read."
-            )
+            shared = self.ctx.extra.get("shared_knowledge") or []
+            if shared:
+                lines = "\n".join(
+                    f"- {k['name']} ({k['document_count']} documents)"
+                    + (": every source earlier runs read" if k.get("library") else "")
+                    + (f": {k['description']}" if k["description"] and not k.get("library") else "")
+                    for k in shared
+                )
+                parts.append(
+                    "\nShared knowledge: everything the user added and earlier runs collected. "
+                    "knowledge_search covers all of it (or name some with knowledge_bases); search it "
+                    f"before the web, and cite what you use:\n{lines}"
+                )
+            else:
+                parts.append(
+                    "\nknowledge_search also covers the research library: every source earlier runs read."
+                )
         # The council's knowledge graph (argus.runtime.graph); its tools join the registry with it.
         graph = graph_for(self.ctx, self.tools)
         if graph is not None:
@@ -358,6 +422,7 @@ class AgentRunner:
             "member.status", {"member_id": self.member.id, "status": "thinking"}, actor=actor
         )
         tools = self.tools.specs_for(self._allowed)
+        reasoning = self.ctx.engine.rails.oversight.reasoning
         req = CompletionRequest(
             model=self.member.model,
             messages=messages,
@@ -365,6 +430,7 @@ class AgentRunner:
             max_tokens=16_000,
             temperature=self.member.temperature,
             effort=self.member.effort,  # type: ignore[arg-type]
+            reasoning=reasoning,
             metadata={
                 "phase": phase,
                 "role": self.member.role,
@@ -389,6 +455,7 @@ class AgentRunner:
         fallbacks = list(self.member.fallbacks)
         streamed = False
         failure: Exception | None = None
+        thinking = _ReasoningStream(self.member) if reasoning != "off" else None
         try:
             # The router retries retryable errors that happen before any output was produced.
             async for ev in self.ctx.llm.stream(req, primary, owner_id=self.ctx.owner_id):
@@ -400,6 +467,16 @@ class AgentRunner:
                         actor=actor,
                         step_id=step_id,
                     )
+                elif ev.type == "thinking" and ev.text and thinking is not None:
+                    # The member's reasoning, for the run owner only (see _ReasoningStream).
+                    chunk = thinking.feed(ev.text)
+                    if chunk:
+                        await self.ctx.sink.emit(
+                            "thought.reasoning.delta",
+                            {"thought_id": thought_id, "text": chunk},
+                            actor=actor,
+                            step_id=step_id,
+                        )
                 elif ev.type == "done":
                     response = ev.response
         except (ProviderError, NotFound) as exc:
@@ -453,11 +530,19 @@ class AgentRunner:
         spent = self.ctx.by_member[self.member.id]
         spent["usd"] += response.usage.cost_usd
         spent["tokens"] += response.usage.total_tokens
+        # The reasoning is the run owner's to read: it is never put into another member's prompt,
+        # the board, "Working now", the graph, A2A answers, reviews or a resumed run's replay (all
+        # of which read ``text``). A secret stance is concealed in it all the same (exports).
+        reasoning_text = ""
+        if thinking is not None:
+            reasoning_text = conceal(self.member, response.thinking or thinking.text)
         done = await self.ctx.sink.emit(
             "thought.completed",
             {
                 "thought_id": thought_id,
                 "text": response.content,
+                "reasoning": reasoning_text,
+                "reasoning_tokens": response.reasoning_tokens,
                 "text_sha256": hashlib.sha256(response.content.encode()).hexdigest(),
                 "tokens": {"in": response.usage.input_tokens, "out": response.usage.output_tokens},
                 "cost_usd": response.usage.cost_usd,
@@ -719,15 +804,83 @@ class AgentRunner:
             log.warning("agent.ledger_failed", tool=tool.name, error=type(exc).__name__)
 
     # ------------------------------------------------------------ context
+    async def _think_fitted(
+        self, messages: list[Message], task_message: str, step_id: str | None, phase: str
+    ) -> tuple[str, str, Any]:
+        """``_think``, recovering from a context overflow the way Claude Code does: when the provider
+        says the prompt is too long, compact harder (half the history budget, only the newest tool
+        result kept whole, older turns summarised) and try the turn again, up to twice."""
+        budget = self.ctx.engine.rails.context.budget_chars
+        for attempt in range(OVERFLOW_RETRIES + 1):
+            try:
+                return await self._think(messages, step_id, phase)
+            except ProviderError as exc:
+                if attempt == OVERFLOW_RETRIES or not is_context_overflow(exc):
+                    raise
+                budget = max(budget // 2, MIN_OVERFLOW_BUDGET)
+                before = history_chars(messages)
+                compact_history(messages, budget_chars=budget, keep_recent=1)
+                await self._condense(messages, task_message, step_id)
+                log.info(
+                    "agent.context_overflow",
+                    member=self.member.name,
+                    attempt=attempt + 1,
+                    chars_before=before,
+                    chars_after=history_chars(messages),
+                )
+                await self.ctx.sink.emit(
+                    "context.compacted",
+                    {
+                        "member_id": self.member.id,
+                        "reason": "context_overflow",
+                        "chars_before": before,
+                        "chars_after": history_chars(messages),
+                    },
+                    actor=self.member.actor,
+                    step_id=step_id,
+                )
+        raise AssertionError("unreachable")
+
     async def _fit_context(self, messages: list[Message], task_message: str, step_id: str | None) -> None:
-        """Keep the history inside the context budget: cut old tool output, then condense."""
+        """Keep the history inside the context budget: cut old tool output, then condense. Under
+        budget pressure (the run nearing its token ceiling) the budget shrinks, so every turn costs
+        less instead of the run running into the ceiling."""
         policy = self.ctx.engine.rails.context
-        compact_history(messages, budget_chars=policy.budget_chars)
-        if policy.condense and history_chars(messages) > policy.budget_chars:
+        budget, keep = await self._pressured_budget(policy)
+        compact_history(messages, budget_chars=budget, keep_recent=keep)
+        if policy.condense and history_chars(messages) > budget:
             await self._condense(messages, task_message, step_id)
 
+    async def _pressured_budget(self, policy: Any) -> tuple[int, int]:
+        """``(history budget, tool results kept whole)`` for the run's token pressure now."""
+        start = policy.pressure_start
+        pressure = self.ctx.token_pressure() if start < 1 else 0.0
+        if pressure < start:
+            return policy.budget_chars, KEEP_RECENT_TOOL_RESULTS
+        k = min((pressure - start) / max(1 - start, 1e-6), 1.0)  # 0 at the start, 1 at the ceiling
+        budget = max(int(policy.budget_chars * (1 - PRESSURE_SQUEEZE * k)), MIN_OVERFLOW_BUDGET)
+        keep = 2 if k < 0.5 else 1
+        # Tell the timeline once per tenth of the ceiling, not on every turn.
+        tier = int(pressure * 10)
+        seen = self.ctx.extra.setdefault("pressure_tiers", set())
+        if tier not in seen:
+            seen.add(tier)
+            await self.ctx.sink.emit(
+                "context.pressure",
+                {"pressure": round(pressure, 3), "budget_chars": budget, "keep_recent": keep},
+            )
+        return budget, keep
+
+    async def _compressor(self) -> MemberSpec:
+        """The seat that summarises this member's older turns (``context.compressor``)."""
+        policy = self.ctx.engine.rails.context
+        if policy.compressor != "latest_cheapest":
+            return self.member
+        return await cheapest_strong(self.ctx, self.member, policy.compressor_min_reasoning)
+
     async def _condense(self, messages: list[Message], task_message: str, step_id: str | None) -> bool:
-        """Summarise the older turns with the seat's own model and fold them into the task message.
+        """Summarise the older turns with the compressor (the cheapest strong model of the seat's
+        provider, or the seat's own; ``context.compressor``) and fold them into the task message.
 
         CLI seats are skipped: their vendor session keeps (and compacts) its own context. A failed
         summary is not fatal; the agent goes on with the truncated history.
@@ -739,8 +892,9 @@ class AgentRunner:
             return False
         before = history_chars(messages)
         prior = f"Earlier condensed record:\n{self._summary}\n\n" if self._summary else ""
+        seat = await self._compressor()
         req = CompletionRequest(
-            model=self.member.model,
+            model=seat.model,
             messages=[
                 Message.system(CONDENSE_SYSTEM),
                 Message.user(
@@ -761,9 +915,9 @@ class AgentRunner:
         try:
             resp = await self.ctx.llm.complete(
                 req,
-                Route(self.member.provider, self.member.model),
+                Route(seat.provider, seat.model),
                 owner_id=self.ctx.owner_id,
-                fallbacks=[f for f in self.member.fallbacks if f.provider not in CLI_PROVIDERS],
+                fallbacks=[f for f in seat.fallbacks if f.provider not in CLI_PROVIDERS],
             )
         except Exception as exc:
             log.warning("agent.condense_failed", member=self.member.name, error=str(exc)[:200])
@@ -936,7 +1090,7 @@ class AgentRunner:
                     actor=self.member.actor,
                 )
             await self._fit_context(messages, task_message, step_id)  # see runtime/history.py
-            thought_id, event_id, resp = await self._think(messages, step_id, phase)
+            thought_id, event_id, resp = await self._think_fitted(messages, task_message, step_id, phase)
             if resp.content:
                 last_text, last_event = resp.content, event_id
             thought = Thought(

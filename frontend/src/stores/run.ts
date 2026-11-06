@@ -58,6 +58,9 @@ export interface ThoughtItem {
   latencyMs?: number;
   model?: string;
   finish?: string;
+  /** The model's chain of thought: streamed by `thought.reasoning.delta`, final on `thought.completed` ("" when none). */
+  reasoning?: string;
+  reasoningTokens?: number;
   /** ts of thought.completed (ts is thought.started) */
   endTs?: string;
   intercepts: InterceptInfo[];
@@ -322,11 +325,18 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       s.memberStatus = { ...s.memberStatus, [d.member_id]: { status: d.status, detail: d.detail } };
       break;
     case "thought.started":
-      push(s, { kind: "thought", id: d.thought_id, eventId: undefined, ...base, text: "", streaming: true, intercepts: [] });
+      push(s, { kind: "thought", id: d.thought_id, eventId: undefined, ...base, text: "", reasoning: "", streaming: true, intercepts: [] });
       break;
     case "thought.delta": {
       const t = s.items[d.thought_id];
       if (t?.kind === "thought") writable(s, "items")[d.thought_id] = { ...t, text: t.text + d.text };
+      break;
+    }
+    case "thought.reasoning.delta": {
+      const t = s.items[d.thought_id];
+      if (t?.kind === "thought" && typeof d.text === "string") {
+        writable(s, "items")[d.thought_id] = { ...t, reasoning: (t.reasoning ?? "") + d.text };
+      }
       break;
     }
     case "thought.completed": {
@@ -343,6 +353,9 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
         latencyMs: d.latency_ms,
         model: d.model,
         finish: d.finish,
+        // The completed reasoning is the final text and replaces what streamed.
+        reasoning: typeof d.reasoning === "string" ? d.reasoning : (t?.kind === "thought" ? t.reasoning : undefined) ?? "",
+        reasoningTokens: typeof d.reasoning_tokens === "number" ? d.reasoning_tokens : undefined,
         endTs: ev.ts,
       } as ThoughtItem;
       push(s, done);
@@ -534,6 +547,8 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       s.graph = { nodes: cur.nodes + Number(d.nodes ?? 0), edges: cur.edges + Number(d.edges ?? 0) };
       break;
     }
+    case "board.note":
+      break; // the board's A2A row already shows the note
     default:
       if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
   }

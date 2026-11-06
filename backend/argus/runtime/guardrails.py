@@ -61,6 +61,10 @@ class Oversight(_Strict):
     monitor_sensitivity: Literal["off", "low", "medium", "high"] = "medium"
     loop_threshold: int = Field(default=3, ge=2, le=20)
     max_corrections_per_thought: int = Field(default=2, ge=0, le=10)
+    # Each member's reasoning (chain of thought) on its thoughts, shown to the run owner only:
+    # "auto" records what a model returns unasked (no extra cost), "on" also asks providers that
+    # need a parameter to think and return a readable summary, "off" records none.
+    reasoning: Literal["auto", "on", "off"] = "auto"
 
 
 class ReportPolicy(_Strict):
@@ -101,6 +105,14 @@ class ContextPolicy(_Strict):
 
     condense: bool = True  # summarise older turns once truncating tool output is not enough
     budget_chars: int = Field(default=120_000, ge=20_000, le=2_000_000)
+    # The compressor: older turns are summarised on the cheapest model of the seat's provider that
+    # reasons at least ``compressor_min_reasoning`` well ("latest_cheapest"), or on the seat's own.
+    compressor: Literal["latest_cheapest", "seat"] = "latest_cheapest"
+    compressor_min_reasoning: float = Field(default=70, ge=0, le=100)
+    # Budget pressure: once the run has used this share of its token ceiling (the limit, the raises
+    # still allowed and the reserve), every agent's history budget shrinks, down to 40% at the
+    # ceiling, so the run spends less per turn instead of running into it. 1 turns it off.
+    pressure_start: float = Field(default=0.6, ge=0.1, le=1.0)
 
 
 class DebatePolicy(_Strict):
@@ -137,6 +149,9 @@ class GraphPolicy(_Strict):
     digest_chars: int = Field(default=1_500, ge=200, le=20_000)  # per dependency, instead of raw text
     council_recall: int = Field(default=12, ge=0, le=100)  # nodes from earlier runs shown at start
     prompt_cache: bool = True  # cache the stable system-prompt prefix where the provider supports it
+    # A new run starts with the board of the latest earlier run of the same council (or, without a
+    # council, of the owner's other runs): the newest notes, marked as inherited.
+    inherit_board: bool = True
 
 
 class Guardrails(_Strict):

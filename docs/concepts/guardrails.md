@@ -43,6 +43,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `sandbox.max_file_mb` | `10` | Largest file an agent may write |
 | `oversight.intercept_mode` | `hold` | The furthest overseer agents may go: `annotate`, `hold` or `block` |
 | `oversight.monitor_sensitivity` | `medium` | `off`, `low`, `medium` or `high`: which thoughts overseers review (below) |
+| `oversight.reasoning` | `auto` | Record each agent's reasoning for you: `auto` keeps whatever the model returns at no extra cost, `on` also asks providers to return a readable summary, `off` records none |
 | `oversight.loop_threshold` | `3` | Repeats of the same thought that count as a loop |
 | `oversight.max_corrections_per_thought` | `2` | Regenerations a held thought gets |
 | `report.enabled` | `null` | Build a structured report: `null` means research and general runs ([Reports](reports.md)) |
@@ -57,6 +58,8 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `extensions.auto_approve` | `false` | Raise limits without asking, still within `limits` and `max_extensions` |
 | `context.condense` | `true` | Summarise an agent's older history when it outgrows the budget (below) |
 | `context.budget_chars` | `120000` | History size each agent turn re-sends before trimming and condensing |
+| `context.compressor`, `context.compressor_min_reasoning` | `latest_cheapest`, `70` | Summarise older turns on the cheapest model of the seat's provider that scores at least the floor (0 to 100) for reasoning, or on the seat's own model (`seat`) |
+| `context.pressure_start` | `0.6` | Share of the run's token ceiling after which every agent's history budget shrinks, down to 40% at the ceiling (`1` turns it off) |
 | `debate.enabled` | `true` | The council debates and co-signs its conclusion; `false` restores one synthesis and a majority vote ([below](#debate-helpers-and-graph-context)) |
 | `debate.devils_advocate` | `true` | Appoint a secret devil's advocate at random |
 | `debate.rounds`, `debate.converge_rounds` | `2`, `2` | Deliberation rounds, and extra rounds of revising positions (0 to 6 each) |
@@ -69,6 +72,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `graph.digest_chars` | `1500` | Size of each dependency's digest (200 to 20,000) |
 | `graph.council_recall` | `12` | Nodes from the council's earlier runs shown at the start (0 to 100) |
 | `graph.prompt_cache` | `true` | Split each system prompt into a cached stable prefix and a volatile tail |
+| `graph.inherit_board` | `true` | Start a new run with the board of the latest earlier run of the same council (or of your runs without a council) |
 
 ```json
 {
@@ -185,13 +189,47 @@ workspace shows spend against the limits live (from ephemeral `budget.update` ev
 
 ## Context condensation
 
-Each agent turn re-sends the agent's history. Past `context.budget_chars`, older tool outputs are
-first cut to a short preview (the newest three and any loaded skill stay whole). If the history is
-still too long, one call on the agent's own model summarises the middle of it (the facts, figures,
-sources and decisions so far, and what remains) into its task message, keeping the latest two turns
-verbatim; a `context.condensed` event records how much was folded. The call counts toward the
-budget but not toward `max_steps`. Seats that run through a CLI agent keep their own session
-context and are not condensed, and a failed summary leaves the trimmed history as it was.
+Each agent turn re-sends the agent's history, so the history is kept small in three ways.
+
+### Trimming and summarising
+
+Past `context.budget_chars`, older tool outputs are first cut to a short preview. The newest three
+and any loaded skill stay whole.
+
+If the history is still too long, the *compressor* summarises the middle of it into the agent's task
+message, keeping the latest two turns verbatim. The summary covers the facts, figures, sources and
+decisions so far, and what remains.
+
+- The compressor is the cheapest model of the seat's own provider that scores at least
+  `context.compressor_min_reasoning` for reasoning (Claude Haiku 5.5 for a Claude seat), with the
+  seat's model as the fallback. `context.compressor: "seat"` uses the seat's own model.
+- A `context.condensed` event records how much was folded.
+- The call counts toward the budget, but not toward `max_steps`.
+- Seats that run through a CLI agent keep their own session context and are not condensed.
+- A failed summary leaves the trimmed history as it was.
+
+### Budget pressure
+
+A run's token ceiling is the most it can spend: `budget.tokens`, plus the raises still allowed
+(`extensions.max_extensions` raises of `extensions.factor` times the starting limit), plus a
+`budget.buffer_tokens` reserve not yet drawn.
+
+With the defaults the ceiling is 2,000,000 + 3 × 1,000,000 = **5,000,000 tokens**, which is where a
+run with extensions on finally stops. Declining a raise lowers the ceiling to the current limit.
+
+Once the run has used `context.pressure_start` (60%) of its ceiling, every agent's history budget
+shrinks with the pressure, down to 40% of `budget_chars` at the ceiling, and fewer recent tool
+results are kept whole. Each turn then costs less, and the run gets further before it reaches its
+ceiling. The run records `context.pressure` once per tenth of the ceiling. To let a run go further,
+raise `budget.tokens`, `extensions.max_extensions` or the reserve.
+
+### Overflow recovery
+
+A model may still refuse a prompt for its length ("prompt is too long",
+`context_length_exceeded`). The agent then halves its history budget, keeps only the newest tool
+result whole, summarises the older turns and tries the turn again, up to twice, as Claude Code does.
+Each attempt is recorded as `context.compacted`. Only when the prompt is still too long does the
+error stand.
 
 ## Debate, helpers and graph context
 

@@ -31,8 +31,18 @@ DEFAULT_SIZES = {"chat": 2, "coding": 6, "research": 6}
 MAX_LINKED_KBS = 20
 
 
-async def owned_kb_ids(db: AsyncSession, owner_id: uuid.UUID, ids: list[uuid.UUID]) -> list[str]:
-    """``ids`` as strings, after checking the owner has every one of them."""
+async def owned_kb_ids(
+    db: AsyncSession, owner_id: uuid.UUID, ids: list[uuid.UUID] | list[str], *, drop_missing: bool = False
+) -> list[str]:
+    """``ids`` as strings, after checking the owner has every one of them.
+
+    A run stores its links as strings, so ids arrive as strings or UUIDs: both are normalised before
+    they are compared with the database's. With ``drop_missing`` (resuming a run), a knowledge base
+    deleted since is left out instead of refusing the run."""
+    try:
+        ids = [i if isinstance(i, uuid.UUID) else uuid.UUID(str(i)) for i in ids]
+    except ValueError as exc:
+        raise NotFound("Knowledge base not found") from exc
     wanted = set(ids)
     if not wanted:
         return []
@@ -45,7 +55,9 @@ async def owned_kb_ids(db: AsyncSession, owner_id: uuid.UUID, ids: list[uuid.UUI
             )
         ).scalars()
     )
-    if found != wanted:
+    if drop_missing:
+        ids = [i for i in ids if i in found]
+    elif found != wanted:
         raise NotFound("Knowledge base not found")
     return [str(i) for i in dict.fromkeys(ids)]
 
@@ -243,7 +255,7 @@ async def resume_run(
         outputs=list(old.outputs or []),
         guardrails=rails.model_dump(),
         council_snapshot=old.council_snapshot,
-        knowledge_base_ids=await owned_kb_ids(db, owner_id, old.knowledge_base_ids or []),
+        knowledge_base_ids=await owned_kb_ids(db, owner_id, old.knowledge_base_ids or [], drop_missing=True),
         resumed_from_id=old.id,
     )
     db.add(run)

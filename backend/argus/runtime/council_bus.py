@@ -102,6 +102,7 @@ EVENT_TEXT = 8_000  # message text kept on the timeline event (the ledger keeps 
 BOARD_CHARS = 6_000
 GUIDANCE_CHARS = 4_000
 OWN_WORK_CHARS = 8_000
+BOARD_EVENT = "board.note"  # every note on the board, durable (argus.runtime.resume reads them)
 LIVE_TAIL_CHARS = 300  # the tail of each member's latest thought in "Working now"
 LIVE_CHARS = 2_000  # the whole "Working now" section
 _ALL = {"council", "all", "everyone", "*"}
@@ -410,6 +411,8 @@ class CouncilBus:
             form="board",
         )
         await self._record(msg, actor=author.actor, step_id=step_id)
+        # The board as a record of its own: a resumed run rebuilds it, and the next run inherits it.
+        await self.ctx.sink.emit(BOARD_EVENT, {"note": dict(note)}, actor=author.actor, step_id=step_id)
 
     # ------------------------------------------------------------ forms that wait for an answer
     async def request(
@@ -673,7 +676,8 @@ class CouncilBus:
         used = 0
         for n in reversed(self.ctx.notes):
             body = str(n.get("body", ""))
-            line = f"#{n['id']} [{n.get('author', '?')}] {n.get('title', '')}: {body[:700]}"
+            earlier = " (earlier run)" if n.get("inherited_from") else ""
+            line = f"#{n['id']} [{n.get('author', '?')}{earlier}] {n.get('title', '')}: {body[:700]}"
             if n.get("source"):
                 line += f" (source: {n['source']})"
             if used + len(line) > BOARD_CHARS:

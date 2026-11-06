@@ -34,7 +34,8 @@ async def _start(client, auth, provider: str, usd: float) -> str:
             "mode": "research",
             "provider": provider,
             "model": "m",
-            "guardrails": {"budget": {"usd": usd}},
+            # Each run starts on a fresh board: these tests count the calls a run makes.
+            "guardrails": {"budget": {"usd": usd}, "graph": {"inherit_board": False}},
         },
     )
     assert r.status_code == 201, r.text
@@ -154,3 +155,29 @@ def test_runs_from_before_task_records_recover_the_plan_and_finished_steps():
     # s2 never finished: it runs again.
     assert state.take(task_key("execute", "s2", "Analyse", "m-a")) is None
     assert state.replayed == 2
+
+
+async def test_a_run_with_linked_knowledge_resumes_with_it(client, auth, app):
+    # Linked knowledge base ids are stored as strings; resuming re-checks them against the owner's
+    # knowledge bases, which once compared strings with UUIDs and refused every linked run.
+    kb = (await client.post("/api/v1/knowledge-bases", headers=auth, json={"name": "prices"})).json()
+    install(app, "pricey", _counting("pricey", [], 0.4, free=2))
+    r = await client.post(
+        API,
+        headers=auth,
+        json={
+            "topic": "Grid storage economics",
+            "mode": "research",
+            "provider": "pricey",
+            "model": "m",
+            "knowledge_base_ids": [kb["id"]],
+            "guardrails": {"budget": {"usd": 1}},
+        },
+    )
+    assert r.status_code == 201, r.text
+    old = await wait_status(client, auth, r.json()["id"])
+    assert old["status"] == "halted", old["status"]
+    resumed = await client.post(f"{API}/{old['id']}/continue", headers=auth)
+    assert resumed.status_code == 201, resumed.text
+    linked = (await client.get(f"{API}/{resumed.json()['id']}/knowledge", headers=auth)).json()["linked"]
+    assert [k["id"] for k in linked] == [kb["id"]]

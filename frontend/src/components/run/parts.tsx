@@ -10,6 +10,7 @@ import {
   CircleStop,
   Eye,
   FileText,
+  Gauge,
   Globe,
   Hand,
   Link2,
@@ -28,13 +29,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { Badge, Button, IconButton, touchTarget } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
+import { Reasoning, ThoughtText } from "@/components/run/thought";
+import { extractJson } from "@/features/runs/thoughtJson";
 import { AdvocateBadge, CouncilRow, DebateRow, HelperBadge, LiveTailLine, MessageMember, useAdvocate } from "@/components/run/debate";
 import { RESUMABLE } from "@/features/runs/queries";
 import { api, errorMessage, V1 } from "@/lib/api";
@@ -55,8 +58,9 @@ import type {
   ToolCallItem,
   VoteItem,
 } from "@/stores/run";
-import { useRuns } from "@/stores/run";
+import { useRun, useRuns } from "@/stores/run";
 import { toast } from "@/stores/toast";
+import { useUi } from "@/stores/ui";
 
 // ------------------------------------------------------------------ budget meter
 /**
@@ -366,8 +370,13 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
       toast({ tone: "danger", title: "Could not intercept", body: errorMessage(err) });
     }
   };
+  const members = useRun(runId, (st) => st.members);
+  const showReasoning = useUi((u) => u.showReasoning);
   const vote = t.streaming ? null : parseVoteText(t.text);
-  const long = !vote && (t.text.length > 400 || t.text.split("\n").length > 4);
+  // A JSON reply gets a structured view that keeps itself compact, so the card does not clamp it.
+  const json = useMemo(() => (vote ? null : extractJson(t.text)), [vote, t.text]);
+  const long = !vote && !json && (t.text.length > 400 || t.text.split("\n").length > 4);
+  const reasoning = showReasoning && t.reasoning ? t.reasoning : "";
   return (
     <div className={cn("rounded-lg border bg-surface border-l-[3px] p-3", selected ? "outline outline-2 outline-accent" : "",
       held ? "border-warning" : "border-border", s.border)}>
@@ -381,16 +390,20 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
           <span className="text-xs text-fg-subtle tabular ml-auto">{compact((t.tokensIn ?? 0) + t.tokensOut)} tok · {usd(t.costUsd)}</span>
         )}
       </div>
-      <div className={cn("mt-2 text-base", !expanded && long && "line-clamp-4", t.streaming && "caret")}>
+      {reasoning && (
+        <Reasoning text={reasoning} tokens={t.reasoningTokens} streaming={t.streaming} answered={Boolean(t.text.trim())} who={t.actor.name ?? "the agent"} />
+      )}
+      {/* While only reasoning has arrived, the reasoning section is the live part and the answer waits. */}
+      {!(t.streaming && !t.text && reasoning) && <div className={cn("mt-2 text-base", !expanded && long && "line-clamp-4", t.streaming && "caret")}>
         {vote ? (
           <p className="flex items-start gap-1.5">
             <Vote className="size-4 mt-1 shrink-0 text-fg-subtle" aria-hidden />
             <span>Voted <strong className="font-semibold">{vote.option}</strong>{vote.rationale && <span className="text-fg-muted"> · {vote.rationale}</span>}</span>
           </p>
-        ) : t.text ? <Markdown className="text-base">{t.text}</Markdown> : t.streaming ? <span className="text-fg-subtle">thinking</span> : (
+        ) : t.text ? <ThoughtText className="text-base" text={t.text} part={json} members={members} /> : t.streaming ? <span className="text-fg-subtle">thinking</span> : (
           <span className="text-fg-subtle italic">(used tools)</span>
         )}
-      </div>
+      </div>}
       <div className="flex gap-1 mt-1">
         {long && <Button size="sm" variant="ghost" icon={expanded ? ChevronDown : ChevronRight} onClick={() => setExpanded((e) => !e)}>{expanded ? "Less" : "More"}</Button>}
         {live && <Button size="sm" variant="ghost" icon={Hand} onClick={() => void intercept()}>Intercept</Button>}
@@ -574,6 +587,30 @@ export function SimpleRow({ item, onOpenArtifact, members = [], debate }: {
             Resumed from <Link to={`/runs/${d.from_run_id}`} className="text-accent underline">the earlier run</Link>:{" "}
             {d.tasks} finished task{d.tasks === 1 ? "" : "s"} reused{carried ? `, ${carried} carried over` : ""}.
             {d.legacy && <span className="text-fg-subtle"> That run is older than task records, so its plan and finished steps are reused and the report is built again.</span>}
+          </Row>
+        );
+      }
+      if (item.type === "board.inherited") {
+        return (
+          <Row icon={RotateCcw}>
+            Started with the board of <Link to={`/runs/${d.from_run_id}`} className="text-accent underline">the earlier run</Link>:{" "}
+            {d.notes} note{d.notes === 1 ? "" : "s"} carried over.
+          </Row>
+        );
+      }
+      if (item.type === "context.pressure") {
+        return (
+          <Row icon={Gauge}>
+            The run has used {Math.round(Number(d.pressure) * 100)}% of its token ceiling: context is compressed harder
+            ({compact(Number(d.budget_chars))} chars of history per agent).
+          </Row>
+        );
+      }
+      if (item.type === "context.compacted") {
+        return (
+          <Row icon={Gauge}>
+            {item.actor.name} hit the model's context limit: history compressed from {compact(Number(d.chars_before))} to{" "}
+            {compact(Number(d.chars_after))} chars, and the turn retried.
           </Row>
         );
       }

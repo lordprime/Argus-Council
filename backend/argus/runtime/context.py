@@ -382,6 +382,29 @@ class RunContext:
         since = self._limit_wait_since
         return self._limit_wait_s + (self.engine.clock() - since if since is not None else 0.0)
 
+    def token_ceiling(self) -> float | None:
+        """The most tokens this run can spend: its limit now, the reserve not yet drawn, and the raises
+        still allowed (none once the user declined one). ``None``: no token limit."""
+        rule = "budget.tokens"
+        limit = self.engine.limit(rule)
+        if limit is None:
+            return None
+        ceiling = float(limit) + self.engine.buffer(rule)
+        policy = self.engine.rails.extensions
+        if self.engine.can_extend(rule) and rule not in self.extension_declined:
+            left = max(policy.max_extensions - self.extensions[rule], 0)
+            step = max(float(self.engine.proposed_limit(rule)) - float(limit), 0.0)
+            ceiling += left * step
+        return ceiling
+
+    def token_pressure(self) -> float:
+        """How much of the token ceiling the run has used (0 to 1; 0 with no token limit)."""
+        ceiling = self.token_ceiling()
+        if not ceiling:
+            return 0.0
+        used = self.engine.total_usage
+        return min((used.input_tokens + used.output_tokens) / ceiling, 1.0)
+
     async def extend_limit(self, rule: str, actor: Actor | None = None, *, still_exceeded: Any) -> bool:
         """Ask the user to raise ``rule`` now that the run hit it. True when the run may go on.
 

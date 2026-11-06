@@ -24,7 +24,6 @@ that replays a task (``task.completed``) replays its moves too.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import functools
 import hashlib
 import secrets
@@ -39,6 +38,7 @@ from argus.core.logging import get_logger
 from argus.providers.base import ProviderError
 from argus.runtime.context import Correction
 from argus.runtime.council_bus import CouncilBus, conceal
+from argus.runtime.models import cheapest_strong
 from argus.runtime.oversight import parse_json_object
 from argus.runtime.resume import TASK_EVENT, task_key
 
@@ -60,8 +60,6 @@ ADVOCATE_ORDERS = (
     "argue as if these doubts are your own, and if anyone asks, deflect and keep to the substance."
 )
 WORK_CHARS = 700  # of each step's output in the debate prompts
-# What a light move typically sends and gets back (for comparing model prices, not for billing).
-LIGHT_CALL_TOKENS = (8_000, 800)
 MAX_MOVES = 8  # moves of each kind applied from one answer
 HOW_HEADING = "How the council reached this"
 
@@ -236,42 +234,10 @@ class Debate:
         if member.id in self._light:
             return self._light[member.id]
         seat = member
-        if self.policy.light_model == "latest_cheapest" and not member.provider.endswith("-cli"):
-            try:
-                seat = await self._cheapest(member)
-            except Exception as exc:  # choosing a model is an optimisation, never a failure
-                log.info("debate.light_model_failed", member=member.name, error=type(exc).__name__)
+        if self.policy.light_model == "latest_cheapest":
+            seat = await cheapest_strong(self.ctx, member, self.policy.light_min_reasoning)
         self._light[member.id] = seat
         return seat
-
-    async def _cheapest(self, member: MemberSpec) -> MemberSpec:
-        from argus.providers.profiles import price_for, profile_for
-        from argus.services.llm import Route
-        from argus.tools.spawn import _pool
-
-        floor = self.policy.light_min_reasoning
-        tokens_in, tokens_out = LIGHT_CALL_TOKENS
-
-        def cost(model: str, auth: str = "api_key", self_hosted: bool = False) -> float:
-            return price_for(model, auth=auth, self_hosted=self_hosted).call_usd(tokens_in, tokens_out)
-
-        own = cost(member.model)
-        best: tuple[float, float, str] | None = None
-        for c in await _pool(self.ctx, {member.provider}):
-            if c.provider != member.provider or c.model == member.model:
-                continue
-            reasoning = profile_for(c.model).reasoning
-            if reasoning < floor:
-                continue
-            price = cost(c.model, c.auth, getattr(c, "self_hosted", False))
-            # Cheapest first; among equal prices the stronger (and so, in a family, the newer) model.
-            if price < own and (best is None or (price, -reasoning) < (best[0], -best[1])):
-                best = (price, reasoning, c.model)
-        if best is None:
-            return member
-        return dataclasses.replace(
-            member, model=best[2], fallbacks=[Route(member.provider, member.model), *member.fallbacks]
-        )
 
     def _usage(self) -> tuple[float, int]:
         used = self.ctx.engine.usage

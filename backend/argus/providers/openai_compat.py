@@ -155,6 +155,9 @@ class OpenAICompatProvider(Provider):
             body["stop"] = req.stop
         if req.json_mode:
             body["response_format"] = {"type": "json_object"}
+        # Reasoning: backends that think (DeepSeek, vLLM/Ollama reasoning parsers, OpenRouter) return
+        # it as reasoning_content/reasoning unasked. Chat Completions has no way to ask OpenAI's
+        # reasoning models for a summary (only the Responses API does), so "on" sends nothing here.
         if req.effort and self.kind == "openai":
             body["reasoning_effort"] = {"xhigh": "high", "max": "high"}.get(req.effort, req.effort)
         if req.tools:
@@ -195,6 +198,12 @@ class OpenAICompatProvider(Provider):
         usage.cost_usd = estimate_cost(model, usage)
         return usage
 
+    @staticmethod
+    def _reasoning_tokens(raw: dict[str, Any] | None) -> int | None:
+        details = (raw or {}).get("completion_tokens_details") or {}
+        value = details.get("reasoning_tokens")
+        return value if isinstance(value, int) else None
+
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         for attempt in range(3):  # at most one retry per known parameter mismatch
             try:
@@ -220,6 +229,7 @@ class OpenAICompatProvider(Provider):
             model=model,
             content=msg.get("content") or "",
             thinking=msg.get("reasoning_content") or msg.get("reasoning") or "",
+            reasoning_tokens=self._reasoning_tokens(data.get("usage")),
             tool_calls=calls,
             finish_reason=_FINISH.get(choice.get("finish_reason") or "", "stop"),
             usage=self._usage(model, data.get("usage")),
@@ -294,6 +304,7 @@ class OpenAICompatProvider(Provider):
                 model=model,
                 content="".join(text),
                 thinking="".join(thinking),
+                reasoning_tokens=self._reasoning_tokens(usage_raw),
                 tool_calls=calls,
                 finish_reason=_FINISH.get(finish, "stop"),
                 usage=self._usage(model, usage_raw),

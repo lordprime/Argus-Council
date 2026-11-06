@@ -136,6 +136,37 @@ All notable changes to this project are documented here. The format follows
   - On Anthropic models, the stable part of the system prompt and the tools are sent with
     `cache_control`, so turns after the first read them from the prompt cache.
   - `guardrails.graph` turns this off or tunes it.
+- **Shared knowledge between runs.**
+  - A new run inherits the board of the latest earlier run of the same council, or of your runs
+    without a council. That's the newest 40 notes, marked *(earlier run)* and credited to their
+    authors, and the run after inherits them again. `graph.inherit_board: false` turns this off.
+  - Every note on the board is recorded as a `board.note` event.
+  - Agents are told about all the knowledge they can search: the linked knowledge bases (searched
+    first), every other knowledge base you added, and the research library. Before, they were told
+    only about the linked ones.
+- **A compressor, and budget pressure.**
+  - Older turns are summarised on the cheapest model of the seat's provider that scores at least
+    `context.compressor_min_reasoning` (70) for reasoning, instead of the seat's own model.
+  - Once a run has used `context.pressure_start` (60%) of its token ceiling, every agent's history
+    budget shrinks, down to 40% at the ceiling, so turns cost less as the run nears it. The ceiling
+    counts the limit, the raises still allowed and the reserve: 5,000,000 tokens by default.
+  - The run records `context.pressure` once per tenth of the ceiling.
+- **Recovery from context overflow.** When a model refuses a prompt as too long, the agent halves
+  its history budget, summarises and tries again, up to twice, as Claude Code does
+  (`context.compacted`). Before, the step failed, and with it often the run.
+- **See how each agent reasons.** Thought cards gain a *Reasoning* section above the answer. It
+  updates live, collapses once the answer arrives, and shows the token count.
+  - `oversight.reasoning`:
+    - `auto` (the default) records what the model returns, at no extra cost;
+    - `on` asks Claude (adaptive thinking, summarized) and Gemini 2.5 (thoughts) for a readable
+      summary;
+    - `off` records none.
+  - Reasoning is streamed as `thought.reasoning.delta` and kept on `thought.completed`.
+  - It is shown only to you, never to another agent, and the secret advocate's reasoning is
+    concealed like the rest.
+- **Readable JSON replies.** Plans render as numbered step lists. Debate moves, co-signatures,
+  votes and reviews render as labelled rows with chips, and other JSON as a collapsible tree, each
+  with *View raw* and *Copy JSON*.
 - **Auto mode.** With `guardrails.auto_mode` on, agents never stop to ask. Each approval request is
   still recorded, as `approval.requested` then `approval.resolved {"decision": "approved",
   "by": "auto"}`, and the workspace shows it as *Auto-approved*. `guardrails.extensions.auto_approve`
@@ -201,6 +232,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Resuming a run with linked knowledge works.** The old run's links are stored as strings and were
+  compared with the database's UUIDs, so every such resume failed: with "Knowledge base not found"
+  on Postgres, and an internal error on SQLite. They are normalised now, and a knowledge base deleted
+  since is left out instead of refusing the resume.
+- **A resumed run gets its whole board back.** Before, it rebuilt only the notes written with
+  `notes_write`, and lost the step results, reviews and helpers' results posted to the board.
+- **Runs halted before this release resume too.**
+  - Their board is rebuilt from their A2A board posts (or, for older runs still, their
+    `notes_write` calls).
+  - Their saved guardrails take the new settings' defaults.
+  - A run that failed to resume with "Knowledge base not found" can simply be resumed again.
+- **Claude 5-family turns no longer fail on a stale thinking block.**
+  - On Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1, a thinking block is bound to the
+    conversation that produced it. A council member's prompt carries the live board and its history
+    is compacted, so for accounts the API enforces (created on or after 2026-08-31), a turn could
+    fail with "bound to a different conversation".
+  - After the first such 400, the provider retries once with
+    `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta
+    `thinking-binding-controls-2026-08-01`), and keeps sending it for that provider. Stale blocks
+    are dropped and the turn goes on.
+  - Accounts that aren't enforced send their requests unchanged.
 - **PDF exports no longer fail with `internal_error`.** Two problems in a row caused it:
   - A table cell, callout or quote taller than one page made reportlab raise `LayoutError` on
     every render attempt. Those rows now split across pages.

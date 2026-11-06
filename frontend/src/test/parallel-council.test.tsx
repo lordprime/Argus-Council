@@ -241,6 +241,28 @@ describe("timeline rows", () => {
   });
 });
 
+describe("shared knowledge and compression in the timeline", () => {
+  it("shows an inherited board, budget pressure and an overflow retry, and no row per board note", () => {
+    seq = 0;
+    const s = reduceAll({ ...emptyRun("r", MEMBERS), status: "running" }, [
+      ev("board.note", { note: { id: 1, title: "Vendor A quote", body: "12 USD", author: "Ada", inherited_from: "r0" } }),
+      ev("board.inherited", { from_run_id: "r0", notes: 1 }),
+      ev("context.pressure", { pressure: 0.8, budget_chars: 84000, keep_recent: 1 }),
+      ev("context.compacted", { member_id: "m1", reason: "context_overflow", chars_before: 240000, chars_after: 60000 }, { actor: { kind: "agent", member_id: "m1", name: "Ada" } }),
+    ]);
+    const kinds = s.order.map((id) => (s.items[id] as SimpleItem).type);
+    expect(kinds).toEqual(["board.inherited", "context.pressure", "context.compacted"]);
+    render(
+      <MemoryRouter>
+        {s.order.map((id) => <SimpleRow key={id} item={s.items[id] as SimpleItem} members={s.members} debate={s.debate} onOpenArtifact={() => {}} />)}
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/1 note carried over/)).toBeInTheDocument();
+    expect(screen.getByText(/used 80% of its token ceiling/)).toBeInTheDocument();
+    expect(screen.getByText(/hit the model's context limit/)).toBeInTheDocument();
+  });
+});
+
 describe("helpers in the council", () => {
   it("lists helpers with their parent, state and live tail, and they can be held and messaged", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(json({}, 202));

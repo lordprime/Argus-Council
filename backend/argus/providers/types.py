@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field
 Role = Literal["system", "user", "assistant", "tool"]
 FinishReason = Literal["stop", "length", "tool_calls", "refusal", "error"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
+# How much of a model's reasoning to ask for (guardrails ``oversight.reasoning``): "auto" records
+# what a model returns unasked; "on" also asks providers that need a parameter for a readable
+# summary; "off" records none. Providers read it from CompletionRequest.reasoning.
+Reasoning = Literal["auto", "on", "off"]
 
 
 class ToolSpec(BaseModel):
@@ -99,6 +103,7 @@ class CompletionRequest(BaseModel):
     effort: Effort | None = None
     stop: list[str] = Field(default_factory=list)
     json_mode: bool = False
+    reasoning: Reasoning = "auto"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -134,7 +139,8 @@ class CompletionResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     finish_reason: FinishReason = "stop"
     usage: Usage = Field(default_factory=Usage)
-    thinking: str = ""
+    thinking: str = ""  # the model's reasoning (often a provider summary); "" when none returned
+    reasoning_tokens: int | None = None  # reasoning tokens, when the provider reports them
     raw: dict[str, Any] | None = None
     cached: bool = False
     # "subscription": a CLI agent signed in with the user's vendor account. Such turns carry no API

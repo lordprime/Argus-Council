@@ -124,7 +124,8 @@ export const GUARDRAIL_DEFAULTS = {
   extensions: { auto_approve: false },
   debate: { enabled: true, devils_advocate: true, rounds: 2, converge_rounds: 2, consensus: 0.67, max_challenges: 30, max_nudges: 2, light_model: "latest_cheapest", light_min_reasoning: 70 },
   spawn: { enabled: true, max_agents: 8, max_depth: 2, max_live: 6 },
-  graph: { enabled: true, digest_chars: 1500, council_recall: 12, prompt_cache: true },
+  graph: { enabled: true, digest_chars: 1500, council_recall: 12, prompt_cache: true, inherit_board: true },
+  context: { condense: true, budget_chars: 120_000, compressor: "latest_cheapest", compressor_min_reasoning: 70, pressure_start: 0.6 },
 };
 
 const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);

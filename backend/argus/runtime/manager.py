@@ -39,6 +39,7 @@ from argus.tools.skills import skill_tools
 from argus.tools.subcouncil import SubCouncilTool
 from argus.tools.web import web_tools
 
+SHARED_KNOWLEDGE_LISTED = 20  # knowledge bases named in agents' prompts besides the linked ones
 log = get_logger(__name__)
 
 ACTIVE_STATUSES = ("queued", "running", "paused")
@@ -241,6 +242,7 @@ class RunManager:
         if run.knowledge_base_ids:
             async with self.sessionmaker() as s:
                 ctx.extra["linked_knowledge"] = await linked_summary(s, run.owner_id, run.knowledge_base_ids)
+        ctx.extra["shared_knowledge"] = await self._shared_knowledge(run)
         skills = await skills_for_owner(self.sessionmaker, run.owner_id)
         ctx.skills = {
             n: p for n, p in skills.items() if skill_permitted(n, rails.skills.allow, rails.skills.deny)
@@ -300,9 +302,11 @@ class RunManager:
             log.exception("run.start_failed_unrecorded", run_id=str(run.id))
 
     async def _carry_over(self, ctx: RunContext) -> None:
-        """A resumed run takes the old run's citations (same numbers), notes and workspace files."""
+        """A resumed run takes the old run's citations (same numbers), notes and workspace files. A new
+        top-level run inherits the board of the latest earlier run of its council."""
         state: ResumeState | None = ctx.extra.get("resume")
         if state is None:
+            await self._inherit_board(ctx)
             return
         for src in state.sources:
             entry = {k: src[k] for k in ("source_id", "n", "url", "title", "retrieved_at") if k in src}
@@ -324,6 +328,46 @@ class RunManager:
                 "legacy": state.legacy,
             },
         )
+
+    async def _shared_knowledge(self, run: Run) -> list[dict[str, Any]]:
+        """Every knowledge base this run can search besides the linked ones: the owner's own and the
+        research library (unless the council limits them), so agents know the shared knowledge is
+        there. The same scope as ``knowledge_search`` (argus.tools.knowledge._scope)."""
+        from sqlalchemy import select
+
+        from argus.db.models import KnowledgeBase
+
+        linked = {str(i) for i in run.knowledge_base_ids or []}
+        async with self.sessionmaker() as s:
+            kbs = list(
+                (
+                    await s.execute(select(KnowledgeBase).where(KnowledgeBase.owner_id == run.owner_id))
+                ).scalars()
+            )
+            allowed = (run.council_snapshot or {}).get("knowledge_base_ids")
+            if isinstance(allowed, list):
+                wanted = {str(a) for a in allowed}
+                kbs = [k for k in kbs if str(k.id) in wanted or k.name in wanted or k.kind == "library"]
+            ids = [k.id for k in kbs if str(k.id) not in linked][:SHARED_KNOWLEDGE_LISTED]
+            listed = await linked_summary(s, run.owner_id, ids)
+        kinds = {str(k.id): k.kind for k in kbs}
+        return [{**k, "library": kinds.get(k["id"]) == "library"} for k in listed if k["document_count"]]
+
+    async def _inherit_board(self, ctx: RunContext) -> None:
+        if ctx.depth > 0 or not ctx.engine.rails.graph.inherit_board:
+            return
+        from argus.runtime.resume import inherited_board
+
+        council = uuid.UUID(ctx.sink.council_id) if ctx.sink.council_id else None  # stored as a string
+        from_run, notes = await inherited_board(self.sessionmaker, ctx.owner_id, council, ctx.run_id)
+        if not notes:
+            return
+        for note in notes:
+            note["id"] = len(ctx.notes) + 1
+            ctx.notes.append(note)
+            # Recorded on this run too, so the run after it inherits the same board.
+            await ctx.sink.emit("board.note", {"note": dict(note)})
+        await ctx.sink.emit("board.inherited", {"from_run_id": str(from_run), "notes": len(notes)})
 
     async def _set(self, run_id: uuid.UUID, *, where: Any = None, **values: Any) -> bool:
         """Update a run row; with ``where`` only when it matches. Returns whether a row changed."""

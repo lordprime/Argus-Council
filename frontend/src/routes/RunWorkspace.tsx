@@ -16,12 +16,13 @@ import {
 } from "@/components/run/parts";
 import { AutoModeControl } from "@/components/run/AutoModeControl";
 import { DebatePanel } from "@/components/run/debate";
+import { Reasoning, ThoughtText } from "@/components/run/thought";
 import { BudgetControl } from "@/components/run/BudgetControl";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
 import { ModeLabel } from "@/components/run/ModeLabel";
 import { RunKnowledgeButton } from "@/components/knowledge/RunKnowledge";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
-import { Badge, Button, Callout, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
+import { Badge, Button, Callout, Chip, EmptyState, ErrorState, SegmentedTabs, Skeleton, StatusPill, Tabs, touchTarget } from "@/components/ui";
 import { Drawer } from "@/components/ui/Drawer";
 import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
@@ -34,6 +35,7 @@ import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type { OutputFormat, RunDetail } from "@/lib/types";
 import { awaitsUser, contextCharsSaved, isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
 import { toast } from "@/stores/toast";
+import { useUi } from "@/stores/ui";
 
 type Density = "decisions" | "working" | "everything";
 
@@ -340,6 +342,8 @@ function Inspector({ runId, selected }: { runId: string; selected: string | null
   const item = useRun(runId, (s) => (selected && !selected.startsWith("artifact:") ? s.items[selected] : undefined));
   const order = useRun(runId, (s) => s.order);
   const items = useRun(runId, (s) => s.items);
+  const members = useRun(runId, (s) => s.members);
+  const showReasoning = useUi((u) => u.showReasoning);
   const tools = useMemo(() => order.map((id) => items[id]).filter((i) => i?.kind === "tool"), [order, items]);
   const sources = useRun(runId, (s) => s.sources);
   const artifacts = useArtifacts(runId);
@@ -365,7 +369,11 @@ function Inspector({ runId, selected }: { runId: string; selected: string | null
                 <dt className="text-fg-subtle">Cost</dt><dd className="tabular">{usd(item.costUsd)}</dd>
                 <dt className="text-fg-subtle">Latency</dt><dd className="tabular">{item.latencyMs ?? "—"} ms</dd></>}
             </dl>
-            {item.kind === "thought" && <Markdown>{item.text}</Markdown>}
+            {item.kind === "thought" && item.reasoning && showReasoning && (
+              <Reasoning text={item.reasoning} tokens={item.reasoningTokens} streaming={item.streaming} answered={Boolean(item.text.trim())}
+                who={item.actor.name ?? "the agent"} />
+            )}
+            {item.kind === "thought" && <ThoughtText text={item.text} members={members} />}
             {item.kind === "tool" && <pre tabIndex={0} role="region" aria-label="Item data" className="font-mono text-xs whitespace-pre-wrap">{JSON.stringify({ args: item.args, result: item.preview }, null, 2)}</pre>}
           </div>
         ) : <EmptyState title="Select an item" body="Pick a thought, tool call or artifact in the timeline." /> },
@@ -520,6 +528,8 @@ export default function RunWorkspace() {
   const state = useRun(viewId, (s) => s);
   const realStatus = useRun(runId, (s) => (s.lastSeq ? s.status : ""));
   const [density, setDensity] = useState<Density>("working");
+  const showReasoning = useUi((u) => u.showReasoning);
+  const setShowReasoning = useUi((u) => u.setShowReasoning);
   const [focus, setFocus] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setViewState] = useState<RunView>(loadView);
@@ -599,6 +609,8 @@ export default function RunWorkspace() {
                   <option value="working">Working</option>
                   <option value="everything">Everything</option>
                 </select>
+                <Chip pressed={showReasoning} onPressedChange={setShowReasoning} aria-label="Show reasoning"
+                  title="Show each agent's reasoning, when its model returns any">Reasoning</Chip>
                 {focus && <Button size="sm" variant="ghost" onClick={() => setFocus(null)}>Clear focus</Button>}
                 </>}
                 <div className="ml-auto flex items-center gap-1">

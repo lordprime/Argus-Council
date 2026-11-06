@@ -35,6 +35,8 @@ _READ = (
     "step.status",
     "tool.call.started",
     "step.added",
+    "board.note",
+    "a2a.message",
 )
 
 
@@ -149,6 +151,23 @@ def _recover_legacy(state: ResumeState, events: list[dict[str, Any]]) -> None:
 
 
 def _notes(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The run's board, from the best record the run has:
+
+    1. ``board.note`` events (every note, from this release on);
+    2. the A2A ``board`` messages of runs from before it (0.1.3 recorded every board post as one);
+    3. the ``notes_write`` calls of older runs still.
+    """
+    recorded = [
+        dict((e.get("data") or {}).get("note") or {})
+        for e in events
+        if e.get("type") == "board.note" and isinstance((e.get("data") or {}).get("note"), dict)
+    ]
+    if not recorded:
+        recorded = _board_messages(events)
+    if recorded:
+        for i, note in enumerate(recorded, 1):
+            note["id"] = i
+        return recorded
     notes = []
     for e in events:
         d = e.get("data") or {}
@@ -169,6 +188,32 @@ def _notes(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "ts": e.get("ts"),
                 }
             )
+    return notes
+
+
+def _board_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    notes = []
+    for e in events:
+        if e.get("type") != "a2a.message":
+            continue
+        msg = (e.get("data") or {}).get("message") or {}
+        meta = msg.get("metadata") or {}
+        if meta.get("form") != "board":
+            continue
+        text = "\n".join(p.get("text", "") for p in msg.get("parts") or [] if p.get("kind") == "text")
+        title, _, body = text.partition("\n\n")
+        notes.append(
+            {
+                "title": title.strip()[:200],
+                "body": body.strip(),
+                "source": None,
+                "tags": [],
+                "author": (meta.get("from") or {}).get("name")
+                or (e.get("actor") or {}).get("name")
+                or "council",
+                "ts": e.get("ts"),
+            }
+        )
     return notes
 
 
@@ -195,3 +240,43 @@ async def copy_workspace(sessionmaker: async_sessionmaker, from_run: uuid.UUID, 
         await workspace.write(a.path, a.content, by=a.created_by or "resumed", kind=a.kind, mime=a.mime)
         copied += 1
     return copied
+
+
+INHERITED_NOTES = 40  # the newest notes of the earlier board a new run starts with
+
+
+async def inherited_board(
+    sessionmaker: async_sessionmaker,
+    owner_id: uuid.UUID,
+    council_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, list[dict[str, Any]]]:
+    """The board a new run inherits: the newest notes of the latest earlier run of the same council
+    (or, for runs without a council, of the owner's other such runs) that has a board. Each note
+    keeps its author and is marked with the run it came from."""
+    from argus.db.models import Run
+
+    async with sessionmaker() as s:
+        this = await s.get(Run, run_id)
+        q = select(Run.id).where(Run.owner_id == owner_id, Run.id != run_id, Run.parent_run_id.is_(None))
+        q = q.where(Run.council_id == council_id) if council_id else q.where(Run.council_id.is_(None))
+        if this is not None and this.created_at is not None:
+            q = q.where(Run.created_at < this.created_at)
+        q = q.where(Run.trashed_at.is_(None))
+        candidates = (await s.execute(q.order_by(Run.created_at.desc()).limit(5))).scalars().all()
+        for rid in candidates:
+            rows = (
+                await s.execute(
+                    select(RunEvent.payload)
+                    .where(
+                        RunEvent.run_id == rid,
+                        RunEvent.type.in_(("board.note", "a2a.message", "tool.call.started")),
+                    )
+                    .order_by(RunEvent.seq)
+                )
+            ).all()
+            notes = _notes([r[0] for r in rows])
+            if notes:
+                kept = notes[-INHERITED_NOTES:]
+                return rid, [{**n, "inherited_from": str(n.get("inherited_from") or rid)} for n in kept]
+    return None, []

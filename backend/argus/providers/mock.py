@@ -44,12 +44,15 @@ class MockProvider(Provider):
             for i, c in enumerate(item.get("tool_calls") or [])
         ]
         content = item.get("content", "")
+        thinking = item.get("thinking", "")
         prompt_chars = sum(len(m.content) for m in req.messages)
         return CompletionResponse(
             provider=self.name,
             model=req.model,
             content=content,
-            thinking=item.get("thinking", ""),
+            thinking=thinking,
+            reasoning_tokens=item.get("reasoning_tokens")
+            or (max(len(thinking) // 4, 1) if thinking else None),
             tool_calls=calls,
             finish_reason=item.get("finish_reason") or ("tool_calls" if calls else "stop"),
             usage=Usage(input_tokens=max(prompt_chars // 4, 1), output_tokens=max(len(content) // 4, 1)),
@@ -62,13 +65,31 @@ class MockProvider(Provider):
         if self.responder:
             return self._build(request, self.responder(request))
         if request.metadata.get("phase"):
-            return self._build(request, council_responder(request))
+            reply = council_responder(request)
+            if request.reasoning != "off" and not reply.get("thinking"):
+                reply["thinking"] = mock_reasoning(request)
+            return self._build(request, reply)
         last = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
         digest = hashlib.sha256(last.encode()).hexdigest()[:8]
         return self._build(request, f"[{request.model}#{digest}] {last[:400]}")
 
     async def list_models(self) -> list[str]:
         return ["mock-1", "mock-large"]
+
+
+def mock_reasoning(req: CompletionRequest) -> str:
+    """A short, deterministic chain of thought for a council turn, so offline runs show reasoning."""
+    meta = req.metadata
+    phase = str(meta.get("phase") or "turn").replace("_", " ")
+    role = str(meta.get("role") or "agent")
+    topic = " ".join(str(meta.get("topic") or "the topic").split())[:120]
+    tools = sorted(t.name for t in req.tools)[:3]
+    using = f" The tools at hand: {', '.join(tools)}." if tools else ""
+    return (
+        f'As the {role}, the {phase} step on "{topic}" comes first. '
+        f"What is already settled, and what still needs evidence?{using} "
+        "Answer what was asked, keep it short, and say what is uncertain."
+    )
 
 
 def council_responder(req: CompletionRequest) -> dict[str, Any]:

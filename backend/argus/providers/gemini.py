@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -28,6 +29,9 @@ _FINISH: dict[str, FinishReason] = {
     "RECITATION": "refusal",
     "PROHIBITED_CONTENT": "refusal",
 }
+
+# Models that think (2.5 and later) return thought summaries only when asked (includeThoughts).
+_THINKING_MODEL = re.compile(r"gemini-(?:2\.5|[3-9])")
 
 # JSON-Schema keywords Gemini's OpenAPI-subset schema rejects.
 _UNSUPPORTED_SCHEMA_KEYS = {"$schema", "additionalProperties", "$id", "$ref", "definitions", "$defs"}
@@ -98,6 +102,8 @@ class GeminiProvider(Provider):
             cfg["stopSequences"] = req.stop
         if req.json_mode:
             cfg["responseMimeType"] = "application/json"
+        if req.reasoning == "on" and _THINKING_MODEL.search(req.model.lower()):
+            cfg["thinkingConfig"] = {"includeThoughts": True}
         body: dict[str, Any] = {"contents": _to_contents(req.messages), "generationConfig": cfg}
         if req.system_prompt:
             body["systemInstruction"] = {"parts": [{"text": req.system_prompt}]}
@@ -145,6 +151,7 @@ class GeminiProvider(Provider):
             model=data.get("modelVersion") or model,
             content="".join(text),
             thinking="".join(thinking),
+            reasoning_tokens=thoughts if isinstance(thoughts := um.get("thoughtsTokenCount"), int) else None,
             tool_calls=calls,
             finish_reason=finish,
             usage=usage,

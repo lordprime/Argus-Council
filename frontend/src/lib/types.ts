@@ -141,7 +141,15 @@ export interface Guardrails {
   /** Runtime helpers that members spawn while they work. */
   spawn?: { enabled: boolean; max_agents: number; max_depth: number; max_live: number };
   /** The council knowledge graph and graph-based context. */
-  graph?: { enabled: boolean; digest_chars: number; council_recall: number; prompt_cache: boolean };
+  graph?: { enabled: boolean; digest_chars: number; council_recall: number; prompt_cache: boolean; inherit_board?: boolean };
+  /** How each agent's history is kept small: the compressor and budget pressure. */
+  context?: {
+    condense?: boolean;
+    budget_chars?: number;
+    compressor?: "latest_cheapest" | "seat";
+    compressor_min_reasoning?: number;
+    pressure_start?: number;
+  };
 }
 
 /** A live run's auto mode (POST /runs/{id}/auto-mode, `run.auto_mode` event). */

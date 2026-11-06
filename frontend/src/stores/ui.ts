@@ -50,11 +50,14 @@ interface UiState {
   density: Density;
   navCollapsed: boolean;
   shortcuts: boolean;
+  /** Show each agent's reasoning in the run timeline (when its model returns any). */
+  showReasoning: boolean;
   setTheme: (t: Theme) => void;
   setPalette: (p: Palette) => void;
   setDensity: (d: Density) => void;
   toggleNav: () => void;
   setShortcuts: (on: boolean) => void;
+  setShowReasoning: (on: boolean) => void;
 }
 
 export const useUi = create<UiState>((set) => ({
@@ -63,6 +66,7 @@ export const useUi = create<UiState>((set) => ({
   density: read<Density>("argus.density", "comfortable"),
   navCollapsed: read<string>("argus.nav", "open") === "collapsed",
   shortcuts: read("argus.shortcuts", "on") === "on",
+  showReasoning: read("argus.reasoning", "on") === "on",
   setTheme: (theme) => {
     write("argus.theme", theme);
     applyTheme(theme);
@@ -86,5 +90,9 @@ export const useUi = create<UiState>((set) => ({
   setShortcuts: (on) => {
     write("argus.shortcuts", on ? "on" : "off");
     set({ shortcuts: on });
+  },
+  setShowReasoning: (on) => {
+    write("argus.reasoning", on ? "on" : "off");
+    set({ showReasoning: on });
   },
 }));

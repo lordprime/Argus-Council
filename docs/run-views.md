@@ -86,6 +86,38 @@ waits for your answer.
 These call `POST /runs/{id}/auto-mode`, `/budget` and `/continue`; see
 [Integration](integration.md#steering-a-run).
 
+## Thought cards
+
+Each agent turn is a thought card.
+
+**Reasoning.** When the model returns its reasoning, a *Reasoning* section sits above the answer,
+with its token count when the provider reports it.
+
+- It is open and updates live while only reasoning has arrived, and it collapses once the answer
+  is there.
+- The *Reasoning* chip in the timeline's *Show* menu hides or shows these sections; your browser
+  remembers the choice.
+- What models return depends on `guardrails.oversight.reasoning`:
+  - `auto` (the default) records whatever the model gives without asking for more.
+  - `on` asks Claude models (adaptive thinking with a summarized display) and Gemini 2.5 models
+    (thoughts included) to return a readable summary of their reasoning.
+  - Models served through an OpenAI-compatible API show reasoning only when the server returns it.
+- Reasoning is shown to you only. No other agent ever sees it: not on the board, in *Working now*,
+  in the knowledge graph, or in an answer. The secret devil's advocate's giveaways are removed from
+  it, as from everything else it writes.
+
+**Readable JSON.** A reply that is JSON is shown as a view built for it, not as raw text. That
+applies whether the JSON is the whole reply, inside a code fence, or embedded in prose.
+
+- A plan is a numbered list of steps: the assignee, which steps each one waits for, and the
+  instructions, cut to three lines with *Show more*.
+- Debate moves, co-signatures, amendment votes, ballots and overseer reviews are labelled rows
+  with chips: the demand, the stance (defend, concede, revise, endorse, object), sign, amend or
+  block, and severity.
+- Any other JSON is a tree with collapsible levels.
+- *View raw* shows the JSON exactly as written, and *Copy JSON* copies it.
+- JSON that is still streaming, or malformed, stays as text.
+
 ## Timeline rows
 
 Messages between council members (see

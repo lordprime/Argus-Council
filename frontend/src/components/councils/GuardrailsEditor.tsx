@@ -167,6 +167,11 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
             hint="Send members short digests from the council's knowledge graph instead of raw upstream text." />
           <Toggle label="Prompt caching" checked={get<boolean>(["graph", "prompt_cache"])} onChange={(on) => set(["graph", "prompt_cache"], on)}
             hint="Cache the stable part of each prompt where the provider supports it." />
+          <Toggle label="Inherit the board" checked={get<boolean>(["graph", "inherit_board"])} onChange={(on) => set(["graph", "inherit_board"], on)}
+            hint="Start with the board of the latest earlier run of this council (its newest notes, marked as earlier)." />
+          <Toggle label="Compress on the cheapest strong model" checked={get<string>(["context", "compressor"]) !== "seat"}
+            onChange={(on) => set(["context", "compressor"], on ? "latest_cheapest" : "seat")}
+            hint="Older turns are summarised on the newest cheap model of the seat's provider instead of the seat's own." />
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <NumberField label="Digest size" unit="chars" min={200} max={20000} step={100} integer
@@ -175,6 +180,13 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
           <NumberField label="Council recall" unit="nodes" min={0} max={100} integer
             value={get<number>(["graph", "council_recall"])} onChange={(v) => set(["graph", "council_recall"], v)}
             hint="What the council learned in earlier runs, shown at the start." onValidityChange={validity("graph.recall")} />
+          <NumberField label="Compress harder from" unit="of the token ceiling" min={0.1} max={1} step={0.05}
+            value={get<number>(["context", "pressure_start"])} onChange={(v) => set(["context", "pressure_start"], v)}
+            hint="Once the run has used this share of its tokens (limit, raises left and reserve), every agent's history shrinks, to 40% at the ceiling. 1 turns it off."
+            onValidityChange={validity("context.pressure")} />
+          <NumberField label="Compressor floor" unit="reasoning" min={0} max={100}
+            value={get<number>(["context", "compressor_min_reasoning"])} onChange={(v) => set(["context", "compressor_min_reasoning"], v)}
+            hint="The least reasoning score (0-100) a cheaper model needs to summarise a seat's history." onValidityChange={validity("context.floor")} />
         </div>
       </Group>
 
