@@ -9958,6 +9958,11 @@
             "type": "array",
             "title": "Knowledge Base Ids"
           },
+          "pending_approvals": {
+            "type": "integer",
+            "title": "Pending Approvals",
+            "default": 0
+          },
           "result": {
             "type": "string",
             "title": "Result"
@@ -10268,6 +10273,11 @@
             },
             "type": "array",
             "title": "Knowledge Base Ids"
+          },
+          "pending_approvals": {
+            "type": "integer",
+            "title": "Pending Approvals",
+            "default": 0
           }
         },
         "type": "object",

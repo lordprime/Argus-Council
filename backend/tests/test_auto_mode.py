@@ -102,6 +102,10 @@ async def test_a_run_in_auto_mode_never_waits_for_the_user(client, auth, app):
     rid = (await client.post(API, headers=auth, json={"topic": "ship it", "council_id": cid})).json()["id"]
     run = await wait_status(client, auth, rid)
     assert run["status"] == "completed" and RiskyTool.calls == ["staging"]
+    assert (
+        next(r for r in (await client.get(API, headers=auth)).json() if r["id"] == rid)["pending_approvals"]
+        == 0
+    )
     evs = await events_of(client, auth, rid)
     resolved = next(e for e in evs if e["type"] == "approval.resolved")
     assert resolved["data"] == {
@@ -129,6 +133,9 @@ async def test_switching_auto_mode_on_live_answers_the_open_request(client, auth
     rid = (await client.post(API, headers=auth, json={"topic": "ship it", "council_id": cid})).json()["id"]
     await _wait_for_event(client, auth, rid, "approval.requested")
     assert RiskyTool.calls == []
+    # The runs list says which live runs are waiting for an answer.
+    listed = (await client.get(API, headers=auth)).json()
+    assert next(r for r in listed if r["id"] == rid)["pending_approvals"] == 1
 
     from tests.conftest import register_and_login
 

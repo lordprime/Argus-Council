@@ -410,6 +410,13 @@ class RunManager:
             except Exception as exc:
                 log.warning("run.export_failed", format=fmt, error=str(exc)[:200])
 
+    def pending_approvals(self, run_id: uuid.UUID) -> int:
+        """Approval requests on a live run (in this process) still waiting for the user."""
+        live = self.live.get(run_id)
+        if live is None:
+            return 0
+        return sum(1 for a in list(live.ctx.approvals.values()) if not a.future.done())
+
     async def export(self, run_id: uuid.UUID, fmt: str) -> dict[str, Any]:
         """Export the deliverable of a live or finished run (its structured report when it has one)."""
         async with self.sessionmaker() as s:

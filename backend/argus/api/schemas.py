@@ -345,6 +345,9 @@ class RunOut(ORM):
     archived_at: datetime | None = None
     trashed_at: datetime | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
+    # Approval requests waiting for the user on a live run (in this API process), so lists can
+    # say which runs need an answer. Not a column: filled in by the runs list.
+    pending_approvals: int = 0
 
 
 class RunDetail(RunOut):

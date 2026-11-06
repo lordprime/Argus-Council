@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -94,11 +95,80 @@ _EVENT_FIELDS = {
     "reason": _data("reason"),
     "action": _data("action"),
     "decision": _data("decision"),
+    "by": _data("by"),
+    # tool.call.completed: the start of the result, which for a failed call is its error message.
+    "preview": _data("result_preview"),
 }
+
+# How a failed tool call's error is grouped: its first line, without the volatile parts (numbers,
+# quoted names, URLs) that make otherwise identical errors look different.
+_ERROR_KEY_CHARS = 90
+
+
+def _first_line(text: str | None) -> str:
+    return (text or "").strip().splitlines()[0][:160] if (text or "").strip() else "unknown error"
+
+
+def _error_key(text: str | None) -> str:
+    line = _first_line(text)
+    line = re.sub(r"https?://\S+", "<url>", line)
+    line = re.sub(r"\b(from|at|to|host) (?:[\w-]+\.)+[a-z]{2,}\b", r"\1 <host>", line, flags=re.I)
+    line = re.sub(r"'[^']*'|\"[^\"]*\"", "'…'", line)
+    line = re.sub(r"\d+(?:\.\d+)?", "N", line)
+    return line[:_ERROR_KEY_CHARS]
 
 
 def _pct(part: int, whole: int) -> float:
     return round(100 * part / whole, 1) if whole else 0.0
+
+
+def _totals(runs: list[Any]) -> dict[str, Any]:
+    usages = [r.usage or {} for r in runs]
+    durations = [u.get("runtime_s", 0) for u in usages if u.get("runtime_s")]
+    completed = sum(1 for r in runs if r.status == "completed")
+    return {
+        "runs": len(runs),
+        "cost_usd": round(sum(float(u.get("usd", 0) or 0) for u in usages), 6),
+        "tokens_in": sum(int(u.get("tokens_in", 0) or 0) for u in usages),
+        "tokens_out": sum(int(u.get("tokens_out", 0) or 0) for u in usages),
+        "avg_runtime_s": round(sum(durations) / len(durations), 1) if durations else None,
+        "success_rate": _pct(completed, len(runs)),
+    }
+
+
+def _series(runs: list[Any], since: datetime, now: datetime, days: int) -> list[dict[str, Any]]:
+    """Runs, outcomes and spend per hour (one day) or per day (UTC), oldest first, gaps filled."""
+    step = timedelta(hours=1) if days <= 1 else timedelta(days=1)
+    start = since.replace(minute=0, second=0, microsecond=0)
+    if days > 1:
+        start = start.replace(hour=0)
+    buckets: list[dict[str, Any]] = []
+    t = start
+    while t <= now:
+        buckets.append(
+            {
+                "start": t.isoformat(),
+                **dict.fromkeys(("runs", "completed", "failed", "halted", "tokens", "runtime_n"), 0),
+                "runtime_s": 0.0,
+                "usd": 0.0,
+            }
+        )
+        t += step
+    for r in runs:
+        created = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=UTC)
+        i = int((created - start) / step)
+        if not 0 <= i < len(buckets):
+            continue
+        b, u = buckets[i], r.usage or {}
+        b["runs"] += 1
+        if r.status in ("completed", "failed", "halted"):
+            b[r.status] += 1
+        b["usd"] = round(b["usd"] + float(u.get("usd", 0) or 0), 6)
+        b["tokens"] += int(u.get("tokens_in", 0) or 0) + int(u.get("tokens_out", 0) or 0)
+        if u.get("runtime_s"):
+            b["runtime_s"] += float(u["runtime_s"])
+            b["runtime_n"] += 1
+    return buckets
 
 
 @router.get("/insights")
@@ -111,12 +181,24 @@ async def insights(
     by its sub-councils. Per-model and per-tool breakdowns include the sub-runs' events, since that
     is where the sub-councils' calls are recorded.
     """
-    since = datetime.now(UTC) - timedelta(days=days)
+    now = datetime.now(UTC)
+    since = now - timedelta(days=days)
+    # Only the columns used below: never the result text or the council snapshot.
+    columns = (Run.id, Run.status, Run.mode, Run.usage, Run.error, Run.created_at)
+    top_level = (Run.owner_id == principal.id, Run.parent_run_id.is_(None))
     runs = (
         await db.execute(
-            # Only the columns used below: never the result text or the council snapshot.
-            select(Run.id, Run.status, Run.mode, Run.usage, Run.error)
-            .where(Run.owner_id == principal.id, Run.parent_run_id.is_(None), Run.created_at >= since)
+            select(*columns)
+            .where(*top_level, Run.created_at >= since)
+            .order_by(Run.created_at.desc())
+            .limit(MAX_RUNS_ANALYSED)
+        )
+    ).all()
+    # The window before this one, the same length, for the deltas on the headline numbers.
+    previous = (
+        await db.execute(
+            select(Run.status, Run.usage)
+            .where(*top_level, Run.created_at >= since - timedelta(days=days), Run.created_at < since)
             .order_by(Run.created_at.desc())
             .limit(MAX_RUNS_ANALYSED)
         )
@@ -124,16 +206,7 @@ async def insights(
     run_ids = await descendant_run_ids(db, [r.id for r in runs])
     by_status = Counter(r.status for r in runs)
     by_mode = Counter(r.mode for r in runs)
-    usages = [r.usage or {} for r in runs]
-    durations = [u.get("runtime_s", 0) for u in usages if u.get("runtime_s")]
-    totals = {
-        "runs": len(runs),
-        "cost_usd": round(sum(float(u.get("usd", 0) or 0) for u in usages), 6),
-        "tokens_in": sum(int(u.get("tokens_in", 0) or 0) for u in usages),
-        "tokens_out": sum(int(u.get("tokens_out", 0) or 0) for u in usages),
-        "avg_runtime_s": round(sum(durations) / len(durations), 1) if durations else None,
-        "success_rate": _pct(by_status.get("completed", 0), len(runs)),
-    }
+    totals = _totals(list(runs))
     models: dict[str, dict[str, float]] = defaultdict(
         lambda: {"calls": 0, "cost_usd": 0.0, "tokens": 0, "latency_ms": 0}
     )
@@ -144,6 +217,10 @@ async def insights(
     intercepts: Counter[str] = Counter()
     intercept_actions: Counter[str] = Counter()
     approvals: Counter[str] = Counter()
+    approvals_auto = 0
+    tool_errors: dict[str, Counter[str]] = defaultdict(Counter)
+    # The first real message seen for each grouped error, shown instead of the masked key.
+    error_examples: dict[tuple[str, str], str] = {}
     for i in range(0, len(run_ids), 500):
         events = await db.execute(
             select(RunEvent.run_id, RunEvent.type, *_EVENT_FIELDS.values())
@@ -165,11 +242,15 @@ async def insights(
             elif etype == "tool.call.started":
                 tool_names[(run_id, d["tool_call_id"] or "")] = d["tool"] or "?"
             elif etype == "tool.call.completed":
-                t = tools[tool_names.get((run_id, d["tool_call_id"] or ""), "?")]
+                name = tool_names.get((run_id, d["tool_call_id"] or ""), "?")
+                t = tools[name]
                 t["calls"] += 1
                 t["total_ms"] += int(d["duration_ms"] or 0)
                 if d["status"] in ("error", "timeout"):
                     t["errors"] += 1
+                    key = _error_key(d["preview"])
+                    tool_errors[name][key] += 1
+                    error_examples.setdefault((name, key), _first_line(d["preview"]))
                 elif d["status"] == "blocked":
                     t["blocked"] += 1
             elif etype == "guardrail.violation":
@@ -179,6 +260,7 @@ async def insights(
                 intercept_actions[str(d["action"])] += 1
             elif etype == "approval.resolved":
                 approvals[str(d["decision"])] += 1
+                approvals_auto += d["by"] == "auto"
     failures = Counter(
         (r.error or "unknown").split(":")[0][:120] for r in runs if r.status in ("failed", "halted")
     )
@@ -186,6 +268,8 @@ async def insights(
         "window_days": days,
         "analysed_runs": len(runs),
         "totals": totals,
+        "previous_totals": _totals(list(previous)),
+        "series": _series(list(runs), since, now, days),
         "runs_by_status": dict(by_status),
         "runs_by_mode": dict(by_mode),
         "models": sorted(
@@ -209,6 +293,10 @@ async def insights(
                     "error_rate": _pct(int(v["errors"]), int(v["calls"])),
                     "blocked": int(v["blocked"]),
                     "avg_ms": int(v["total_ms"] / v["calls"]) if v["calls"] else 0,
+                    "top_errors": [
+                        {"error": error_examples.get((k, e), e), "count": c}
+                        for e, c in tool_errors[k].most_common(3)
+                    ],
                 }
                 for k, v in tools.items()
             ),
@@ -218,6 +306,7 @@ async def insights(
             "intercepts_by_reason": dict(intercepts),
             "intercepts_by_action": dict(intercept_actions),
             "approvals": dict(approvals),
+            "approvals_auto": approvals_auto,
         },
         "guardrail_violations": dict(violations.most_common(20)),
         "top_failures": [{"reason": k, "count": v} for k, v in failures.most_common(10)],

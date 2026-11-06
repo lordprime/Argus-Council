@@ -1,17 +1,23 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertOctagon, Clock, Coins, Download, Gauge, Hash, RefreshCw, ShieldAlert, type LucideIcon } from "lucide-react";
+import {
+  Activity, AlertOctagon, ArrowDownRight, ArrowUpRight, Clock, Coins, Download, Gauge, Hash, Minus, RefreshCw, ShieldAlert, type LucideIcon,
+} from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router";
 
 import {
-  AreaChart, BarChart, ChartCard, color, HeatGrid, seriesTone, Sparkline, StackedBar, StatusDot, type Segment, type Tone,
+  AreaChart, BarChart, ChartCard, HeatGrid, Meter, Sparkline, StackedBar, StackedColumns, StatusDot, type Column, type ColumnKey, type Segment,
+  type Tone,
 } from "@/components/insights/charts";
 import { InsightsPage } from "@/components/insights/InsightsPage";
-import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Segmented, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Segmented, Skeleton, StatusPill } from "@/components/ui";
 import {
-  bucketRuns, downloadText, fmtDuration, fmtNum, fmtUsd, RANGES, rateTone, ruleSeverity, SEVERITIES, sortedEntries, type Bucket, type RangeValue,
+  bucketRuns, delta, downloadText, fmtDuration, fmtNum, fmtUsd, RANGES, rateTone, ruleSeverity, seriesBuckets, SEVERITIES, sortedEntries, totalTokens,
+  type Bucket, type Delta, type RangeValue,
 } from "@/features/insights/logic";
 import { useInsightRuns, useInsights, useProviderHealth, type Insights as InsightsData, type ProviderWithHealth } from "@/features/insights/queries";
 import { cn } from "@/lib/cn";
+import { relTime } from "@/lib/format";
 import { modeMeta } from "@/lib/modes";
 import type { Run } from "@/lib/types";
 
@@ -19,37 +25,105 @@ const STATUS_TONE: Record<string, Tone> = {
   completed: "success", failed: "danger", halted: "warning", running: "info", planning: "info",
   awaiting_approval: "accent", paused: "warning", queued: "neutral", cancelled: "neutral",
 };
+const LIVE = new Set(["queued", "running", "paused"]);
+const OUTCOMES: ColumnKey[] = [
+  { key: "completed", label: "Completed", tone: "success" },
+  { key: "failed", label: "Failed", tone: "danger" },
+  { key: "halted", label: "Halted", tone: "warning" },
+  { key: "other", label: "Other", tone: "neutral" },
+];
 
-function KpiCard({ icon: Icon, label, value, sub, spark, tone, kind }: {
-  icon: LucideIcon; label: string; value: string; sub: string; spark: number[]; tone: Tone; kind?: "line" | "bars";
+/** Sentence case for status strings from the server ("rate_limited" -> "Rate limited"). */
+const sentence = (s: string) => { const t = s.replace(/_/g, " "); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); };
+
+// ---------------------------------------------------------------- KPI tiles
+/** Which way is good for a delta: success up is good; amounts (runs, spend, tokens) are not judged. */
+type Better = "up" | "down" | null;
+
+function KpiTile({ icon: Icon, label, value, change, better, prior, spark, kind }: {
+  icon: LucideIcon; label: string; value: string; change: Delta | null; better: Better; prior: string; spark: number[]; kind?: "line" | "bars";
 }) {
+  const good = change && better && change.direction !== "flat" ? change.direction === better : null;
+  const Arrow = !change || change.direction === "flat" ? Minus : change.direction === "up" ? ArrowUpRight : ArrowDownRight;
   return (
-    <Card as="article" className="p-4 flex flex-col gap-2 min-w-0" aria-label={label}>
-      <h2 className="flex items-center gap-1.5 text-sm text-fg-muted font-medium">
+    <Card as="article" className="flex min-w-0 flex-col gap-1.5 p-4" aria-label={label}>
+      <h2 className="flex items-center gap-1.5 text-sm font-medium text-fg-muted">
         <Icon className="size-3.5 text-fg-subtle" aria-hidden />{label}
       </h2>
-      <p className="text-2xl font-display tabular" data-testid={`kpi-${label}`}>{value}</p>
-      <p className="text-xs text-fg-subtle truncate">{sub}</p>
-      <Sparkline values={spark} tone={tone} kind={kind} />
+      {/* Proportional sans figures at display size (tabular spacing reads loose this large). */}
+      <p className="text-[1.75rem] font-semibold leading-tight tracking-tight" data-testid={`kpi-${label}`}>{value}</p>
+      <p className="flex min-h-5 items-center gap-1 text-xs text-fg-muted">
+        {change ? (
+          <>
+            <Arrow className={cn("size-3.5 shrink-0", good === true ? "text-success" : good === false ? "text-danger" : "text-fg-subtle")} aria-hidden />
+            <span className="font-medium text-fg">{change.text}</span>
+            <span className="truncate">vs {prior}</span>
+            {good != null && <span className="sr-only">{good ? "(better)" : "(worse)"}</span>}
+          </>
+        ) : <span className="text-fg-subtle">No earlier period to compare</span>}
+      </p>
+      <div className="mt-auto pt-1"><Sparkline values={spark} kind={kind} /></div>
     </Card>
   );
 }
 
-function Panel({ title, description, children, className }: { title: string; description?: string; children: ReactNode; className?: string }) {
+function Panel({ title, description, children, className, actions }: {
+  title: string; description?: string; children: ReactNode; className?: string; actions?: ReactNode;
+}) {
   return (
-    <Card className={cn("p-4 flex flex-col gap-3 min-w-0", className)} aria-label={title}>
-      <div>
-        <CardTitle as="h2">{title}</CardTitle>
-        {description && <p className="text-xs text-fg-subtle">{description}</p>}
+    <Card className={cn("flex min-w-0 flex-col gap-3 p-4", className)} aria-label={title}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <CardTitle as="h2">{title}</CardTitle>
+          {description && <p className="text-xs text-fg-subtle">{description}</p>}
+        </div>
+        {actions}
       </div>
       {children}
     </Card>
   );
 }
 
-/** Sentence case for status strings from the server ("rate_limited" -> "Rate limited"). */
-const sentence = (s: string) => { const t = s.replace(/_/g, " "); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); };
+// ---------------------------------------------------------------- Right now
+function NowPanel({ runs }: { runs: Run[] }) {
+  const live = runs.filter((r) => LIVE.has(r.status));
+  const waiting = (r: Run) => (r.pending_approvals ?? 0) > 0;
+  const count = (pred: (r: Run) => boolean) => live.filter(pred).length;
+  const stats = [
+    { label: "Working", value: count((r) => r.status !== "paused" && !waiting(r)) },
+    { label: "Waiting for you", value: count(waiting) },
+    { label: "Paused", value: count((r) => r.status === "paused") },
+  ];
+  // Runs waiting for an answer first.
+  const ordered = [...live].sort((a, b) => Number(waiting(b)) - Number(waiting(a)));
+  return (
+    <Panel title="Right now" description="Runs that are still live."
+      actions={<Link to="/runs" className="inline-flex min-h-6 items-center gap-0.5 text-xs text-fg-muted hover:text-accent">All runs<ArrowUpRight className="size-3.5" aria-hidden /></Link>}>
+      <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border">
+        {stats.map((s) => (
+          <div key={s.label} className="bg-surface px-3 py-2">
+            <dt className="truncate text-xs text-fg-subtle">{s.label}</dt>
+            <dd className={cn("text-xl font-semibold", s.label === "Waiting for you" && s.value > 0 && "text-accent")}>{s.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {live.length === 0 ? (
+        <p className="text-sm text-fg-muted">Nothing running. Start a run from <Link to="/" className="text-accent underline">Home</Link>.</p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border">
+          {ordered.slice(0, 6).map((r) => (
+            <li key={r.id} className="flex min-w-0 items-center gap-2 py-2">
+              <Link to={`/runs/${r.id}`} className="min-w-0 flex-1 truncate text-sm hover:text-accent" title={r.topic}>{r.topic}</Link>
+              {waiting(r) ? <StatusPill status="awaiting_approval" /> : <StatusPill status={r.status} />}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
 
+// ---------------------------------------------------------------- Providers
 function healthTone(status: string | null | undefined): { tone: Tone; label: string } {
   if (!status) return { tone: "neutral", label: "Not probed" };
   const label = sentence(status);
@@ -58,109 +132,137 @@ function healthTone(status: string | null | undefined): { tone: Tone; label: str
   return { tone: "danger", label };
 }
 
-function ModelTiles({ data, providers }: { data: InsightsData; providers: ProviderWithHealth[] }) {
+function ModelHealth({ data, providers }: { data: InsightsData; providers: ProviderWithHealth[] }) {
   const byName = new Map(providers.map((p) => [p.name, p]));
   const seen = new Set<string>();
-  const tiles = data.models.map((m) => {
+  const rows = data.models.map((m) => {
     const prov = m.model.split("/")[0] ?? "";
     seen.add(prov);
     const p = byName.get(prov);
-    const h = healthTone(p?.health_status);
-    return { key: m.model, title: m.model, latency: p?.health_latency_ms ?? m.avg_latency_ms, calls: m.calls, ...h };
+    return { key: m.model, title: m.model, latency: p?.health_latency_ms ?? m.avg_latency_ms, calls: m.calls, ...healthTone(p?.health_status) };
   });
   for (const p of providers) {
     if (seen.has(p.name)) continue;
     const h = p.enabled ? healthTone(p.health_status) : { tone: "neutral" as Tone, label: "Disabled" };
-    tiles.push({ key: p.id, title: p.default_model ? `${p.name}/${p.default_model}` : p.name, latency: p.health_latency_ms ?? 0, calls: 0, ...h });
+    rows.push({ key: p.id, title: p.default_model ? `${p.name}/${p.default_model}` : p.name, latency: p.health_latency_ms ?? 0, calls: 0, ...h });
   }
-  if (!tiles.length) return <p className="text-sm text-fg-muted">No model calls or providers yet.</p>;
+  if (!rows.length) return <p className="text-sm text-fg-muted">No model calls or providers yet.</p>;
   return (
-    <ul className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-3 gap-2">
-      {tiles.map((t) => (
-        <li key={t.key} className="rounded-lg border border-border bg-surface-2/60 p-3 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <StatusDot tone={t.tone} label={`Status: ${t.label}`} />
-            <p className="text-sm font-medium truncate" title={t.title}>{t.title}</p>
-          </div>
-          <dl className="mt-2 grid grid-cols-2 gap-1 text-xs">
-            <div><dt className="text-fg-subtle">Latency</dt><dd className="tabular font-semibold">{t.latency ? `${fmtNum(t.latency)} ms` : "—"}</dd></div>
-            <div><dt className="text-fg-subtle">Calls</dt><dd className="tabular font-semibold">{fmtNum(t.calls)}</dd></div>
-          </dl>
-          <p className="mt-1 text-xs text-fg-subtle">{t.label}</p>
-        </li>
-      ))}
-    </ul>
+    <div className="-mx-4 overflow-x-auto">
+      <table className="w-full text-sm">
+        <caption className="sr-only">Models and provider health</caption>
+        <thead className="text-left text-xs text-fg-subtle">
+          <tr className="border-b border-border">
+            <th scope="col" className="px-4 py-1.5 font-medium">Model</th>
+            <th scope="col" className="px-2 py-1.5 font-medium">Status</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Latency</th>
+            <th scope="col" className="px-4 py-1.5 text-right font-medium">Calls</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.map((r) => (
+            <tr key={r.key}>
+              <th scope="row" className="max-w-[16rem] truncate px-4 py-2 text-left font-normal" title={r.title}>{r.title}</th>
+              <td className="whitespace-nowrap px-2 py-2"><span className="inline-flex items-center gap-1.5"><StatusDot tone={r.tone} label="" />{r.label}</span></td>
+              <td className="whitespace-nowrap px-2 py-2 text-right tabular">{r.latency ? `${fmtNum(r.latency)} ms` : "—"}</td>
+              <td className="px-4 py-2 text-right tabular">{fmtNum(r.calls)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-function ToolTiles({ data }: { data: InsightsData }) {
+// ---------------------------------------------------------------- Tools
+const RELIABILITY: Record<Tone, string> = { success: "Reliable", warning: "Some errors", danger: "Unreliable", accent: "", info: "", neutral: "" };
+
+function ToolTable({ data }: { data: InsightsData }) {
   if (!data.tools.length) return <p className="text-sm text-fg-muted">No tool calls in this window.</p>;
   return (
-    <ul className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-3 gap-2">
-      {data.tools.map((t) => {
-        const tone = rateTone(t.error_rate);
-        return (
-          <li key={t.tool} className="rounded-lg border border-border bg-surface-2/60 p-3 min-w-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <StatusDot tone={tone} label={tone === "success" ? "Reliable" : tone === "warning" ? "Some errors" : "Unreliable"} />
-              <p className="text-sm font-mono truncate" title={t.tool}>{t.tool}</p>
-            </div>
-            <dl className="mt-2 grid grid-cols-3 gap-1 text-xs">
-              <div><dt className="text-fg-subtle">Errors</dt><dd className="tabular font-semibold" style={{ color: color(tone) }}>{t.error_rate}%</dd></div>
-              <div><dt className="text-fg-subtle">Calls</dt><dd className="tabular font-semibold">{fmtNum(t.calls)}</dd></div>
-              <div><dt className="text-fg-subtle">Avg</dt><dd className="tabular font-semibold">{fmtNum(t.avg_ms)} ms</dd></div>
-            </dl>
-            {t.blocked > 0 && <Badge tone="warning" className="mt-2">{t.blocked} blocked</Badge>}
-          </li>
-        );
-      })}
-    </ul>
+    <div className="-mx-4 overflow-x-auto">
+      <table className="w-full min-w-[44rem] text-sm">
+        <caption className="sr-only">Tool reliability, most error-prone first</caption>
+        <thead className="text-left text-xs text-fg-subtle">
+          <tr className="border-b border-border">
+            <th scope="col" className="px-4 py-1.5 font-medium">Tool</th>
+            <th scope="col" className="px-2 py-1.5 font-medium">Errors</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Calls</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Avg time</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Blocked</th>
+            <th scope="col" className="px-4 py-1.5 font-medium">Most common error</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {data.tools.map((t) => {
+            const tone = rateTone(t.error_rate);
+            const top = t.top_errors?.[0];
+            return (
+              <tr key={t.tool}>
+                <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-mono font-normal">{t.tool}</th>
+                <td className="whitespace-nowrap px-2 py-2">
+                  <span className="inline-flex items-center gap-2">
+                    <Meter value={t.error_rate} tone={tone} />
+                    <span className="w-12 text-right tabular font-semibold">{t.error_rate}%</span>
+                    <span className="text-xs text-fg-subtle">{RELIABILITY[tone]}</span>
+                  </span>
+                </td>
+                <td className="px-2 py-2 text-right tabular">{fmtNum(t.calls)}</td>
+                <td className="whitespace-nowrap px-2 py-2 text-right tabular">{fmtNum(t.avg_ms)} ms</td>
+                <td className="px-2 py-2 text-right tabular">{t.blocked || "—"}</td>
+                <td className="max-w-[22rem] px-4 py-2 text-xs text-fg-muted">
+                  {top ? <span className="line-clamp-2 break-words" title={`${top.count} like this, for example: ${top.error}`}>{top.error} <span className="whitespace-nowrap text-fg-subtle">×{top.count}</span></span> : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
+// ---------------------------------------------------------------- Oversight
 function Oversight({ data }: { data: InsightsData }) {
   const reasons = sortedEntries(data.oversight.intercepts_by_reason);
   const total = reasons.reduce((s, [, v]) => s + v, 0);
+  const max = Math.max(1, ...reasons.map(([, v]) => v));
   const actions = sortedEntries(data.oversight.intercepts_by_action);
   const approvals = sortedEntries(data.oversight.approvals);
+  const resolved = approvals.reduce((s, [, v]) => s + v, 0);
+  const auto = data.oversight.approvals_auto ?? 0;
   return (
-    <Panel title="Oversight" description={`${total} intercept${total === 1 ? "" : "s"} raised; ${approvals.reduce((s, [, v]) => s + v, 0)} approvals resolved`}>
+    <Panel title="Oversight" description={`${total} intercept${total === 1 ? "" : "s"} raised; ${resolved} approvals resolved`}>
       {reasons.length === 0 ? <p className="text-sm text-fg-muted">No intercepts in this window.</p> : (
-        <ul className="flex flex-col gap-2.5" aria-label="Intercepts by reason">
-          {reasons.map(([k, v], i) => {
-            const tone = seriesTone(i);
-            const pct = total ? Math.round((v / total) * 100) : 0;
-            return (
-              <li key={k} className="flex flex-col gap-1">
-                <div className="flex justify-between gap-2 text-sm">
-                  <span className="inline-flex items-center gap-1.5 min-w-0"><span aria-hidden className="size-2.5 rounded-sm shrink-0" style={{ background: color(tone) }} /><span className="truncate">{k}</span></span>
-                  <span className="tabular text-fg-muted">{v} · {pct}%</span>
-                </div>
-                <div className="h-2 rounded-full bg-surface-2 overflow-hidden" role="progressbar" aria-label={k} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color(tone) }} />
-                </div>
-              </li>
-            );
-          })}
+        <ul className="flex flex-col gap-2" aria-label="Intercepts by reason">
+          {reasons.map(([k, v]) => (
+            <li key={k} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-3 text-sm">
+              <span className="truncate text-fg-muted" title={k}>{sentence(k)}</span>
+              <span aria-hidden className="h-2.5 rounded-sm bg-accent" style={{ width: `${Math.max(3, (v / max) * 100)}%` }} />
+              <span className="tabular">{v}</span>
+            </li>
+          ))}
         </ul>
       )}
       {actions.length > 0 && (
-        <div>
-          <h3 className="text-xs text-fg-subtle mb-1">Actions taken</h3>
-          <ul className="flex flex-wrap gap-1.5">{actions.map(([k, v]) => <li key={k}><Badge tone="neutral">{k} · {v}</Badge></li>)}</ul>
-        </div>
+        <p className="text-xs text-fg-subtle">
+          Actions taken: {actions.map(([k, v]) => `${sentence(k)} ${v}`).join(" · ")}
+        </p>
       )}
       <div>
-        <h3 className="text-xs text-fg-subtle mb-1">Approvals</h3>
+        <h3 className="mb-1.5 text-xs text-fg-subtle">Approvals</h3>
         {approvals.length === 0 ? <p className="text-sm text-fg-muted">None resolved.</p> : (
-          <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {approvals.map(([k, v]) => (
-              <div key={k} className="rounded-lg bg-surface-2/60 p-2">
-                <dt className="text-xs text-fg-subtle">{sentence(k)}</dt>
-                <dd className="text-xl tabular">{v}</dd>
-              </div>
-            ))}
-          </dl>
+          <>
+            <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border">
+              {approvals.map(([k, v]) => (
+                <div key={k} className="bg-surface px-3 py-2">
+                  <dt className="text-xs text-fg-subtle">{sentence(k)}</dt>
+                  <dd className="text-xl font-semibold">{v}</dd>
+                </div>
+              ))}
+            </dl>
+            {auto > 0 && <p className="mt-1.5 text-xs text-fg-subtle">{auto} of {resolved} answered by auto mode.</p>}
+          </>
         )}
       </div>
     </Panel>
@@ -199,80 +301,140 @@ function violationGrid(data: InsightsData, runs: Run[], buckets: Bucket[], days:
   };
 }
 
+// ---------------------------------------------------------------- Costliest runs
+function CostliestRuns({ runs, since }: { runs: Run[]; since: number }) {
+  const top = runs
+    .filter((r) => Date.parse(r.created_at) >= since && Number(r.usage?.usd ?? 0) > 0)
+    .sort((a, b) => Number(b.usage?.usd ?? 0) - Number(a.usage?.usd ?? 0))
+    .slice(0, 8);
+  if (!top.length) return <p className="text-sm text-fg-muted">No spend in this window.</p>;
+  return (
+    <div className="-mx-4 overflow-x-auto">
+      <table className="w-full min-w-[40rem] text-sm">
+        <caption className="sr-only">The most expensive runs in this window</caption>
+        <thead className="text-left text-xs text-fg-subtle">
+          <tr className="border-b border-border">
+            <th scope="col" className="px-4 py-1.5 font-medium">Run</th>
+            <th scope="col" className="px-2 py-1.5 font-medium">Status</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Spend</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Tokens</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">Runtime</th>
+            <th scope="col" className="px-4 py-1.5 text-right font-medium">Started</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {top.map((r) => (
+            <tr key={r.id}>
+              <th scope="row" className="max-w-[24rem] px-4 py-2 text-left font-normal">
+                <Link to={`/runs/${r.id}`} className="block truncate hover:text-accent" title={r.topic}>{r.topic}</Link>
+                <span className="text-xs text-fg-subtle">{modeMeta(r.mode).label}</span>
+              </th>
+              <td className="px-2 py-2"><StatusPill status={r.status} /></td>
+              <td className="px-2 py-2 text-right tabular font-semibold">{fmtUsd(Number(r.usage?.usd ?? 0))}</td>
+              <td className="px-2 py-2 text-right tabular">{fmtNum(Number(r.usage?.tokens_in ?? 0) + Number(r.usage?.tokens_out ?? 0))}</td>
+              <td className="whitespace-nowrap px-2 py-2 text-right tabular">{fmtDuration(r.usage?.runtime_s ?? null)}</td>
+              <td className="whitespace-nowrap px-4 py-2 text-right text-fg-muted">{relTime(r.created_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Dashboard
 function Dashboard({ data, runs, providers, days }: { data: InsightsData; runs: Run[]; providers: ProviderWithHealth[]; days: number }) {
-  const buckets = useMemo(() => bucketRuns(runs, days), [runs, days]);
+  const buckets = useMemo(() => (data.series ? seriesBuckets(data.series, days) : bucketRuns(runs, days)), [data.series, runs, days]);
   const t = data.totals;
-  const tokens = t.tokens_in + t.tokens_out;
+  const p = data.previous_totals;
   const unit = days <= 1 ? "hour" : "day";
+  const window = `last ${days === 1 ? "24 hours" : `${days} days`}`;
+  const prior = `prior ${days === 1 ? "24 hours" : `${days} days`}`;
   const runsSeries = buckets.map((b) => b.runs);
   const peak = buckets.reduce<Bucket | undefined>((m, b) => (!m || b.runs > m.runs ? b : m), undefined);
   const models = data.models.map((m) => ({ label: m.model, value: m.cost_usd, display: fmtUsd(m.cost_usd), detail: `${m.calls} calls · ${fmtNum(m.tokens)} tokens` }));
-  const statusSegs: Segment[] = sortedEntries(data.runs_by_status).map(([k, v]) => ({ label: k.replace(/_/g, " "), value: v, tone: STATUS_TONE[k] ?? "neutral" }));
-  const modeSegs: Segment[] = sortedEntries(data.runs_by_mode).map(([k, v], i) => ({ label: modeMeta(k).label, value: v, tone: seriesTone(i) }));
+  const statusSegs: Segment[] = sortedEntries(data.runs_by_status).map(([k, v]) => ({ label: sentence(k), value: v, tone: STATUS_TONE[k] ?? "neutral" }));
+  const modes = sortedEntries(data.runs_by_mode).map(([k, v]) => ({ label: modeMeta(k).label, value: v, display: String(v) }));
   const grid = violationGrid(data, runs, buckets, days);
   const maxFail = Math.max(1, ...data.top_failures.map((f) => f.count));
-  const window = `last ${days === 1 ? "24 hours" : `${days} days`}`;
+  const flaky = data.tools.filter((x) => x.error_rate >= 20).length;
+  const columns: Column[] = buckets.map((b) => ({
+    label: b.label,
+    values: { completed: b.completed, failed: b.failed - b.halted, halted: b.halted, other: Math.max(0, b.runs - b.completed - b.failed) },
+    detail: b.usd ? `${fmtUsd(b.usd)} spent` : undefined,
+  }));
+  const spentInView = buckets.reduce((s, b) => s + b.usd, 0);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-        <KpiCard icon={Activity} label="Runs" value={fmtNum(t.runs)} sub={`${data.analysed_runs} analysed · ${window}`} spark={runsSeries} tone="accent" kind="bars" />
-        <KpiCard icon={Gauge} label="Success rate" value={`${t.success_rate}%`} sub={`${data.runs_by_status.completed ?? 0} completed`}
-          spark={buckets.map((b) => (b.runs ? (b.completed / b.runs) * 100 : 0))} tone={t.success_rate >= 80 ? "success" : t.success_rate >= 50 ? "warning" : "danger"} />
-        <KpiCard icon={Coins} label="Spend" value={fmtUsd(t.cost_usd)} sub={t.runs ? `${fmtUsd(t.cost_usd / t.runs)} per run` : "No runs"} spark={buckets.map((b) => b.usd)} tone="info" />
-        <KpiCard icon={Hash} label="Tokens" value={fmtNum(tokens)} sub={`${fmtNum(t.tokens_in)} in · ${fmtNum(t.tokens_out)} out`} spark={buckets.map((b) => b.tokens)} tone="accent" kind="bars" />
-        <KpiCard icon={Clock} label="Avg runtime" value={fmtDuration(t.avg_runtime_s)} sub="Per finished run" spark={buckets.map((b) => (b.runtimeN ? b.runtime / b.runtimeN : 0))} tone="neutral" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
+        <KpiTile icon={Activity} label="Runs" value={fmtNum(t.runs)} change={delta(t.runs, p?.runs)} better={null} prior={prior} spark={runsSeries} kind="bars" />
+        <KpiTile icon={Gauge} label="Success rate" value={`${t.success_rate}%`} change={p?.runs ? delta(t.success_rate, p.success_rate, "points") : null} better="up" prior={prior}
+          spark={buckets.map((b) => (b.runs ? (b.completed / b.runs) * 100 : 0))} />
+        <KpiTile icon={Coins} label="Spend" value={fmtUsd(t.cost_usd)} change={delta(t.cost_usd, p?.cost_usd)} better={null} prior={prior} spark={buckets.map((b) => b.usd)} />
+        <KpiTile icon={Hash} label="Tokens" value={fmtNum(totalTokens(t))} change={p ? delta(totalTokens(t), totalTokens(p)) : null} better={null} prior={prior}
+          spark={buckets.map((b) => b.tokens)} kind="bars" />
+        <KpiTile icon={Clock} label="Avg runtime" value={fmtDuration(t.avg_runtime_s)} change={delta(t.avg_runtime_s, p?.avg_runtime_s)} better={null} prior={prior}
+          spark={buckets.map((b) => (b.runtimeN ? b.runtime / b.runtimeN : 0))} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard className="lg:col-span-2" title="Runs by outcome"
+          summary={peak && peak.runs ? `${runsSeries.reduce((a, b) => a + b, 0)} runs in the ${window}; busiest ${unit} ${peak.label} with ${peak.runs}.` : `No runs in the ${window}.`}
+          table={{ columns: [days <= 1 ? "Hour" : "Day", "Runs", "Completed", "Failed", "Halted", "Spend"], rows: buckets.map((b) => [b.label, b.runs, b.completed, b.failed - b.halted, b.halted, fmtUsd(b.usd)]) }}>
+          <StackedColumns columns={columns} keys={OUTCOMES} label={`Runs per ${unit} by outcome, ${window}`} />
+        </ChartCard>
+        <NowPanel runs={runs} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard className="lg:col-span-2" title="Spend over time"
+          summary={spentInView ? `${fmtUsd(spentInView)} across the ${window}.` : `No spend in the ${window}.`}
+          table={{ columns: [days <= 1 ? "Hour" : "Day", "Spend", "Tokens", "Runs"], rows: buckets.map((b) => [b.label, fmtUsd(b.usd), fmtNum(b.tokens), b.runs]) }}>
+          <AreaChart label={`Spend per ${unit}, ${window}`} format={fmtUsd}
+            points={buckets.map((b) => ({ label: b.label, value: b.usd, detail: `${b.runs} runs · ${fmtNum(b.tokens)} tokens` }))} />
+        </ChartCard>
         <ChartCard title="Spend by model" summary={models[0] ? `${models.length} models; ${models[0].label} cost the most at ${models[0].display}.` : "No model calls in this window."}
           table={{ columns: ["Model", "Spend", "Calls", "Tokens", "Avg latency"], rows: data.models.map((m) => [m.model, fmtUsd(m.cost_usd), m.calls, fmtNum(m.tokens), `${m.avg_latency_ms} ms`]) }}>
           {models.length ? <BarChart data={models} label={`Spend by model, ${window}`} /> : <p className="text-sm text-fg-muted">No model calls yet.</p>}
         </ChartCard>
-        <ChartCard title="Runs over time"
-          summary={peak && peak.runs ? `${runsSeries.reduce((a, b) => a + b, 0)} runs in view; busiest ${unit} ${peak.label} with ${peak.runs}.` : `No runs in the ${window}.`}
-          table={{ columns: [days <= 1 ? "Hour" : "Day", "Runs", "Completed", "Failed", "Spend"], rows: buckets.map((b) => [b.label, b.runs, b.completed, b.failed, fmtUsd(b.usd)]) }}>
-          <AreaChart label={`Runs per ${unit}, ${window}`} format={(v) => fmtNum(v)}
-            points={buckets.map((b) => ({ label: b.label, value: b.runs, detail: `${b.completed} completed · ${b.failed} failed · ${fmtUsd(b.usd)}` }))} />
-        </ChartCard>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Model & provider health" description="Latency from the provider health probe when available, otherwise the average call latency.">
-          <ModelTiles data={data} providers={providers} />
-        </Panel>
-        <Panel title="Tool reliability" description="Error rate per tool. Green under 5%, amber under 20%, red above.">
-          <ToolTiles data={data} />
-        </Panel>
-      </div>
+      <Panel title="Tool reliability"
+        description={flaky ? `${flaky} tool${flaky === 1 ? "" : "s"} failing on 20% or more of calls. Most error-prone first.` : "Error rate per tool: under 5% reliable, under 20% some errors, above that unreliable."}>
+        <ToolTable data={data} />
+      </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Models and providers" description="Latency from the provider health probe when available, otherwise the average call latency.">
+          <ModelHealth data={data} providers={providers} />
+        </Panel>
         <Oversight data={data} />
-        <ChartCard title="Run distribution" summary={`${t.runs} runs across ${statusSegs.length} statuses and ${modeSegs.length} modes.`}
-          table={{ columns: ["Group", "Runs"], rows: [...statusSegs.map((s) => [`Status: ${s.label}`, s.value]), ...modeSegs.map((s) => [`Mode: ${s.label}`, s.value])] }}>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard title="Run mix" summary={`${t.runs} runs across ${statusSegs.length} statuses and ${modes.length} modes.`}
+          table={{ columns: ["Group", "Runs"], rows: [...statusSegs.map((s) => [`Status: ${s.label}`, s.value]), ...modes.map((m) => [`Mode: ${m.label}`, m.value])] }}>
           <div className="flex flex-col gap-4">
-            <div><h3 className="text-xs text-fg-subtle mb-1.5">By status</h3>
+            <div><h3 className="mb-1.5 text-xs text-fg-subtle">By status</h3>
               <StackedBar segments={statusSegs} label={`Runs by status: ${statusSegs.map((s) => `${s.label} ${s.value}`).join(", ") || "none"}`} /></div>
-            <div><h3 className="text-xs text-fg-subtle mb-1.5">By mode</h3>
-              <StackedBar segments={modeSegs} label={`Runs by mode: ${modeSegs.map((s) => `${s.label} ${s.value}`).join(", ") || "none"}`} /></div>
+            <div><h3 className="mb-1.5 text-xs text-fg-subtle">By mode</h3>
+              {modes.length ? <BarChart data={modes} label={`Runs by mode: ${modes.map((m) => `${m.label} ${m.value}`).join(", ")}`} /> : <p className="text-sm text-fg-muted">No runs.</p>}</div>
           </div>
         </ChartCard>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="Top failures" description="Failed and halted runs grouped by error.">
           {data.top_failures.length === 0 ? <p className="text-sm text-fg-muted">No failures in this window.</p> : (
             <ol className="flex flex-col divide-y divide-border">
               {data.top_failures.map((f) => (
-                <li key={f.reason} className="flex items-center gap-3 py-2 min-w-0">
-                  <AlertOctagon className="size-4 text-danger shrink-0" aria-hidden />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm truncate" title={f.reason}>{f.reason}</p>
-                    <div className="mt-1 h-1.5 rounded-full bg-surface-2 overflow-hidden" aria-hidden>
+                <li key={f.reason} className="flex min-w-0 items-center gap-3 py-2">
+                  <AlertOctagon className="size-4 shrink-0 text-danger" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm" title={f.reason}>{f.reason}</p>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
                       <div className="h-full rounded-full bg-danger" style={{ width: `${(f.count / maxFail) * 100}%` }} />
                     </div>
                   </div>
-                  <span className="text-xl tabular shrink-0">{f.count}</span>
+                  <span className="shrink-0 text-lg font-semibold tabular">{f.count}</span>
                 </li>
               ))}
             </ol>
@@ -284,10 +446,14 @@ function Dashboard({ data, runs, providers, days }: { data: InsightsData; runs: 
             <HeatGrid rows={grid.rows} cols={grid.cols} values={grid.values} label={`Guardrail violations heat grid: ${grid.caption}`} />
           </ChartCard>
         ) : (
-          <Panel title="Guardrail violations"><p className="text-sm text-fg-muted inline-flex items-center gap-2"><ShieldAlert className="size-4" aria-hidden />No guardrail violations in this window.</p></Panel>
+          <Panel title="Guardrail violations"><p className="inline-flex items-center gap-2 text-sm text-fg-muted"><ShieldAlert className="size-4" aria-hidden />No guardrail violations in this window.</p></Panel>
         )}
       </div>
-      {runs.length >= 200 && <p className="text-xs text-fg-subtle">Time series use the newest 200 runs; totals above cover every run in the window.</p>}
+
+      <Panel title="Costliest runs" description={`The runs that spent the most in the ${window}.`}>
+        <CostliestRuns runs={runs} since={buckets[0]?.start ?? 0} />
+      </Panel>
+      {!data.series && runs.length >= 200 && <p className="text-xs text-fg-subtle">Time series use the newest 200 runs; totals above cover every run in the window.</p>}
     </div>
   );
 }

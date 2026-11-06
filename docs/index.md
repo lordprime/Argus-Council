@@ -19,8 +19,8 @@ correct any agent, or the whole council, at any moment.
     **0.1.3** adds **auto mode**, so agents run without stopping to ask, with an optional
     switch that raises step, turn, runtime and token limits automatically. `web_fetch`,
     `knowledge_read` and `artifact_read` now recover from common failures. The protocol ledger
-    also records the agents' outbound web requests. Home becomes a real home page, and there
-    are six colour palettes to choose from. Recent additions:
+    also records the agents' outbound web requests. Home becomes a real home page, the Insights
+    dashboard is rebuilt, and there are six colour palettes to choose from. Recent additions:
 
     * **[Skills marketplace](concepts/skills.md#marketplace)**: eight curated skills to install,
       plus version history and restore for every skill you edit.

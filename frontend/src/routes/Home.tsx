@@ -520,8 +520,12 @@ function ProviderGlance() {
 const today = () => new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" }).format(new Date());
 
 export default function Home() {
-  const waiting = useRunsList({ status: "awaiting_approval", limit: 5 });
-  const active = useRunsList({ status: "running", limit: 10 });
+  const running = useRunsList({ status: "running", limit: 20 });
+  const paused = useRunsList({ status: "paused", limit: 20 });
+  // Live runs with an approval request open come first; the rest are just working.
+  const live = [...(running.data ?? []), ...(paused.data ?? [])];
+  const waiting = live.filter((r) => (r.pending_approvals ?? 0) > 0);
+  const active = live.filter((r) => !waiting.includes(r));
   const recent = useRunsList({ limit: 10 });
   return (
     <Page width="wide" className="max-w-[1240px]">
@@ -531,16 +535,16 @@ export default function Home() {
       <div className="grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_17rem] xl:grid-cols-[minmax(0,1fr)_19rem]">
         <div className="flex flex-col gap-10 min-w-0">
           <Composer />
-          {waiting.data && waiting.data.length > 0 && (
+          {waiting.length > 0 && (
             <section aria-labelledby="waiting-h">
-              <SectionTitle id="waiting-h" count={waiting.data.length} description="These runs are paused until you answer.">Needs you</SectionTitle>
-              <Card as="div" className="border-accent/40"><RunRowList runs={waiting.data} /></Card>
+              <SectionTitle id="waiting-h" count={waiting.length} description="These runs are waiting for your approval.">Needs you</SectionTitle>
+              <Card as="div" className="border-accent/40"><RunRowList runs={waiting} /></Card>
             </section>
           )}
-          {active.data && active.data.length > 0 && (
+          {active.length > 0 && (
             <section aria-labelledby="active-h">
-              <SectionTitle id="active-h" count={active.data.length}>Active</SectionTitle>
-              <Card as="div"><RunRowList runs={active.data} /></Card>
+              <SectionTitle id="active-h" count={active.length}>Active</SectionTitle>
+              <Card as="div"><RunRowList runs={active} /></Card>
             </section>
           )}
           <section aria-labelledby="recent-h">

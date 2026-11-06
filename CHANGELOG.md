@@ -34,6 +34,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **The Insights dashboard is rebuilt.**
+  - Each headline number shows its change against the previous window of the same length.
+  - Runs per day are stacked by outcome, next to a *Right now* panel of live runs and the ones
+    waiting for your approval.
+  - Spend over time sits beside spend by model.
+  - *Tool reliability* is now a table: error rate, calls, average time, and each tool's most
+    common error.
+  - It also has a model and provider health table, oversight with the auto-approved share, the
+    run mix, top failures, guardrail violations, and the costliest runs.
+  - `GET /insights` adds `previous_totals`, a per-hour or per-day `series` (computed on the
+    server, no longer from the newest 200 runs), each tool's `top_errors` and
+    `oversight.approvals_auto`.
+  - Charts follow one set of rules: status colours mean status and nothing else, gridlines are
+    solid, bars are thin, and headline numbers are set in the sans face.
+- The runs list includes `pending_approvals` for live runs, so Home's *Needs you* and the
+  dashboard can tell which runs are waiting for an answer.
 - **Home is a home page.** The composer leads, and its configuration folds into one *Run settings*
   row that summarises the choices. Runs waiting for you come first. A side rail shows the last
   7 days, tools above 20% errors, and whether model providers are answering.

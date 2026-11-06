@@ -98,6 +98,7 @@ async def plan_run(data: PlanIn, principal: CurrentPrincipal, db: DbDep, request
 
 @router.get("", response_model=list[RunOut])
 async def list_runs(
+    request: Request,
     principal: CurrentPrincipal,
     db: DbDep,
     status_: str | None = Query(default=None, alias="status"),
@@ -114,9 +115,10 @@ async def list_runs(
     ),
 ):
     # Only the RunOut columns: never the result text or the council snapshot (polled every 10 s).
+    columns = [f for f in RunOut.model_fields if f != "pending_approvals"]
     q = (
         select(Run)
-        .options(load_only(*(getattr(Run, f) for f in RunOut.model_fields)))
+        .options(load_only(*(getattr(Run, f) for f in columns)))
         .where(Run.owner_id == principal.id, Run.parent_run_id.is_(None))
     )
     if view == "trash":
@@ -139,7 +141,12 @@ async def list_runs(
     if council_id:
         q = q.where(Run.council_id == council_id)
     rows = await db.execute(q.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit))
-    return list(rows.scalars())
+    runs = list(rows.scalars())
+    manager = _manager(request)
+    out = [RunOut.model_validate(r) for r in runs]
+    for item in out:
+        item.pending_approvals = manager.pending_approvals(item.id)
+    return out
 
 
 @router.get("/{run_id}", response_model=RunDetail)

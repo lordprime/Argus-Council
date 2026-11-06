@@ -2,7 +2,7 @@
 
 import type { Run } from "@/lib/types";
 
-import type { AuditEvent } from "./queries";
+import type { AuditEvent, InsightsTotals, SeriesPoint } from "./queries";
 
 export const RANGES = [
   { value: "1", label: "1D" },
@@ -18,6 +18,8 @@ export interface Bucket {
   runs: number;
   completed: number;
   failed: number;
+  /** Halted runs (also counted in `failed`). */
+  halted: number;
   usd: number;
   tokens: number;
   runtime: number;
@@ -35,11 +37,10 @@ export function bucketRuns(runs: Run[], days: number, now = Date.now()): Bucket[
   const start = end - n * step;
   const out: Bucket[] = Array.from({ length: n }, (_, i) => {
     const s = start + i * step;
-    const d = new Date(s);
     return {
       start: s,
-      label: step === HOUR ? `${String(d.getHours()).padStart(2, "0")}:00` : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      runs: 0, completed: 0, failed: 0, usd: 0, tokens: 0, runtime: 0, runtimeN: 0,
+      label: bucketLabel(s, step === HOUR),
+      runs: 0, completed: 0, failed: 0, halted: 0, usd: 0, tokens: 0, runtime: 0, runtimeN: 0,
     };
   });
   for (const r of runs) {
@@ -50,6 +51,7 @@ export function bucketRuns(runs: Run[], days: number, now = Date.now()): Bucket[
     b.runs += 1;
     if (r.status === "completed") b.completed += 1;
     if (r.status === "failed" || r.status === "halted") b.failed += 1;
+    if (r.status === "halted") b.halted += 1;
     b.usd += Number(r.usage?.usd ?? 0);
     b.tokens += Number(r.usage?.tokens_in ?? 0) + Number(r.usage?.tokens_out ?? 0);
     if (r.usage?.runtime_s) {
@@ -59,6 +61,39 @@ export function bucketRuns(runs: Run[], days: number, now = Date.now()): Bucket[
   }
   return out;
 }
+
+const bucketLabel = (t: number, hourly: boolean) => {
+  const d = new Date(t);
+  return hourly ? `${String(d.getHours()).padStart(2, "0")}:00` : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+
+/** The server's `series` in the shape `bucketRuns` returns (labels in local time). */
+export function seriesBuckets(series: SeriesPoint[], days: number): Bucket[] {
+  return series.map((p) => {
+    const start = Date.parse(p.start);
+    return {
+      start, label: bucketLabel(start, days <= 1), runs: p.runs, completed: p.completed, failed: p.failed + p.halted,
+      halted: p.halted, usd: p.usd, tokens: p.tokens, runtime: p.runtime_s, runtimeN: p.runtime_n,
+    };
+  });
+}
+
+/** Change against the previous window: a relative % for amounts, percentage points for rates. */
+export interface Delta { text: string; direction: "up" | "down" | "flat" }
+export function delta(current: number | null | undefined, previous: number | null | undefined, kind: "relative" | "points" = "relative"): Delta | null {
+  if (current == null || previous == null) return null;
+  const diff = current - previous;
+  if (kind === "points") {
+    if (Math.abs(diff) < 0.05) return { text: "no change", direction: "flat" };
+    return { text: `${diff > 0 ? "+" : "−"}${Math.abs(diff).toFixed(1)} pts`, direction: diff > 0 ? "up" : "down" };
+  }
+  if (previous === 0) return current === 0 ? { text: "no change", direction: "flat" } : null;
+  const pct = (diff / previous) * 100;
+  if (Math.abs(pct) < 0.5) return { text: "no change", direction: "flat" };
+  return { text: `${pct > 0 ? "+" : "−"}${Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)) : Math.abs(pct).toFixed(1)}%`, direction: pct > 0 ? "up" : "down" };
+}
+
+export const totalTokens = (t: InsightsTotals) => t.tokens_in + t.tokens_out;
 
 export const fmtUsd = (v: number) => (v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v === 0 ? 2 : 4)}`);
 export function fmtNum(v: number) {

@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { auditCsv, bucketRuns } from "@/features/insights/logic";
+import { auditCsv, bucketRuns, delta, seriesBuckets } from "@/features/insights/logic";
 import type { AuditEvent, Insights as InsightsData } from "@/features/insights/queries";
 import type { Run } from "@/lib/types";
 import Audit from "@/routes/insights/Audit";
@@ -73,6 +73,38 @@ function mockDashboard() {
 }
 
 describe("Insights dashboard", () => {
+  it("compares with the previous window, explains tool errors and counts runs waiting for an answer", async () => {
+    mockFetch((url) => {
+      if (url === "/api/v1/insights?days=7") {
+        return json({
+          ...INSIGHTS(7),
+          previous_totals: { runs: 8, cost_usd: 3.5, tokens_in: 1, tokens_out: 1, avg_runtime_s: 40, success_rate: 70 },
+          series: [{ start: new Date(now).toISOString(), runs: 12, completed: 9, failed: 2, halted: 1, usd: 3.5, tokens: 15000, runtime_s: 85, runtime_n: 2 }],
+          tools: [{ tool: "web_fetch", calls: 48, error_rate: 60.4, blocked: 0, avg_ms: 2100,
+            top_errors: [{ error: "Fetch blocked: HTTP 404 from www.pewresearch.org", count: 21 }] }],
+        });
+      }
+      if (url === "/api/v1/runs?limit=200") return json([{ ...RUN(1), status: "running", pending_approvals: 2 }, { ...RUN(2), status: "running" }]);
+      if (url === "/api/v1/providers") return json([]);
+      return undefined;
+    });
+    renderAt("/insights", <Insights />);
+    expect(await screen.findByTestId("kpi-Runs")).toHaveTextContent("12");
+    const runs = screen.getByRole("article", { name: "Runs" });
+    expect(runs).toHaveTextContent("+50%");
+    expect(runs).toHaveTextContent("vs prior 7 days");
+    expect(screen.getByRole("article", { name: "Success rate" })).toHaveTextContent("+5.0 pts");
+    expect(screen.getByRole("article", { name: "Spend" })).toHaveTextContent("no change");
+    const tools = screen.getByRole("region", { name: "Tool reliability" });
+    expect(within(tools).getByRole("rowheader", { name: "web_fetch" })).toBeInTheDocument();
+    expect(within(tools).getByText(/HTTP 404 from www\.pewresearch\.org/)).toBeInTheDocument();
+    expect(within(tools).getByText("Unreliable")).toBeInTheDocument();
+    const now_ = screen.getByRole("region", { name: "Right now" });
+    expect(within(now_).getByText("Waiting for you").nextElementSibling).toHaveTextContent("1");
+    expect(within(now_).getByText("Working").nextElementSibling).toHaveTextContent("1");
+    expect(screen.getByRole("img", { name: /Runs per day by outcome/ })).toBeInTheDocument();
+  });
+
   it("renders KPIs, charts with table views and has no axe violations", async () => {
     mockDashboard();
     const { container } = renderAt("/insights", <Insights />);
@@ -141,6 +173,18 @@ describe("insights logic", () => {
     expect(d).toHaveLength(7);
     expect(d.reduce((s, b) => s + b.runs, 0)).toBe(3);
     expect(d.reduce((s, b) => s + b.failed, 0)).toBe(2);
+  });
+
+  it("reads the server series and states changes against the previous window", () => {
+    const b = seriesBuckets([
+      { start: "2026-11-01T00:00:00+00:00", runs: 3, completed: 1, failed: 1, halted: 1, usd: 0.5, tokens: 900, runtime_s: 60, runtime_n: 2 },
+    ], 7);
+    expect(b[0]).toMatchObject({ runs: 3, completed: 1, failed: 2, halted: 1, runtime: 60, runtimeN: 2 });
+    expect(delta(12, 8)).toEqual({ text: "+50%", direction: "up" });
+    expect(delta(9, 10)).toEqual({ text: "−10%", direction: "down" });
+    expect(delta(5, 0)).toBeNull();
+    expect(delta(81.6, 80, "points")).toEqual({ text: "+1.6 pts", direction: "up" });
+    expect(delta(3, null)).toBeNull();
   });
 
   it("escapes CSV cells", () => {

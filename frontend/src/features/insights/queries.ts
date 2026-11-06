@@ -14,11 +14,23 @@ export interface InsightsTotals {
   success_rate: number;
 }
 export interface ModelStat { model: string; calls: number; cost_usd: number; tokens: number; avg_latency_ms: number }
-export interface ToolStat { tool: string; calls: number; error_rate: number; blocked: number; avg_ms: number }
+export interface ToolStat {
+  tool: string; calls: number; error_rate: number; blocked: number; avg_ms: number;
+  /** Most common failure messages, numbers and hosts masked so alike errors group (newer backends). */
+  top_errors?: { error: string; count: number }[];
+}
+/** One bucket of `series`: an hour (1-day window) or a UTC day, oldest first. */
+export interface SeriesPoint {
+  start: string; runs: number; completed: number; failed: number; halted: number; usd: number; tokens: number;
+  runtime_s: number; runtime_n: number;
+}
 export interface Insights {
   window_days: number;
   analysed_runs: number;
   totals: InsightsTotals;
+  /** The same-length window just before this one (newer backends), for deltas. */
+  previous_totals?: InsightsTotals;
+  series?: SeriesPoint[];
   runs_by_status: Record<string, number>;
   runs_by_mode: Record<string, number>;
   models: ModelStat[];
@@ -27,6 +39,8 @@ export interface Insights {
     intercepts_by_reason: Record<string, number>;
     intercepts_by_action: Record<string, number>;
     approvals: Record<string, number>;
+    /** How many of the resolved approvals auto mode answered (newer backends). */
+    approvals_auto?: number;
   };
   guardrail_violations: Record<string, number>;
   top_failures: { reason: string; count: number }[];

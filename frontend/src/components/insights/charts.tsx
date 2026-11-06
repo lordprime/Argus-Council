@@ -11,9 +11,12 @@ import { Button, Card, CardTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 export type Tone = "accent" | "info" | "success" | "warning" | "danger" | "neutral";
-/** Categorical order: first series is the accent, then hues that stay distinct in both themes. */
-export const SERIES: Tone[] = ["accent", "info", "success", "warning", "danger", "neutral"];
-export const seriesTone = (i: number): Tone => SERIES[i % SERIES.length] ?? "accent";
+/**
+ * Identity series: the accent, then neutral. Status hues (success, warning, danger, info) are kept for
+ * status and never stand in for "series 3"; a chart with more identities is a bar list or a table.
+ */
+export const SERIES: Tone[] = ["accent", "neutral"];
+export const seriesTone = (i: number): Tone => (i === 0 ? "accent" : "neutral");
 export const color = (t: Tone, alpha = 1) => (alpha === 1 ? `rgb(var(--${t}))` : `rgb(var(--${t}) / ${alpha})`);
 
 // ---------------------------------------------------------------- layout helpers
@@ -160,9 +163,12 @@ export interface BarDatum { label: string; value: number; display: string; detai
 export function BarChart({ data, label, tone = "accent" }: { data: BarDatum[]; label: string; tone?: Tone }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const ex = useExplorer(data.length);
-  const ROW = 30, GAP = 8;
-  const labelW = Math.min(170, Math.round(w * 0.38));
+  // Narrow cards stack each label above its bar, so long names (model ids) are not cut short.
+  const stacked = w < 440;
+  const BAR = 10, GAP = 4, ROW = stacked ? 34 : 28;
+  const labelW = stacked ? 0 : Math.min(170, Math.round(w * 0.38));
   const plotW = Math.max(40, w - labelW - 8);
+  const barY = (y: number) => (stacked ? y + 20 : y + (ROW - BAR) / 2);
   const max = Math.max(...data.map((d) => d.value), 0) || 1;
   const H = data.length * (ROW + GAP);
   const active = ex.i != null ? data[ex.i] : undefined;
@@ -176,18 +182,17 @@ export function BarChart({ data, label, tone = "accent" }: { data: BarDatum[]; l
       <svg role="img" aria-label={label} width={w} height={H} className="block max-w-full">
         {data.map((d, i) => {
           const y = i * (ROW + GAP);
-          const bw = Math.max(3, (d.value / max) * plotW);
-          const inside = bw > d.display.length * 7 + 12;
+          const valueW = d.display.length * 7 + 8;
+          const bw = Math.max(3, (d.value / max) * (plotW - valueW));
           return (
             <g key={d.label}>
-              <text x={0} y={y + ROW / 2} dominantBaseline="central" className="text-xs" style={{ fill: "rgb(var(--text-muted))" }}>
-                {clip(d.label, Math.floor(labelW / 6.6))}
+              <text x={0} y={stacked ? y + 8 : y + ROW / 2} dominantBaseline="central" className="text-xs" style={{ fill: "rgb(var(--text-muted))" }}>
+                {clip(d.label, Math.floor((stacked ? w : labelW) / 6.6))}
               </text>
-              <rect x={labelW} y={y} width={plotW} height={ROW} rx={8} style={{ fill: "rgb(var(--surface-2))" }} />
-              <rect x={labelW} y={y} width={bw} height={ROW} rx={8}
-                style={{ fill: color(tone, ex.i == null || ex.i === i ? 1 : 0.55), transition: "fill var(--dur-fast)" }} />
-              <text x={inside ? labelW + bw - 8 : labelW + bw + 6} y={y + ROW / 2} dominantBaseline="central" textAnchor={inside ? "end" : "start"}
-                className="text-xs font-semibold tabular" style={{ fill: inside ? "rgb(var(--accent-fg))" : "rgb(var(--text))" }}>
+              <rect x={labelW} y={barY(y)} width={bw} height={BAR} rx={4}
+                style={{ fill: color(tone, ex.i == null || ex.i === i ? 1 : 0.45), transition: "fill var(--dur-fast)" }} />
+              <text x={labelW + bw + 6} y={barY(y) + BAR / 2} dominantBaseline="central"
+                className="text-xs font-semibold tabular" style={{ fill: "rgb(var(--text))" }}>
                 {d.display}
               </text>
             </g>
@@ -198,7 +203,7 @@ export function BarChart({ data, label, tone = "accent" }: { data: BarDatum[]; l
         valueText={active ? `${active.label}: ${active.display}${active.detail ? `, ${active.detail}` : ""}` : "Use arrow keys to read each bar"}
         onKeyDown={ex.onKeyDown} onFocus={ex.onFocus} onBlur={ex.onBlur} onPointerMove={pick} onPointerLeave={() => ex.setI(null)} />
       {active && ex.i != null && (
-        <Tooltip x={labelW + Math.max(3, (active.value / max) * plotW) / 2} y={ex.i * (ROW + GAP)} width={w}>
+        <Tooltip x={labelW + Math.max(3, (active.value / max) * (plotW - 40)) / 2} y={ex.i * (ROW + GAP)} width={w}>
           <p className="font-semibold break-all">{active.label}</p>
           <p className="tabular">{active.display}</p>
           {active.detail && <p className="text-fg-subtle">{active.detail}</p>}
@@ -243,7 +248,7 @@ export function AreaChart({ points, label, format = String, tone = "accent", hei
         </defs>
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={L} x2={w - R} y1={y(t)} y2={y(t)} strokeDasharray={t ? "3 4" : undefined} style={{ stroke: "rgb(var(--border))" }} />
+            <line x1={L} x2={w - R} y1={y(t)} y2={y(t)} style={{ stroke: "rgb(var(--border))" }} />
             <text x={L - 6} y={y(t)} textAnchor="end" dominantBaseline="central" className="text-2xs tabular" style={{ fill: "rgb(var(--text-subtle))" }}>
               {format(t)}
             </text>
@@ -273,6 +278,111 @@ export function AreaChart({ points, label, format = String, tone = "accent", hei
         </Tooltip>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- Stacked columns over time
+export interface ColumnKey { key: string; label: string; tone: Tone }
+export interface Column { label: string; values: Record<string, number>; detail?: string }
+
+/**
+ * Counts per period, stacked by kind (for example runs by outcome). Thin columns on solid hairline
+ * gridlines, a 2px surface gap between stacked segments, a legend above, and the same pointer and
+ * keyboard explorer as the other charts.
+ */
+export function StackedColumns({ columns, keys, label, height = 220, format = String }: {
+  columns: Column[]; keys: ColumnKey[]; label: string; height?: number; format?: (v: number) => string;
+}) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const ex = useExplorer(columns.length);
+  const L = 32, R = 4, T = 8, B = 22, SEP = 2;
+  const n = columns.length;
+  const totals = columns.map((c) => keys.reduce((s, k) => s + (c.values[k.key] ?? 0), 0));
+  const max = niceMax(Math.max(...totals, 0));
+  const slot = (w - L - R) / Math.max(1, n);
+  const colW = Math.max(2, Math.min(28, slot * 0.62));
+  const y = (v: number) => T + (1 - v / max) * (height - T - B);
+  const ticks = [0, max / 2, max];
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((w - L) / 64))));
+  const active = ex.i != null ? columns[ex.i] : undefined;
+  const pick = (e: PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const idx = Math.floor((e.clientX - r.left - L) / slot);
+    ex.setI(idx >= 0 && idx < n ? idx : null);
+  };
+  const describe = (c: Column, t: number) =>
+    `${c.label}: ${format(t)}${keys.map((k) => (c.values[k.key] ? `, ${c.values[k.key]} ${k.label.toLowerCase()}` : "")).join("")}`;
+  return (
+    <div className="flex flex-col gap-2">
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-label="Legend">
+        {keys.map((k) => (
+          <li key={k.key} className="inline-flex items-center gap-1.5 text-fg-muted">
+            <span aria-hidden className="size-2.5 rounded-sm" style={{ background: color(k.tone) }} />{k.label}
+          </li>
+        ))}
+      </ul>
+      <div ref={ref} className="relative w-full">
+        <svg role="img" aria-label={label} width={w} height={height} className="block max-w-full">
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={L} x2={w - R} y1={y(t)} y2={y(t)} style={{ stroke: "rgb(var(--border))" }} />
+              <text x={L - 6} y={y(t)} textAnchor="end" dominantBaseline="central" className="text-2xs tabular" style={{ fill: "rgb(var(--text-subtle))" }}>
+                {format(t)}
+              </text>
+            </g>
+          ))}
+          {active && ex.i != null && (
+            <rect x={L + ex.i * slot} y={T} width={slot} height={height - T - B} rx={3} style={{ fill: "rgb(var(--surface-2))" }} />
+          )}
+          {columns.map((c, i) => {
+            const x = L + i * slot + (slot - colW) / 2;
+            let base = 0;
+            return (
+              <g key={i} style={{ opacity: ex.i == null || ex.i === i ? 1 : 0.5, transition: "opacity var(--dur-fast)" }}>
+                {keys.map((k) => {
+                  const v = c.values[k.key] ?? 0;
+                  if (!v) return null;
+                  const top = y(base + v), bottom = y(base);
+                  const h = Math.max(1, bottom - top - (base > 0 ? SEP : 0));
+                  base += v;
+                  return <rect key={k.key} x={x} y={top} width={colW} height={h} rx={Math.min(3, colW / 3)} style={{ fill: color(k.tone) }} />;
+                })}
+              </g>
+            );
+          })}
+          {columns.map((c, i) => i % every === 0 && (
+            <text key={`l${i}`} x={L + i * slot + slot / 2} y={height - 6} textAnchor="middle" className="text-2xs"
+              style={{ fill: "rgb(var(--text-subtle))" }}>{c.label}</text>
+          ))}
+        </svg>
+        <Explorer label={`${label} — explore periods`} n={n} i={ex.i}
+          valueText={active && ex.i != null ? describe(active, totals[ex.i] ?? 0) : "Use arrow keys to read each period"}
+          onKeyDown={ex.onKeyDown} onFocus={ex.onFocus} onBlur={ex.onBlur} onPointerMove={pick} onPointerLeave={() => ex.setI(null)} />
+        {active && ex.i != null && (
+          <Tooltip x={L + ex.i * slot + slot / 2} y={y(totals[ex.i] ?? 0)} width={w}>
+            <p className="text-fg-subtle">{active.label}</p>
+            <p className="font-semibold tabular">{format(totals[ex.i] ?? 0)}</p>
+            {keys.map((k) => (active.values[k.key] ?? 0) > 0 && (
+              <p key={k.key} className="flex items-center gap-1.5 text-fg-muted">
+                <span aria-hidden className="size-2 rounded-sm" style={{ background: color(k.tone) }} />
+                {k.label} <span className="ml-auto tabular text-fg">{active.values[k.key]}</span>
+              </p>
+            ))}
+            {active.detail && <p className="text-fg-subtle">{active.detail}</p>}
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Inline meter
+/** A rate against 100% as a thin bar on a same-ramp track (table cells, lists). Decorative: the text beside it carries the value. */
+export function Meter({ value, tone }: { value: number; tone: Tone }) {
+  return (
+    <span aria-hidden className="relative inline-block h-1.5 w-16 shrink-0 overflow-hidden rounded-full" style={{ background: color(tone, 0.16) }}>
+      <span className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, Math.max(value > 0 ? 4 : 0, value))}%`, background: color(tone) }} />
+    </span>
   );
 }
 

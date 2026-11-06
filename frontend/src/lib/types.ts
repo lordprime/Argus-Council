@@ -75,6 +75,8 @@ export interface Run {
   usage: { usd?: number; tokens_in?: number; tokens_out?: number; steps?: number; llm_calls?: number; runtime_s?: number };
   error: string | null;
   last_seq: number;
+  /** Approval requests on a live run waiting for the user (runs list only). */
+  pending_approvals?: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

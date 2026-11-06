@@ -126,3 +126,71 @@ async def test_insights_does_not_load_payloads_or_run_bodies(client, auth, app):
             flags=re.IGNORECASE,
         )
         assert "run_events.payload" not in bare, sql
+
+
+async def test_insights_compares_periods_and_explains_tool_errors(client, auth, app):
+    from datetime import timedelta
+
+    owner = await _me(client, auth)
+    now = datetime.now(UTC)
+    async with app.state.db.sessionmaker() as s:
+        current = Run(owner_id=owner, topic="now", mode="research", status="failed", usage={"usd": 0.5})
+        earlier = Run(
+            owner_id=owner,
+            topic="last week",
+            mode="research",
+            status="completed",
+            usage={"usd": 0.2},
+            created_at=now - timedelta(days=10),
+        )
+        s.add_all([current, earlier])
+        await s.flush()
+
+        def ev(seq, etype, data):
+            return RunEvent(
+                run_id=current.id,
+                seq=seq,
+                event_id=f"e{uuid.uuid4().hex[:12]}",
+                type=etype,
+                ts=now,
+                payload={"data": data},
+            )
+
+        s.add_all(
+            [
+                ev(1, "tool.call.started", {"tool_call_id": "a", "tool": "web_fetch"}),
+                ev(
+                    2,
+                    "tool.call.completed",
+                    {
+                        "tool_call_id": "a",
+                        "status": "error",
+                        "result_preview": "Fetch blocked: HTTP 404 from www.example.com",
+                    },
+                ),
+                ev(3, "tool.call.started", {"tool_call_id": "b", "tool": "web_fetch"}),
+                ev(
+                    4,
+                    "tool.call.completed",
+                    {
+                        "tool_call_id": "b",
+                        "status": "error",
+                        "result_preview": "Fetch blocked: HTTP 404 from news.example.org",
+                    },
+                ),
+                ev(5, "approval.resolved", {"decision": "approved", "by": "auto"}),
+                ev(6, "approval.resolved", {"decision": "approved"}),
+            ]
+        )
+        await s.commit()
+
+    data = (await client.get("/api/v1/insights?days=7", headers=auth)).json()
+    assert data["totals"]["runs"] == 1 and data["previous_totals"]["runs"] == 1
+    assert data["previous_totals"]["cost_usd"] == 0.2 and data["previous_totals"]["success_rate"] == 100.0
+    # One bucket per day of the window (plus today's partial day), the run counted once.
+    assert len(data["series"]) in (7, 8)
+    assert sum(b["runs"] for b in data["series"]) == 1 and sum(b["failed"] for b in data["series"]) == 1
+    fetch = next(t for t in data["tools"] if t["tool"] == "web_fetch")
+    # Hosts and numbers are masked, so the two 404s group as one reason.
+    assert fetch["top_errors"] == [{"error": "Fetch blocked: HTTP 404 from www.example.com", "count": 2}]
+    assert data["oversight"]["approvals"] == {"approved": 2} and data["oversight"]["approvals_auto"] == 1
