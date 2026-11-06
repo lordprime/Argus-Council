@@ -129,3 +129,56 @@ When a run starts, Argus copies the council's enabled seats into the run as a sn
 edits to the council do not change runs already in flight. The run's mode is the council's mode
 unless the request names one other than `general`. Guardrails are layered: the mode's defaults,
 then the council's, then the run's own ([Guardrails](guardrails.md#layering)).
+
+## How members talk to each other
+
+Members used to see only the outputs of the steps their own step depended on, and the notes others
+wrote stayed in a scratchpad that no member was shown unless it called `notes_read`. Now the members
+of a council talk to each other directly, and every exchange is an A2A message.
+
+Each seat gets the communication tools below whatever its role's tool list says; the run's
+`tools.allow` and `tools.deny` guardrails still apply. The tools and the roster are described in
+every member's instructions.
+
+| Form | Tool | What happens |
+| --- | --- | --- |
+| `direct` | `send_message` | One member to another (by name or role); the recipient reads it at its next turn |
+| `request` | `ask_agent` | Ask a member a question and wait for the answer |
+| `broadcast` | `broadcast` | One member to the whole council, read at each member's next turn |
+| `group` | `message_group` | One member to several, named or by role |
+| `delegate` | `delegate_task` | Hand a member a self-contained task and get its result back, as an A2A task |
+| `topic` | `publish`, `subscribe` | Publish to a topic; every member subscribed to it receives the message |
+| `board` | `notes_write` | Post to the shared board, which every member sees on every turn |
+| `review` | `request_review` | Ask a member to review your work; its verdict (`approve` or `revise`) and critique come back to you |
+
+A question, a delegation or a review runs the recipient on it straight away, as a task of its own
+(*Question from Ada*, *Delegated task from Ada*, *Review request from Ada*) with its own finished
+steps as context; the answer returns to the member that asked. A review's verdict is also posted to
+the board.
+
+**The board.** Every member's instructions carry the council board on every turn: the most recent
+notes, up to about 6,000 characters (`notes_read` shows older ones). Members post to it with
+`notes_write`, and each step that finishes successfully is posted automatically as `Step done:
+<title>` with the start of its output, so members working in parallel see each other's results at
+their next turn.
+
+**Limits.** Questions, delegations and reviews each start a task for the recipient, which costs
+model calls, so a run allows 40 of them in total. A member answering one may ask, delegate or
+request a review in turn, but only two levels deep; past that the tool tells it to answer with what
+it knows. Direct, group, broadcast, topic and board messages are not counted.
+
+**On the record.** Every exchange is an A2A `Message` (protocol 0.3) with the sender, the recipients
+and the form in its `metadata`; a delegation is also an A2A `Task` that moves from `working` to
+`completed` or `failed`, with the result as its artifact. Each member has an A2A agent card (`url`
+`argus://runs/{run}/agents/{member}`, transport `in-process`). Messages are delivered in process,
+with no HTTP, and each one is still:
+
+* written to the protocol ledger as protocol `a2a`, direction `internal`, with the recipients as
+  the peer ([Ledger](../protocols.md#ledger));
+* emitted on the run's timeline as an `a2a.message` event, and a delegated task's state changes as
+  `a2a.task` events.
+
+In the run workspace, the timeline shows each exchange as a row (*Ada → Ben*, with the form, such as
+*Question*, *Answer*, *Delegated task* or *Board post*, and the text), and the map and the heatmap
+draw it as an A2A edge from the sender to each recipient. The user's own messages are A2A messages
+too ([Stepping in](runs.md#stepping-in)).

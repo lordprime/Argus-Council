@@ -90,6 +90,42 @@ status, the runtime writes its usage (cost, tokens, steps, LLM calls, runtime), 
 matching webhook (`run.completed`, `run.failed`, `run.halted` or `run.cancelled`) and creates an
 in-app notification for completed, failed and halted runs.
 
+A budget breach does not halt a top-level run straight away when it has a reserve
+(`guardrails.budget.buffer_usd` or `buffer_tokens`): the whole reserve is added to the limit once,
+without asking, and recorded as `guardrail.extended` with `buffer: true`. Only if the run is still
+over the limit does it fall back to asking the user for an extension, or halting.
+
+### Resuming a stopped run
+
+`resume` above continues a *paused* run. A `halted`, `failed` or `cancelled` top-level run can't be
+restarted in place. Instead, `POST /runs/{id}/continue` (`services/runs.resume_run`) creates a
+**new** run with the same topic, mode, outputs, council snapshot and knowledge bases, and the old
+guardrails with any new ones merged over them. Its `runs.resumed_from_id` points at the old run.
+Limits and budget start fresh.
+
+```mermaid
+flowchart LR
+    old[(Stopped run<br/>task.completed, citations,<br/>notes, workspace files)] --> load[load_resume_state]
+    load --> new[New run<br/>resumed_from_id]
+    new --> task{"run_task:<br/>finished in the old run?"}
+    task -->|yes| replay[Return the recorded answer<br/>no model call]
+    task -->|no| real[Run the task]
+    replay --> rec[task.completed]
+    real --> rec
+```
+
+The new run goes through the same sequence (plan, steps, report stages, votes). Every agent task
+passes through `AgentRunner.run_task`, which keys it by phase, step, step title and member, and
+emits a durable `task.completed` event when it finishes. For a resumed run the manager first loads
+the old run's `task.completed` events (`runtime/resume.py`). When a task's key matches one the old
+run finished, `run_task` returns the recorded answer at once, with no model call. Only work that
+never finished calls a model. Replayed tasks carry their answer inline in their own
+`task.completed`, so a resumed run can itself be resumed. Before the council starts,
+`RunManager._carry_over` brings over the old run's citations (with the same numbers), board notes
+and the latest version of each text workspace file. It then emits `run.resumed` with the counts.
+Runs older than `task.completed` events are recovered from their plan and step events: the plan
+and finished steps are replayed, and the report is built again.
+
 ## Deliberation
 
 The figure below draws a run as a bench you can watch and touch: the chair's turret deals plan
@@ -161,6 +197,50 @@ flowchart TD
 regenerate with the correction (up to `max_corrections_per_thought`), and *block* discards it and
 tells the agent why. Deterministic blocks are never downgraded by the intercept ceiling.
 
+### Council communication
+
+Members talk to each other over an in-process A2A bus (`runtime/council_bus.py`). Each member has
+an A2A agent card that is addressable only inside its run. Everything members say to each other is
+an A2A `Message`, or an A2A `Task` for delegated work, with the sender, recipients and form in
+`metadata`. Nothing goes over HTTP. Each exchange is still written to the protocol ledger as
+protocol `a2a` (direction `internal`; `inbound` and `outbound` for the user) and emitted on the
+timeline as `a2a.message` (and `a2a.task` for a delegated task's state).
+
+```mermaid
+flowchart LR
+    A[Member] -->|send_message, message_group,<br/>broadcast, publish| BUS{{Council bus}}
+    A -->|ask_agent, delegate_task,<br/>request_review| BUS
+    A -->|notes_write| BOARD[(Board)]
+    O[Orchestrator] -->|Step done| BOARD
+    U([You]) -->|A2A message, role user| BUS
+    BUS -->|inbox, read next turn| B[Teammate]
+    BUS -->|task run now,<br/>answer comes back| B
+    BOARD -->|in the system prompt<br/>every turn| B
+    BUS --> L[(Ledger: a2a)]
+```
+
+| Form | Tool | Delivery |
+| --- | --- | --- |
+| `direct`, `group`, `broadcast` | `send_message`, `message_group`, `broadcast` | Put in each recipient's inbox, read at its next turn |
+| `topic` | `publish`, `subscribe` | Delivered to every subscriber's inbox |
+| `board` | `notes_write` | Shown to every member on every turn |
+| `request` | `ask_agent` | The recipient answers now, as its own task; the answer is the tool result |
+| `delegate` | `delegate_task` | An A2A task the recipient works on now; the result comes back |
+| `review` | `request_review` | The recipient replies `VERDICT: approve` or `revise` with a critique, which is also posted to the board |
+
+The orchestrator registers the communication tools (`tools/council.py`; `notes_write` is an
+ordinary built-in) in every run. Every seat may use them whatever its own tool grant, though the
+run's allow and deny lists still apply. Asks, delegations and reviews each cost a
+model call, so a run allows 40 of them, at most two deep. On every turn `AgentRunner` rebuilds the
+system prompt and appends `CouncilBus.prompt_for(member)`: the roster, how to communicate, the
+member's topics, the latest board entries and the user's messages addressed to it. It then delivers
+the member's inbox as messages. When a step finishes, the orchestrator posts "Step done" with its
+output to the board, so members working in parallel see it at their next turn.
+
+The user's messages during a run are A2A messages too (role `user`). They reach the addressed
+members at their next turn and stay in their instructions until the run ends. Members answer with
+`reply_to_user`.
+
 ## Events and streaming
 
 Every durable event gets a strictly increasing per-run `seq` and is stored in `run_events`.
@@ -189,10 +269,10 @@ an `EventSource`, so it first exchanges its bearer token for a short-lived ticke
 | --- | --- |
 | `backend/argus/main.py` | App factory, lifespan (cache, broker, runtime, webhooks, retention), middleware |
 | `backend/argus/api/v1/` | REST routers: auth, admin, councils, providers, runs, skills, connections, observability, webhooks, data, knowledge, templates, notifications |
-| `backend/argus/runtime/` | `manager` (run lifecycle), `orchestrator` (plan, execute, synthesise, vote), `agent`, `oversight`, `guardrails`, `events`, `snapshot` |
+| `backend/argus/runtime/` | `manager` (run lifecycle), `orchestrator` (plan, execute, synthesise, vote), `agent`, `council_bus` (A2A between members), `resume` (replaying a stopped run), `oversight`, `guardrails`, `events`, `snapshot` |
 | `backend/argus/agents/roles.py` | The twelve roles, their prompts and default tools, and each mode's roster |
 | `backend/argus/providers/` | Anthropic SDK, OpenAI-compatible and Gemini clients, the mock provider, pricing and health checks |
-| `backend/argus/tools/` | Agent tools: notes and artifacts, web, code and shell, skills, knowledge and memory, remote agents, sub-councils |
+| `backend/argus/tools/` | Agent tools: notes and artifacts, web, code and shell, skills, knowledge and memory, council communication, remote agents, sub-councils |
 | `backend/argus/protocols/` | MCP server and client, A2A server and client, ACP server and client, JSON-RPC helpers |
 | `backend/argus/skills/` | `SKILL.md` packages, the built-in skills and the marketplace catalogue |
 | `backend/argus/knowledge/` | Text extraction, chunking and BM25 ranking |

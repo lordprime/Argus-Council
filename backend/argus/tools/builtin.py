@@ -13,9 +13,12 @@ from argus.tools.base import StrList, Tool, ToolCallContext, ToolResult
 
 class NotesWrite(Tool):
     name = "notes_write"
+    # The council board: every seat may read and post, whatever its role's tool list says.
+    source = "council"
     description = (
-        "Add a note to the council's shared scratchpad. Use for findings, decisions and evidence. "
-        "Include the source URL in 'source' when the note comes from a document or web page."
+        "Post a note to the council board, which every member sees at every turn. Use for findings, "
+        "decisions and evidence others should build on. Include the source URL in 'source' when the "
+        "note comes from a document or web page."
     )
 
     class Args(BaseModel):
@@ -35,11 +38,19 @@ class NotesWrite(Tool):
             "ts": datetime.now(UTC).isoformat(),
         }
         ctx.run.notes.append(note)
-        return ToolResult(f"Saved note #{note['id']}: {args.title}", data={"note_id": note["id"]})
+        bus = ctx.run.extra.get("council_bus")
+        author = bus.members.get(ctx.member_id) if bus is not None else None
+        if author is not None:
+            await bus.record_board(author, note, step_id=ctx.step_id)  # an A2A board post
+        return ToolResult(
+            f"Saved note #{note['id']} on the council board: {args.title}", data={"note_id": note["id"]}
+        )
 
 
 class NotesRead(Tool):
     name = "notes_read"
+    # The council board: every seat may read and post, whatever its role's tool list says.
+    source = "council"
     description = "Read the council's shared notes, optionally filtered by a keyword or tag."
 
     class Args(BaseModel):

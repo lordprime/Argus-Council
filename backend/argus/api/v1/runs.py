@@ -18,6 +18,7 @@ from sqlalchemy.orm import load_only
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
 from argus.api.schemas import (
+    A2ASendIn,
     ApprovalDecisionIn,
     AutoModeIn,
     BudgetIn,
@@ -334,6 +335,18 @@ async def intervene(
     await _own_run(db, principal.id, run_id)
     name = principal.user.display_name or "You"
     return await _manager(request).intervene(run_id, data.model_dump(), user_name=name)
+
+
+@router.post("/{run_id}/a2a", status_code=status.HTTP_202_ACCEPTED)
+async def a2a_message(
+    run_id: uuid.UUID, data: A2ASendIn, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    """Talk to a live council in A2A form (the params of ``message/send``). The message reaches the
+    addressed members at their next turn and stays in their instructions for the rest of the run."""
+    principal.require_scope("runs:write")
+    await _own_run(db, principal.id, run_id)
+    name = principal.user.display_name or "You"
+    return await _manager(request).a2a_user_message(run_id, data.message.model_dump(), user_name=name)
 
 
 @router.post("/{run_id}/approvals/{approval_id}", status_code=status.HTTP_202_ACCEPTED)

@@ -1,8 +1,9 @@
 # Integration
 
 This page covers what you need to build on the API: authentication, API keys and scopes, roles,
-webhooks, idempotent run creation and pagination. The full endpoint list is in the
-[API Reference](api/index.md); agent-to-agent integration is in [Protocols and Ledger](protocols.md).
+webhooks, idempotent run creation, steering a live or stopped run, and pagination. The full
+endpoint list is in the [API Reference](api/index.md); agent-to-agent integration is in
+[Protocols and Ledger](protocols.md).
 
 ## Authentication
 
@@ -98,10 +99,63 @@ the same key and body within 24 hours returns the original response with
 `Idempotent-Replayed: true`. The same key with a different body, or while the first request is
 still in flight, returns `409`.
 
+## Steering a run
+
+These routes need the `runs:write` scope. All but `/continue` act on a live run: if the run is not
+running or paused in this API process, they return `409`.
+
+| Route | Body | Returns |
+| --- | --- | --- |
+| `POST /runs/{id}/continue` | optional `{"guardrails": {...}}`, merged over the old run's | `201` and the new run. `409` unless the run is `halted`, `failed` or `cancelled`; `400` for a sub-run |
+| `POST /runs/{id}/budget` | any of `add_usd`, `add_tokens` (raise the limit now) and `buffer_usd`, `buffer_tokens` (set the reserve) | `202` and the budget snapshot: `used`, `limits`, `buffer` |
+| `POST /runs/{id}/auto-mode` | `tools` and/or `extensions` (booleans; one left out keeps its value) | `202` and `{"tools": ..., "extensions": ...}` |
+| `POST /runs/{id}/a2a` | the params of A2A `message/send`: `{"message": {...}}` | `202` and the recorded A2A message |
+
+`/continue` resumes a stopped run where it stopped, as a new run whose `resumed_from_id` is the old
+run. The work the old run finished is replayed without model calls (see
+[Resuming a stopped run](architecture.md#resuming-a-stopped-run)). It accepts `Idempotency-Key`,
+like run creation.
+
+```bash
+curl -X POST "$ARGUS/api/v1/runs/$RUN/continue" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{"guardrails": {"budget": {"usd": 5}}}'
+```
+
+`/budget` adds to the budget or token cap only if the run has one. The reserve is drawn once,
+without asking, when the run reaches that limit, instead of halting.
+
+```bash
+curl -X POST "$ARGUS/api/v1/runs/$RUN/budget" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{"add_usd": 2, "buffer_usd": 1}'
+```
+
+`/auto-mode` switches auto mode. `tools` approves every request except limit raises, and
+`extensions` approves limit raises. Turning one on also answers the requests already waiting. A change
+to `tools` also reaches the run's running sub-councils.
+
+```bash
+curl -X POST "$ARGUS/api/v1/runs/$RUN/auto-mode" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{"tools": true}'
+```
+
+`/a2a` sends the council a message in A2A form: one to 20 `text` parts, an optional `messageId`,
+and `metadata.to` naming one member by name or role. Leave out `to`, or use `council`, to address
+everyone. A name that matches no member, or more than one, returns `404`. The message reaches the
+addressed members at their next turn and stays in their instructions for the rest of the run. It is
+ledgered as `a2a` (direction `inbound`), and members answer with `reply_to_user`.
+
+```bash
+curl -X POST "$ARGUS/api/v1/runs/$RUN/a2a" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": {"parts": [{"kind": "text", "text": "Cite primary sources only."}], "metadata": {"to": "researcher"}}}'
+```
+
 ## Pagination
 
 `GET /api/v1/runs` returns runs newest first; pass the last run's `created_at` as `?before=` for the
-next page. `GET /api/v1/audit` uses `?before_id=`.
+next page. `GET /api/v1/audit` uses `?before_id=`. Each run in the list includes
+`pending_approvals` (approval requests waiting on a live run in this API process) and
+`resumed_from_id` (the run it resumed, or `null`).
 
 ## Errors
 

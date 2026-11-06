@@ -52,9 +52,10 @@ those are. To set any other variable in the stack, add it to the `api` service's
 | --- | --- | --- | --- |
 | `ARGUS_LLM_CACHE_TTL` | `3600` | | Seconds to cache responses to deterministic LLM calls |
 | `ARGUS_LLM_MAX_RETRIES` | `3` | | Retries with backoff per provider before falling back |
-| `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS` | `true` | | Allow provider base URLs on private networks (self-hosted models usually live there) |
+| `ARGUS_PROVIDER_ALLOW_PRIVATE_URLS` | `true` | `false` | Allow provider base URLs on private networks (self-hosted models usually live there). The Compose stack turns it off; set it to `true` in `deploy/.env` for Ollama, vLLM or LM Studio on your network |
 | `ARGUS_ENABLE_MOCK_PROVIDER` | unset | yes | The offline `mock` provider; unset means on only for `ARGUS_ENV=test`, so installs never offer it |
 | `ARGUS_KNOWLEDGE_CAPTURE_ENABLED` | `true` | yes | Keep every page agents read (`web_fetch`) in each user's *Research library* knowledge base |
+| `ARGUS_WEB_FETCH_RENDER_JS` | `false` | | Load pages whose HTML has almost no text (under 400 characters) in headless Chromium, so `web_fetch` can read script-rendered pages. Needs the backend's optional `browser` extra (`uv sync --extra browser` in `backend/`) and `playwright install chromium` once; the default API image includes neither. When it is off, or Playwright is missing, such pages are read as served |
 | `ARGUS_MODEL_PRICING` | `{}` | | JSON map of model to prices, overriding the built-in table for cost accounting |
 | `ARGUS_MODEL_PROFILES` | `{}` | | JSON map of model to competence (`reasoning`, `coding`, `writing`, `speed`, 0-100) and reference prices (`input`, `output` per Mtok) used to pick models; see [Automatic councils and models](concepts/councils.md#automatic-councils-and-models) |
 | `ARGUS_SEARCH_PROVIDER` | unset | yes | `searxng`, `tavily` or `brave` for `web_search` |

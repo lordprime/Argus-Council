@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 (`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
 `mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
-## [Unreleased]
+## [0.1.3] - 2026-11-06
 
 ### Added
 
@@ -32,15 +32,27 @@ All notable changes to this project are documented here. The format follows
     (`add_usd`, `add_tokens`) or sets the reserve (`buffer_usd`, `buffer_tokens`).
 - The run timeline shows a resumed run's origin, a drawn reserve and budget changes at every
   density.
-
-### Changed
-
-- The schema gains `runs.resumed_from_id` (migration 0020).
-
-## [0.1.3] - 2026-11-06
-
-### Added
-
+- **Council members talk to each other, and to you, over A2A.**
+  - Every seat gets the communication tools, whatever its role's tool list says (the run's
+    `tools.allow` / `tools.deny` still apply): `send_message`, `message_group`, `broadcast`,
+    `publish` / `subscribe` (topics), `ask_agent`, `delegate_task`, `request_review`,
+    `reply_to_user`, and the board's `notes_write` / `notes_read`. They cover eight forms: direct,
+    request, broadcast, group, delegate, topic, board and review.
+  - `ask_agent`, `delegate_task` and `request_review` run the recipient on the request at once and
+    bring its answer back. A run allows 40 of them, nested at most two deep. A review's verdict is
+    also posted to the board.
+  - Every member sees the shared board on every turn, and each finished step is posted to it.
+    Messages from teammates arrive at the recipient's next turn.
+  - Every exchange is an A2A `Message` (a delegation also an A2A `Task`), each member has an A2A
+    agent card (`argus://runs/{run}/agents/{member}`, in-process transport), and each exchange is
+    recorded in the ledger (protocol `a2a`, direction `internal`) and on the timeline as
+    `a2a.message` / `a2a.task` events.
+  - The run timeline shows each exchange as a row, and the map and heatmap draw it as an A2A edge.
+  - Your messages during a run are A2A messages with role `user`. Addressed members get them at
+    their next turn and keep them in their instructions for the rest of the run. They answer with
+    `reply_to_user`, shown as *Ben replied to you*.
+  - `POST /runs/{id}/a2a` takes an A2A `message/send` message (`metadata.to`: a member's name or
+    role; omitted, the whole council) and returns the recorded message.
 - **Auto mode.** With `guardrails.auto_mode` on, agents never stop to ask. Each approval request is
   still recorded, as `approval.requested` then `approval.resolved {"decision": "approved",
   "by": "auto"}`, and the workspace shows it as *Auto-approved*. `guardrails.extensions.auto_approve`
@@ -63,6 +75,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The schema gains `runs.resumed_from_id` (migration 0020).
+- `notes_write` posts to the council board, which is shown to every member on every turn; before,
+  notes were seen only through `notes_read`.
+- Ledger entries can have direction `internal` (between members of one council), shown as
+  *Council* in the ledger browser.
 - **The Insights dashboard is rebuilt.**
   - Each headline number shows its change against the previous window of the same length.
   - Runs per day are stacked by outcome, next to a *Right now* panel of live runs and the ones
@@ -301,7 +318,6 @@ All notable changes to this project are documented here. The format follows
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
   models often send, instead of failing with "Input should be a valid list".
 
-[Unreleased]: https://github.com/lordprime/Argus-Council/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/lordprime/Argus-Council/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lordprime/Argus-Council/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/lordprime/Argus-Council/releases/tag/v0.1.0

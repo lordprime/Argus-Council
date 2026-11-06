@@ -36,6 +36,12 @@ steer or cancel runs need the `runs:write` scope, like `POST /api/v1/runs`: A2A 
 `start_run`, `intervene` and `cancel_run` tools. Read-only keys can still query, and viewers can
 never write.
 
+The members of a council are A2A agents among themselves as well: each has an agent card with a
+`url` of the form `argus://runs/{run}/agents/{member}` and the `in-process` transport, and they
+exchange A2A messages and tasks inside Argus, without HTTP
+([How members talk to each other](concepts/councils.md#how-members-talk-to-each-other)). This is
+separate from Argus's own public A2A endpoint and agent card above.
+
 ## Connecting a client
 
 ```bash
@@ -65,7 +71,9 @@ Tools named in `require_approval` always need approval, whatever the trust level
 
 Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user ledger. So is
 every outbound web request an agent makes through a built-in tool (`web_fetch`, `web_search`, the
-market and news tools), as protocol `http`, with the host as the peer. Each entry
+market and news tools), as protocol `http`, with the host as the peer. Messages and tasks between
+the members of a council are recorded as protocol `a2a` with direction `internal` (*Council* in
+the ledger browser). Each entry
 holds the peer, protocol, direction, method, status, latency, run id and SHA-256 digests of the
 request and response (not the payloads themselves), and is chained to the previous entry:
 

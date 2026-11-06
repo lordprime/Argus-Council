@@ -551,6 +551,25 @@ class RunManager:
                 await self.set_auto_mode(child_id, tools=tools)
         return flags
 
+    async def a2a_user_message(
+        self, run_id: uuid.UUID, message: dict[str, Any], user_name: str = "You"
+    ) -> dict:
+        """The user's A2A ``message/send`` to a live council; returns the recorded A2A message."""
+        live = self._live(run_id)
+        text = "\n".join(p["text"] for p in message["parts"] if p.get("kind") == "text").strip()
+        to = (message.get("metadata") or {}).get("to")
+        names = [to] if isinstance(to, str) else [str(n) for n in to or []]
+        target: dict[str, Any] = {}
+        if names and not any(n.strip().lower() in ("council", "all", "everyone", "*") for n in names):
+            found, unknown = live.orchestrator.council.resolve(names)
+            if unknown or len(found) != 1:
+                raise NotFound(f"Address one council member by name or role, or the council: {names}")
+            target = {"member_id": found[0].id}
+        out = await self.intervene(
+            run_id, {"kind": "message", "text": text, "target": target, "a2a": message}, user_name=user_name
+        )
+        return out["message"]
+
     async def adjust_budget(self, run_id: uuid.UUID, **changes: Any) -> dict[str, Any]:
         """Raise a live run's budget or set its reserve; returns the new budget snapshot."""
         return await self._live(run_id).ctx.adjust_budget(**changes)
@@ -573,11 +592,28 @@ class RunManager:
             raise NotFound("Member not found in this run")
         user = Actor.user(user_name)
         if kind == "message":
-            ctx.controls.user_messages.append({"text": cmd["text"], "target": member_id or "council"})
-            env = await ctx.sink.emit(
-                "user.message", {"text": cmd["text"], "target_member_id": member_id or "council"}, actor=user
+            # An A2A message from the user: delivered at the next turn and kept in the addressed
+            # members' instructions for the rest of the run (argus.runtime.council_bus).
+            bus = getattr(live.orchestrator, "council", None)
+            target = bus.members.get(member_id) if bus is not None and member_id else None
+            msg = await bus.user_message(cmd["text"], target, message=cmd.get("a2a")) if bus else None
+            ctx.controls.user_messages.append(
+                {
+                    "text": cmd["text"],
+                    "target": member_id or "council",
+                    **({"message_id": msg["messageId"]} if msg else {}),
+                }
             )
-            return {"event_id": env.id}
+            env = await ctx.sink.emit(
+                "user.message",
+                {
+                    "text": cmd["text"],
+                    "target_member_id": member_id or "council",
+                    **({"message_id": msg["messageId"]} if msg else {}),
+                },
+                actor=user,
+            )
+            return {"event_id": env.id, **({"message": msg} if msg else {})}
         if kind in ("intercept", "hold"):
             if not member_id:
                 raise NotFound("intercept/hold needs a target member")

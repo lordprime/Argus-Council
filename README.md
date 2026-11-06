@@ -44,9 +44,11 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 | Area | What you get |
 | --- | --- |
 | **Councils** | Resizable groups of seats with a role, provider, model, persona and tools; twelve built-in roles and a priority roster per mode |
+| **Council communication** | Members talk to each other as A2A messages in eight forms: direct, ask, broadcast, group, delegate, topics, a shared board every member sees on every turn, and review; your messages during a run are A2A messages that stay in the addressed agents' instructions ([docs](https://lordprime.github.io/Argus-Council/concepts/councils/#how-members-talk-to-each-other)) |
 | **Modes** | `research` (cited reports), `coding` (versioned workspace and a network-less sandbox), `chat`, `general` |
 | **Oversight** | A thought bus with deterministic guardrails, a loop detector and overseer agents; hold, correct, release, halt and message from the UI or API |
-| **Guardrails and approvals** | Budgets in dollars and tokens, step, runtime, parallelism and file limits, tool, skill and domain allow and deny lists, content policy, and human approval for risky tools (with argument editing) |
+| **Guardrails and approvals** | Budgets in dollars and tokens, step, runtime, parallelism and file limits, tool, skill and domain allow and deny lists, content policy, and human approval for risky tools (with argument editing); *auto mode* approves requests and limit extensions without stopping (still recorded), and a *budget reserve* is drawn instead of halting ([docs](https://lordprime.github.io/Argus-Council/concepts/guardrails/#auto-mode)) |
+| **Resume** | *Resume where it stopped* on a halted, failed or cancelled run starts a new run that replays every finished task from its recorded answer, so only unfinished work calls a model ([docs](https://lordprime.github.io/Argus-Council/concepts/runs/#resuming-a-stopped-run)) |
 | **Sub-councils** | Members delegate self-contained tasks to child councils with clamped guardrails, a depth limit and budget charge-back |
 | **Model choice** | Each seat gets the model most competent for its role, weighed against its expected input and output token cost and the run's budget (`quality`, `balanced` or `economy`); unassigned steps go to the best-fitting member by competence, load and cost |
 | **Reports** | Research and general runs deliver a structured report built by specialist agents (outline, data, parallel sections, editing), with check-ins, a review-and-revise loop until it passes its quality checks, charts, tables, a risk matrix and a QA appendix ([docs](https://lordprime.github.io/Argus-Council/concepts/reports/)) |
@@ -54,9 +56,11 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 | **CLI agents** | Opt-in seats on Claude Code, the Codex CLI or the Gemini CLI, signed in with your own account or a CLI API key, mixed with API-key seats and falling back between them ([docs](https://github.com/lordprime/Argus-Council/blob/main/docs/cli-agents.md)) |
 | **Skills** | `SKILL.md` packages loaded on demand, six built-ins, an eight-skill marketplace, import and export, version history and restore |
 | **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory |
-| **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call |
+| **Research tools** | `web_fetch` extracts article text (trafilatura), reads PDFs, retries with backoff and falls back to the Internet Archive's closest snapshot; `knowledge_read` and `artifact_read` resolve names, paths and close matches; failed tool calls end with a `Recovery:` line |
+| **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call, including agents' outbound web requests (`http`) and members' A2A exchanges (direction `internal`) ([docs](https://lordprime.github.io/Argus-Council/protocols/)) |
 | **Run views** | Timeline, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
 | **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, rendered from the structured report, checked after rendering and regenerated on demand |
+| **Web UI** | Home leads with the composer and the runs waiting for you; an Insights dashboard with period-over-period changes, tool reliability, model health and oversight; six palettes in light and dark (Wine, Indigo, Graphite, Forest, Ocean, Ember) |
 | **Operations** | Webhooks, templates with variables, in-app notifications, Prometheus metrics, an audit log, insights, data retention, account export and deletion, and deploy, update, rollback, backup and restore scripts |
 
 ## Architecture
@@ -171,6 +175,13 @@ curl -X POST localhost:8000/api/v1/runs/$RUN/interventions -H "Authorization: Be
   -H 'content-type: application/json' -d '{"kind":"correct","text":"Prioritise peer-reviewed sources","scope":"council"}'
 curl -X POST localhost:8000/api/v1/runs/$RUN/approvals/$APPROVAL -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"decision":"approve","edited_args":{"command":"pytest -q"}}'
+
+# message one member as A2A, add to the budget, or resume a stopped run where it stopped
+curl -X POST localhost:8000/api/v1/runs/$RUN/a2a -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"message":{"parts":[{"text":"Check the 2025 figures"}],"metadata":{"to":"analyst"}}}'
+curl -X POST localhost:8000/api/v1/runs/$RUN/budget -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"add_usd":2}'
+curl -X POST localhost:8000/api/v1/runs/$RUN/continue -H "Authorization: Bearer $TOKEN"
 ```
 
 | Group | Endpoints |
@@ -178,7 +189,7 @@ curl -X POST localhost:8000/api/v1/runs/$RUN/approvals/$APPROVAL -H "Authorizati
 | Auth and keys | `/api/v1/auth/*` (register, login, refresh, me, API keys), `/api/v1/admin/users` |
 | Councils | `/api/v1/councils`, `/councils/{id}/resize`, `/councils/{id}/members`, `/api/v1/roles` |
 | Providers | `/api/v1/providers`, `/providers/{name}/models`, `/providers/{name}/test` |
-| Runs | `/api/v1/runs`, `pause`, `resume`, `cancel`, `interventions`, `approvals/{id}`, `events`, `snapshot`, `stream-ticket`, `events/stream`, `artifacts`, `exports` |
+| Runs | `/api/v1/runs`, `pause`, `resume`, `continue`, `cancel`, `interventions`, `a2a`, `approvals/{id}`, `auto-mode`, `budget`, `events`, `snapshot`, `stream-ticket`, `events/stream`, `artifacts`, `exports` |
 | Skills | `/api/v1/skills`, `validate`, `import`, `marketplace`, `{name}/export`, `{name}/versions` |
 | Knowledge | `/api/v1/knowledge-bases`, `/documents`, `/search`, `/api/v1/memory` |
 | Connections | `/api/v1/mcp-servers`, `/api/v1/remote-agents`, `/api/v1/ledger`, `/ledger/verify` |
@@ -226,6 +237,7 @@ sequenceDiagram
         C->>M: step
         loop agent turn
             M->>B: thought and tool calls
+            M-)M: A2A messages (ask, delegate, review, board)
             B->>O: review
             O-->>B: pass, annotate, hold or block
             opt risky tool
@@ -246,12 +258,20 @@ sequenceDiagram
 1. **Plan**: the chair turns the topic into steps with assignees and dependencies.
 2. **Execute**: independent steps run in parallel (bounded by `max_parallel_agents`); each agent loops between the model and its tools.
 3. **Oversight**: deterministic guardrails, a loop detector and overseer agents (security, monitor, critic) review every thought; `oversight.intercept_mode` caps what overseers may do, and the user outranks everyone.
-4. **Approvals**: tools tagged with a risk in `approval_required` (by default `shell`, `package_install`, `remote_agent`, `network_write`) wait for a human decision, which can also edit the arguments.
+4. **Approvals**: tools tagged with a risk in `approval_required` (by default `shell`, `package_install`, `remote_agent`, `network_write`) wait for a human decision, which can also edit the arguments. With `guardrails.auto_mode` (or `extensions.auto_approve` for limit extensions) they are approved without stopping and recorded as `by: auto`; hard blocks still apply. The **Auto mode** control or `POST /runs/{id}/auto-mode` switches it on a live run.
 5. **Synthesise and vote**: the writer produces the deliverable, the chair, critic, analyst, security officer and tester vote, and one revision round follows if the vote fails.
-6. **Limits**: budget, steps, runtime and file size are enforced throughout; a breach halts the run.
+6. **Limits**: budget, steps, runtime and file size are enforced throughout; a breach halts the run, unless a budget reserve (`budget.buffer_usd`, `budget.buffer_tokens`) is left to draw. The **Budget** control or `POST /runs/{id}/budget` raises the budget or the reserve on a live run.
+
+Members talk to each other while they work: `send_message`, `ask_agent`, `broadcast`,
+`message_group`, `delegate_task`, `publish` and `subscribe`, the shared board (`notes_write`) and
+`request_review`. Your messages (`POST /runs/{id}/a2a`) reach the addressed members at their next
+turn and stay in their instructions until the run ends; members answer with `reply_to_user`.
 
 Every event is stored in an append-only log with a per-run sequence number, so runs can be replayed
-(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`.
+(`/events`, `/snapshot?at_seq=`) and streams resumed with `after_seq` or `Last-Event-ID`. A halted,
+failed or cancelled run can be resumed where it stopped (`POST /runs/{id}/continue`): the new run
+(`resumed_from_id`) replays each finished task from its `task.completed` answer without a model call,
+keeps citation numbers, notes and workspace files, and may change the guardrails.
 
 ### Sub-councils
 
@@ -288,9 +308,11 @@ sequenceDiagram
 claude mcp add --transport http argus http://localhost:8000/mcp --header "Authorization: Bearer argus_..."
 ```
 
-Every inbound and outbound MCP, A2A and ACP call is written to a per-user ledger with SHA-256 digests
-of the request and response, chained so that any edit, deletion or reordering is detected by
-`GET /api/v1/ledger/verify`:
+Every inbound and outbound MCP, A2A and ACP call, every outbound web request an agent makes
+(`web_fetch`, `web_search`, market and news tools, as protocol `http`), and every A2A exchange between
+council members (direction `internal`) is written to a per-user ledger with SHA-256 digests of the
+request and response, chained so that any edit, deletion or reordering is detected by
+`GET /api/v1/ledger/verify` ([Protocols and ledger](https://lordprime.github.io/Argus-Council/protocols/)):
 
 ```mermaid
 flowchart LR
@@ -305,10 +327,10 @@ flowchart LR
 ```
 backend/            FastAPI service (uv project)
   argus/api/v1/     REST routers
-  argus/runtime/    run manager, orchestrator, agents, oversight, guardrails, events
+  argus/runtime/    run manager, orchestrator, agents, council bus (A2A), oversight, guardrails, events
   argus/protocols/  MCP, A2A and ACP servers and clients
   argus/providers/  LLM providers, pricing, health
-  argus/tools/      agent tools (web, code, shell, skills, knowledge, remote agents, sub-councils)
+  argus/tools/      agent tools (web, code, shell, skills, knowledge, council communication, remote agents, sub-councils)
   argus/skills/     SKILL.md packages, built-ins and marketplace
   argus/services/   ledger, exports, webhooks, notifications, retention, audit
   alembic/          migrations

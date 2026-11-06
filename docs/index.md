@@ -16,11 +16,16 @@ can annotate, hold or block it, risky tool calls wait for a human, and you can i
 correct any agent, or the whole council, at any moment.
 
 !!! tip "Current version: 0.1.3"
-    **0.1.3** adds **auto mode**, so agents run without stopping to ask, with an optional
-    switch that raises step, turn, runtime and token limits automatically. `web_fetch`,
-    `knowledge_read` and `artifact_read` now recover from common failures. The protocol ledger
-    also records the agents' outbound web requests. Home becomes a real home page, the Insights
-    dashboard is rebuilt, and there are six colour palettes to choose from. Recent additions:
+    **0.1.3** lets a council's members
+    [talk to each other over A2A](concepts/councils.md#how-members-talk-to-each-other): they
+    ask, delegate, review, broadcast and share a board, and your messages during a run stay in
+    their instructions. A halted or stopped run
+    [resumes where it stopped](concepts/runs.md#resuming-a-stopped-run), reusing finished work,
+    and a [budget reserve](concepts/guardrails.md#budget-reserve) keeps it from halting at its
+    budget. **Auto mode** lets agents run without stopping to ask. `web_fetch`, `knowledge_read`
+    and `artifact_read` recover from common failures, and the protocol ledger records web
+    requests and council exchanges. Home is a real home page, the Insights dashboard is rebuilt,
+    and there are six colour palettes. Recent additions:
 
     * **[Skills marketplace](concepts/skills.md#marketplace)**: eight curated skills to install,
       plus version history and restore for every skill you edit.

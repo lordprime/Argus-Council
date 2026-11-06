@@ -375,6 +375,29 @@ class ExportIn(BaseModel):
     format: OutputFormat
 
 
+class A2APart(BaseModel):
+    kind: Literal["text"] = "text"
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class A2AUserMessage(BaseModel):
+    """An A2A ``Message`` from the user. ``metadata.to`` names a member (name or role); omitted means
+    the whole council."""
+
+    model_config = {"extra": "allow"}
+    kind: Literal["message"] = "message"
+    role: Literal["user"] = "user"
+    parts: list[A2APart] = Field(min_length=1, max_length=20)
+    messageId: str | None = Field(default=None, max_length=80)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class A2ASendIn(BaseModel):
+    """The params of A2A ``message/send``."""
+
+    message: A2AUserMessage
+
+
 class InterventionIn(BaseModel):
     kind: Literal["message", "intercept", "hold", "release", "correct", "halt_all", "release_all"]
     target: dict[str, Any] = Field(default_factory=dict)

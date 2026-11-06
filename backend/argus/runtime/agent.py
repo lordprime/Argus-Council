@@ -125,7 +125,7 @@ _SIDE_EFFECTS = frozenset(
     {"shell", "fs_write", "network_write", "remote_agent", "package_install", "subcouncil"}
 )
 # Sources that write their own protocol ledger entries (MCP servers, remote A2A / ACP agents).
-_LEDGERED_SOURCES = frozenset({"mcp", "a2a", "acp", "remote"})
+_LEDGERED_SOURCES = frozenset({"mcp", "a2a", "acp", "remote", "council"})
 # Phrases that show a tool's error already tells the model what to do next.
 _HAS_HINT = re.compile(r"\b(?:try|use|did you mean|available|instead|check|files in the workspace)\b", re.I)
 _NOT_FOUND = ("not found", "no such", "no document", "does not exist", "unknown ", "http 404", "http 410")
@@ -227,12 +227,19 @@ class AgentRunner:
         tools: ToolRegistry,
         bus: ThoughtBus,
         council_brief: str,
+        *,
+        seat: str | None = None,
     ) -> None:
         self.member = member
         self.ctx = ctx
         self.tools = tools
         self.bus = bus
         self.council_brief = council_brief
+        # None: the member's own seat. A council answer task (argus.runtime.council_bus) runs on a
+        # seat of its own, so it never shares a CLI agent's vendor session with the member's step,
+        # which may be running at the same time.
+        self.seat = seat
+        self._read: set[str] = set()  # teammates' messages this answer task has already shown
         self._summary = ""  # the latest condensed record of this task's earlier turns
 
     # ------------------------------------------------------------ prompts
@@ -280,10 +287,20 @@ class AgentRunner:
         _, standing = self.ctx.corrections_for_peek(self.member.id)
         if standing:
             parts.append("\nStanding orders (always follow):\n" + "\n".join(f"- {c.text}" for c in standing))
+        bus = self.ctx.extra.get("council_bus")
+        if bus is not None:
+            parts.append(bus.prompt_for(self.member, self._allowed))
         return "\n".join(p for p in parts if p)
 
+    def _member_tools(self, name: str) -> list[str] | None:
+        """The seat's tool grant for ``name``; the council's communication tools belong to every seat."""
+        tool = self.tools.get(name)
+        if tool is not None and tool.source == "council":
+            return None
+        return self.member.tools or None
+
     def _allowed(self, name: str) -> bool:
-        return self.ctx.engine.tool_allowed(name, self.member.tools or None) is None
+        return self.ctx.engine.tool_allowed(name, self._member_tools(name)) is None
 
     # ------------------------------------------------------------ LLM turn
     async def _think(self, messages: list[Message], step_id: str | None, phase: str) -> tuple[str, str, Any]:
@@ -317,7 +334,11 @@ class AgentRunner:
                 # CLI agents key their vendor session on (run, seat).
                 "run_id": str(self.ctx.run_id),
                 "member_id": self.member.id,
-                **({"cli_session": self.member.cli_session} if self.member.cli_session else {}),
+                **(
+                    {"cli_seat": self.seat}
+                    if self.seat
+                    else ({"cli_session": self.member.cli_session} if self.member.cli_session else {})
+                ),
             },
         )
         t0 = time.monotonic()
@@ -473,7 +494,7 @@ class AgentRunner:
                 ),
                 t0,
             )
-        v = engine.tool_allowed(call.name, self.member.tools or None)
+        v = engine.tool_allowed(call.name, self._member_tools(call.name))
         if v is not None:
             await self.ctx.violation(v, {"member_id": self.member.id, "tool_call_id": call.id}, actor)
             blocked = ToolResult.error(v.message)
@@ -710,7 +731,20 @@ class AgentRunner:
         ]
         for m in inbox:
             m["seen_by"].add(self.member.id)
-            messages.append(Message.user(f"[Message from the user] {m['text']}"))
+            ref = f" {m['message_id']}" if m.get("message_id") else ""
+            messages.append(Message.user(f"[A2A message{ref} from the user] {m['text']}"))
+        # Messages from teammates (A2A), read at this turn. An answer task (``seat``) shows them but
+        # leaves them for the member's own work, which may be running at the same time; the user's
+        # messages above stay in every turn's instructions anyway (CouncilBus.prompt_for).
+        bus = self.ctx.extra.get("council_bus")
+        if bus is not None and self.seat:
+            for msg in bus.peek_inbox(self.member.id):
+                if msg["messageId"] not in self._read:
+                    self._read.add(msg["messageId"])
+                    messages.append(Message.user(bus.render(msg)))
+        elif bus is not None:
+            for msg in bus.take_inbox(self.member.id):
+                messages.append(Message.user(bus.render(msg)))
         return one_shot
 
     async def run_task(

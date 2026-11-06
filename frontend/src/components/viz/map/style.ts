@@ -11,6 +11,7 @@ export const GROUPS = [
   { id: "approval", label: "Approval", kinds: ["approval"] },
   { id: "vote", label: "Vote", kinds: ["vote"] },
   { id: "user", label: "User", kinds: ["user"] },
+  { id: "a2a", label: "A2A", kinds: ["a2a"] },
   { id: "protocol", label: "Protocol", kinds: ["protocol"] },
   { id: "subcouncil", label: "Sub-council", kinds: ["subcouncil"] },
   { id: "status", label: "Status", kinds: ["status"] },
@@ -34,6 +35,7 @@ export const EDGE_CLASS: Record<string, string> = {
   vote: "stroke-accent",
   user: "stroke-success",
   protocol: "stroke-info",
+  a2a: "stroke-info",
   subcouncil: "stroke-accent",
   status: "stroke-neutral",
 };
@@ -43,6 +45,7 @@ export const EDGE_DASH: Record<string, string | undefined> = {
   correction: "2 3",
   approval: "8 3 2 3",
   status: "1 4",
+  a2a: "5 2",
 };
 
 export const PULSE_CLASS: Record<string, string> = {
@@ -56,6 +59,7 @@ export const PULSE_CLASS: Record<string, string> = {
   vote: "fill-accent",
   user: "fill-success",
   protocol: "fill-info",
+  a2a: "fill-info",
   subcouncil: "fill-accent",
   status: "fill-neutral",
 };
@@ -69,6 +73,7 @@ export const SWATCH_CLASS: Record<GroupId, string> = {
   vote: "stroke-accent",
   user: "stroke-success",
   protocol: "stroke-info",
+  a2a: "stroke-info",
   subcouncil: "stroke-accent",
   status: "stroke-neutral",
 };

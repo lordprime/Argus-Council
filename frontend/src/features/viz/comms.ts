@@ -181,6 +181,22 @@ export function applyComms(s: RunState, ev: RunEvent): void {
       add(s, mk(ev.id, "thought", from, to, { label: short(d.text), itemId: d.thought_id }));
       break;
     }
+    case "a2a.message": {
+      const msg = (d.message ?? {}) as { messageId?: string; role?: string; metadata?: Record<string, any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const meta = msg.metadata ?? {};
+      const node = (ref: { member_id?: string; kind?: string } | undefined): NodeRef =>
+        (ref?.member_id ? memberById(s, ref.member_id) : undefined) ?? (ref?.kind === "user" ? USER_NODE : COUNCIL_NODE);
+      const from = msg.role === "user" ? USER_NODE : node(meta.from);
+      const recipients = (meta.to ?? []) as { member_id?: string; kind?: string }[];
+      (recipients.length ? recipients : [{}]).forEach((r, i) => {
+        add(s, mk(`${ev.id}:${i}`, "a2a", from, node(r), {
+          label: String(meta.form ?? "message"),
+          status: d.status,
+          ledger: d.ledger_id ? { id: d.ledger_id, hash: d.hash, protocol: "a2a", latencyMs: 0, method: String(d.method ?? "message/send") } : undefined,
+        }));
+      });
+      break;
+    }
     case "tool.call.started": {
       if (d.tool === "subcouncil") break; // drawn by subcouncil.started
       add(s, mk(ev.id, "tool", actorRef(s, ev.actor), toolTarget(String(d.tool ?? "tool"), d.args), {

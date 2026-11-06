@@ -92,11 +92,14 @@ class CLIProvider(Provider):
         run_id, member_id = meta.get("run_id"), meta.get("member_id")
         if not run_id or not member_id:
             return None, None  # overseer reviews, probes: one-shot, nothing persisted
-        key = (str(run_id), str(member_id))
+        # ``cli_seat``: work of the member's that runs beside its own seat (a council answer task)
+        # gets a session of its own: two CLI processes must never resume one vendor session at once.
+        own = meta.get("cli_seat")
+        key = (str(run_id), str(own or member_id))
         seat = self._seats.get(key)
         if seat is None:
             seat = SeatSession()
-            pinned = meta.get("cli_session")
+            pinned = None if own else meta.get("cli_session")
             if pinned:
                 pinned = str(pinned).lower()
                 if not UUID_RE.match(pinned) or not await self._owns(pinned):
@@ -247,7 +250,9 @@ class CLIProvider(Provider):
             new_id = result.session_id or session_id
             if new_id and UUID_RE.match(new_id):
                 if new_id != seat.session_id:
-                    await self.backend.remember_session(self.owner_id, self.cli, new_id.lower(), *key)
+                    await self.backend.remember_session(
+                        self.owner_id, self.cli, new_id.lower(), key[0], str(meta.get("member_id"))
+                    )
                 seat.session_id = new_id.lower()
             seat.sent = [*hashes, message_hash(Message(role="assistant", content=content))]
             seat.system = system if not resume else seat.system or system

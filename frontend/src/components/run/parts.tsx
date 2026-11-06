@@ -514,6 +514,8 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
       );
     case "error":
       return <Row icon={AlertTriangle} tone="text-danger">{d.message}</Row>;
+    case "a2a":
+      return <A2ARow d={d} />;
     case "system":
       if (item.type === "run.status") return <Row icon={d.status === "paused" ? Pause : Bot}>Run {d.status}{d.reason ? `: ${d.reason}` : ""}</Row>;
       if (item.type === "correction.resolved") return <Row icon={Check}>Correction {d.outcome}</Row>;
@@ -557,6 +559,48 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
     default:
       return null;
   }
+}
+
+// ------------------------------------------------------------------ A2A messages between members
+const FORM_LABEL: Record<string, string> = {
+  direct: "Message", request: "Question", broadcast: "Broadcast", group: "Group message", delegate: "Delegated task",
+  topic: "Topic", board: "Board post", review: "Review request",
+};
+const REPLY_LABEL: Record<string, string> = { request: "Answer", delegate: "Task result", review: "Review" };
+
+/** One A2A exchange in the timeline: who said what to whom, in which form. */
+function A2ARow({ d }: { d: Record<string, any> }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const msg = d.message ?? {};
+  const meta = msg.metadata ?? {};
+  const text = ((msg.parts ?? []) as { kind: string; text?: string }[]).filter((p) => p.kind === "text").map((p) => p.text).join("\n");
+  const from = meta.from?.name ?? "A member";
+  const to = ((meta.to ?? []) as { name?: string; kind?: string }[]);
+  const toUser = to.some((r) => r.kind === "user");
+  const form = String(meta.form ?? "direct");
+  const label = meta.inReplyTo ? REPLY_LABEL[form] ?? "Reply" : FORM_LABEL[form] ?? "Message";
+  const names = form === "board" ? "the board" : form === "broadcast" ? "the council" : to.map((r) => r.name).join(", ");
+  if (toUser) {
+    return (
+      <div className="max-w-[80%] rounded-lg border border-accent/30 bg-surface px-3 py-2 text-sm">
+        <p className="text-xs text-fg-subtle">{from} replied to you</p>
+        <Markdown>{text}</Markdown>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border bg-surface px-3 py-2 text-sm">
+      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-fg-muted">
+        <MessageSquareReply className="size-3.5 text-accent" aria-hidden />
+        <span className="font-medium text-fg">{from}</span> → <span className="font-medium text-fg">{names || "council"}</span>
+        <Badge tone={d.status === "error" ? "danger" : "accent"}>{label}</Badge>
+        {meta.topic && <span className="font-mono">#{meta.topic}</span>}
+      </p>
+      <details className="mt-1">
+        <summary className="cursor-pointer line-clamp-2 whitespace-pre-wrap text-fg">{text.slice(0, 280)}</summary>
+        {text.length > 280 && <div className="mt-1 prose-argus text-sm"><Markdown>{text}</Markdown></div>}
+      </details>
+    </div>
+  );
 }
 
 // ------------------------------------------------------------------ intervention bar

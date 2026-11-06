@@ -33,7 +33,9 @@ export type CommKind =
   | "user"
   | "protocol"
   | "subcouncil"
-  | "status";
+  | "status"
+  /** A2A message or task between council members (or a member and the user). */
+  | "a2a";
 
 export interface CommEvent {
   id: string;

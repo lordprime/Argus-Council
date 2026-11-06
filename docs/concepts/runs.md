@@ -109,6 +109,29 @@ reads CSV, TSV, RSS and Atom documents (for example a statistics agency's CSV do
 | `halt_all` | Hold every member |
 | `release_all` | Release every member |
 
+A message from you is an A2A message with role `user` ([How members talk to each
+other](councils.md#how-members-talk-to-each-other)). The members it addresses that are working
+receive it at their next turn, and it stays in every addressed member's instructions for the rest
+of the run, so a member that starts work later still follows it. Members acknowledge it with the
+`reply_to_user` tool, giving its message id; the timeline shows the answer as *Ben replied to
+you*. Your message is recorded in the ledger as an inbound A2A entry, and each reply as an outbound
+one.
+
+`POST /runs/{id}/a2a` takes the same message in A2A form (the params of `message/send`) and
+returns the recorded A2A message with `202`:
+
+```bash
+curl -X POST localhost:8000/api/v1/runs/$RUN/a2a -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"message": {"role": "user", "parts": [{"kind": "text", "text": "Use only 2025 sources"}],
+       "metadata": {"to": "Analyst"}}}'
+```
+
+`metadata.to` names one member by name or role. Leave it out (or use `council`) to address the
+whole council. A name that matches no member, or a role held by several, returns `404`; a run that
+is not live returns `409`. An optional `messageId` is kept as the message's id. The call needs the
+`runs:write` scope.
+
 Approvals are answered with `POST /runs/{id}/approvals/{approval_id}` and
 `{"decision": "approve" | "reject", "edited_args": {...}, "reason": "..."}`; `edited_args` replaces
 the tool call's arguments. Approvals still open when a run ends expire.

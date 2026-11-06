@@ -94,7 +94,7 @@ export interface VoteItem {
 }
 
 export interface SimpleItem {
-  kind: "artifact" | "violation" | "citation" | "system" | "user" | "error" | "plan";
+  kind: "artifact" | "violation" | "citation" | "system" | "user" | "error" | "plan" | "a2a";
   id: string;
   seq: number;
   ts: string;
@@ -435,7 +435,12 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       push(s, { kind: "error", id: ev.id, ...base, type: ev.type, data: d });
       break;
     case "task.completed":
-      break; // bookkeeping for resuming a run, not something to show
+    case "a2a.task":
+      break; // bookkeeping (resuming a run; a delegated task's states, shown by its messages)
+    case "a2a.message":
+      // The user's own messages already show as their bubble (user.message).
+      if ((d.message as { role?: string } | undefined)?.role !== "user") push(s, { kind: "a2a", id: ev.id, ...base, type: ev.type, data: d });
+      break;
     default:
       if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
   }

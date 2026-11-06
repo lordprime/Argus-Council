@@ -73,7 +73,11 @@ async def test_a_halted_run_resumes_where_it_stopped(client, auth, app):
         resumed["from_run_id"] == halted["id"] and resumed["tasks"] == len(finished) and not resumed["legacy"]
     )
     replayed = [e for e in evs if e["type"] == "task.completed" and e["data"].get("replayed")]
-    assert len(replayed) == len(finished)
+    # Every finished task is replayed, except a teammate's answer to an A2A ask or review made from
+    # inside a step that is itself replayed: that step never asks again, so its answer is not needed.
+    own = [e for e in finished if not e["data"]["phase"].startswith("a2a_")]
+    assert len(own) <= len(replayed) <= len(finished)
+    assert {e["data"]["key"] for e in own} <= {e["data"]["key"] for e in replayed}
     # The plan is the old run's, and the model was asked only for what never finished.
     old_plan = next(e for e in old_events if e["type"] == "run.plan")["data"]["steps"]
     new_plan = next(e for e in evs if e["type"] == "run.plan")["data"]["steps"]

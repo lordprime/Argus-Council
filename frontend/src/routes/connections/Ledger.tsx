@@ -1,4 +1,4 @@
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, ScrollText, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ScrollText, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
@@ -69,7 +69,8 @@ function VerifyPanel() {
 function Row({ e }: { e: LedgerEntry }) {
   const [open, setOpen] = useState(false);
   const inbound = e.direction === "inbound";
-  const DirIcon = inbound ? ArrowDownLeft : ArrowUpRight;
+  const internal = e.direction === "internal";
+  const DirIcon = internal ? ArrowLeftRight : inbound ? ArrowDownLeft : ArrowUpRight;
   const detailId = `ledger-${e.seq}`;
   const purpose = entryPurpose(e);
   return (
@@ -79,8 +80,9 @@ function Row({ e }: { e: LedgerEntry }) {
         <td className="px-3 py-2 whitespace-nowrap tabular" title={e.ts}>{when(e.ts)}</td>
         <td className="px-3 py-2"><Badge tone={e.protocol === "http" ? "neutral" : "accent"}>{e.protocol}</Badge></td>
         <td className="px-3 py-2 whitespace-nowrap">
-          <span className={cn("inline-flex items-center gap-1", inbound ? "text-info" : "text-fg-muted")}>
-            <DirIcon className="size-4" aria-hidden />{inbound ? "In" : "Out"}
+          <span className={cn("inline-flex items-center gap-1", inbound ? "text-info" : internal ? "text-accent" : "text-fg-muted")}
+            title={internal ? "Between members of the council" : undefined}>
+            <DirIcon className="size-4" aria-hidden />{internal ? "Council" : inbound ? "In" : "Out"}
           </span>
         </td>
         <td className="px-3 py-2 max-w-48 truncate font-mono text-xs" title={e.peer}>{e.peer}</td>

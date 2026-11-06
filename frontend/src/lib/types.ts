@@ -290,7 +290,8 @@ export interface LedgerEntry {
   ts: string;
   /** "http": an agent's outbound web request (web_fetch, web_search, market and news tools). */
   protocol: "mcp" | "a2a" | "acp" | "http";
-  direction: "inbound" | "outbound";
+  /** internal: between the members of one council (A2A inside Argus). */
+  direction: "inbound" | "outbound" | "internal";
   peer: string;
   method: string;
   status: string;

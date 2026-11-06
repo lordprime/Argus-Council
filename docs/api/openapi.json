@@ -2869,6 +2869,67 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/a2a": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "A2A Message",
+        "description": "Talk to a live council in A2A form (the params of ``message/send``). The message reaches the\naddressed members at their next turn and stays in their instructions for the rest of the run.",
+        "operationId": "a2a_message_api_v1_runs__run_id__a2a_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/A2ASendIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response A2A Message Api V1 Runs  Run Id  A2A Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/approvals/{approval_id}": {
       "post": {
         "tags": [
@@ -7282,6 +7343,89 @@
   },
   "components": {
     "schemas": {
+      "A2APart": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "text",
+            "title": "Kind",
+            "default": "text"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "A2APart"
+      },
+      "A2ASendIn": {
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/A2AUserMessage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "A2ASendIn",
+        "description": "The params of A2A ``message/send``."
+      },
+      "A2AUserMessage": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "message",
+            "title": "Kind",
+            "default": "message"
+          },
+          "role": {
+            "type": "string",
+            "const": "user",
+            "title": "Role",
+            "default": "user"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/A2APart"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Parts"
+          },
+          "messageId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messageid"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "parts"
+        ],
+        "title": "A2AUserMessage",
+        "description": "An A2A ``Message`` from the user. ``metadata.to`` names a member (name or role); omitted means\nthe whole council."
+      },
       "AccountOut": {
         "properties": {
           "id": {

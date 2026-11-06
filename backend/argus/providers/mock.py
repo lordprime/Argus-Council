@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -117,16 +118,180 @@ def council_responder(req: CompletionRequest) -> dict[str, Any]:
         return {"content": json.dumps({"option": "approve", "rationale": "Meets the brief."})}
     if isinstance(phase, str) and phase.startswith("report_"):
         return {"content": json.dumps(_report_reply(phase[7:], topic, req))}
+    if isinstance(phase, str) and phase.startswith("a2a_"):
+        replies = _user_reply_calls(req, role, {t.name for t in req.tools})
+        if replies:
+            return {"content": "Answering the user first.", "tool_calls": _with_ids(replies, req)}
+        return _a2a_answer(phase[4:], topic, role, req)
     if phase == "synthesize":
         return {
             "content": f"# {topic}\n\n## Summary\nOffline demo deliverable produced by the mock council.\n\n"
             "## Findings\n- Planned, executed, reviewed and approved by the council.\n"
         }
+    if phase == "execute":
+        calls = _collaboration_calls(req, topic, role)
+        if calls:
+            return {
+                "content": f"{role.title()} is checking in with the council before finishing.",
+                "tool_calls": _with_ids(calls, req),
+            }
     return {
         "content": f"{role.title()} notes on {topic}: completed the assigned work (offline demo). "
         "Demo figures: Option A scored 72 points, Option B 64 and Option C 58. Adoption rose from 12% "
         "in 2024 to 18% in 2025, 27% in 2026 and 35% in 2027, against a baseline of 10, 12, 14 and 15. "
         "Option A leads by 8 points over Option B."
+    }
+
+
+# ---------------------------------------------------------------- council communication (A2A)
+# The mock council talks the way a real one does, cheaply and deterministically: on the first turn of
+# a step some roles ask a teammate, post to the board or ask for a review (see argus.tools.council),
+# and every member answers a message the user sent during the run with reply_to_user.
+
+_ROSTER_LINE = re.compile(r"^- (.+) \(([^()]+)\)( \(you\))?$")
+_USER_MESSAGE = re.compile(r"^\[A2A message(?: (\S+))? from the user\]")
+
+
+def _with_ids(calls: list[dict[str, Any]], req: CompletionRequest) -> list[dict[str, Any]]:
+    """Give each call a deterministic id, unique within the conversation, so the dicts are valid
+    ``ToolCall`` data for callers that build a ``CompletionResponse`` from them directly."""
+    turn = len(req.messages)
+    return [{"id": f"mock_{turn}_{i}_{c['name']}", **c} for i, c in enumerate(calls)]
+
+
+def _roster(req: CompletionRequest) -> dict[str, str]:
+    """Teammates (role -> name, excluding the caller) from the prompt's "Your council" section."""
+    out: dict[str, str] = {}
+    lines = req.system_prompt.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "## Your council (A2A agents)")
+    except StopIteration:
+        return out
+    for line in lines[start + 1 :]:
+        m = _ROSTER_LINE.match(line.strip())
+        if not m:
+            break
+        if not m.group(3):
+            out.setdefault(m.group(2).strip().lower(), m.group(1).strip())
+    return out
+
+
+def _task_title(req: CompletionRequest) -> str:
+    first = next((m.content for m in req.messages if m.role == "user"), "")
+    task = first.split("Your task:", 1)[-1].strip()
+    return (task.splitlines() or ["the task"])[0][:160]
+
+
+def _user_reply_calls(req: CompletionRequest, role: str, tools: set[str]) -> list[dict[str, Any]]:
+    """reply_to_user once for each user message this conversation received and has not answered."""
+    if "reply_to_user" not in tools:
+        return []
+    answered = {
+        c.arguments.get("message_id")
+        for m in req.messages
+        if m.role == "assistant"
+        for c in m.tool_calls
+        if c.name == "reply_to_user"
+    }
+    calls: list[dict[str, Any]] = []
+    for m in req.messages:
+        hit = _USER_MESSAGE.match(m.content) if m.role == "user" else None
+        if hit is None or hit.group(1) in answered:
+            continue
+        answered.add(hit.group(1))
+        said = m.content[hit.end() :].strip()[:200]
+        calls.append(
+            {
+                "name": "reply_to_user",
+                "arguments": {
+                    "text": f'Noted, I am taking this into account in my work as the {role}: "{said}".',
+                    **({"message_id": hit.group(1)} if hit.group(1) else {}),
+                },
+            }
+        )
+    return calls
+
+
+def _collaboration_calls(req: CompletionRequest, topic: str, role: str) -> list[dict[str, Any]]:
+    """The A2A exchanges a role makes on the first turn of a step (at most one exchange per seat)."""
+    tools = {t.name for t in req.tools}
+    calls = _user_reply_calls(req, role, tools)
+    if any(m.role == "tool" for m in req.messages):
+        return calls  # not the first turn: the exchange already happened
+    me = str(req.metadata.get("member") or role)
+    board = (
+        req.system_prompt.split("## Council board", 1)[-1] if "## Council board" in req.system_prompt else ""
+    )
+    team = _roster(req)
+    title = _task_title(req)
+    if role in ("researcher", "assistant"):
+        peer = "analyst" if role == "researcher" else "researcher"
+        if "ask_agent" in tools and peer in team and f"Evidence brief from {me}" not in board:
+            calls.append(
+                {
+                    "name": "ask_agent",
+                    "arguments": {
+                        "to": peer,
+                        "question": f"For '{title}' on {topic}: which questions and figures matter most, "
+                        "and what should I look for to confirm them?",
+                    },
+                }
+            )
+            if "notes_write" in tools:
+                calls.append(
+                    {
+                        "name": "notes_write",
+                        "arguments": {
+                            "title": f"Evidence brief from {me}",
+                            "body": f"Working notes on {topic}: Option A scored 72 points, Option B 64 and "
+                            "Option C 58; adoption rose from 12% in 2024 to 35% in 2027 (demo data).",
+                            "tags": ["evidence"],
+                        },
+                    }
+                )
+    elif role in ("analyst", "coder"):
+        reviewer = next(
+            (r for r in (("critic", "writer") if role == "analyst" else ("critic", "tester")) if r in team),
+            None,
+        )
+        if "request_review" in tools and reviewer and f"Review of {me}'s work" not in board:
+            calls.append(
+                {
+                    "name": "request_review",
+                    "arguments": {
+                        "to": reviewer,
+                        "work": f"Draft for '{title}' on {topic}: Option A leads with 72 points, 8 ahead of "
+                        "Option B (64) and 14 ahead of Option C (58). Adoption is rising year on year.",
+                        "criteria": "correctness, evidence, clarity",
+                    },
+                }
+            )
+    return calls
+
+
+def _a2a_answer(form: str, topic: str, role: str, req: CompletionRequest) -> dict[str, Any]:
+    """A teammate's answer to an ask (``request``), a delegated task or a review request."""
+    task = next((m.content for m in req.messages if m.role == "user"), "")
+    if form == "review":
+        work = task.split("--- work under review ---", 1)[-1].split("--- end ---", 1)[0].strip()
+        if len(work) < 40:
+            return {
+                "content": "VERDICT: revise\n- The work is too thin to judge: add the figures and their "
+                "sources.\n- State the conclusion in one sentence."
+            }
+        return {
+            "content": f"VERDICT: approve\n- The comparison is clear and the figures are consistent.\n"
+            f"- Minor: cite where each figure on {topic} comes from (demo review by the {role})."
+        }
+    if form == "delegate":
+        return {
+            "content": f"Done (offline demo). The {role} completed the delegated work on {topic}: Option A "
+            "scored 72 points, Option B 64 and Option C 58."
+        }
+    return {
+        "content": f"From the {role}: on {topic}, focus on how the options compare on cost, maturity and "
+        "risk. The figures that matter are the scores (A 72, B 64, C 58) and adoption (12% in 2024 to "
+        "35% in 2027); confirm them against primary sources. Demo answer from the mock council."
     }
 
 

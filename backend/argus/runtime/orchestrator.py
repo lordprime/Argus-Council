@@ -14,10 +14,12 @@ from argus.core.logging import get_logger
 from argus.providers.base import ProviderError
 from argus.runtime.agent import AgentOutcome, AgentRunner, MemberSpec
 from argus.runtime.context import RunCancelled, RunContext
+from argus.runtime.council_bus import CouncilBus
 from argus.runtime.guardrails import GuardrailBreach, ReportPolicy
 from argus.runtime.oversight import OverseerAgent, ThoughtBus, parse_json_object
 from argus.services.autocouncil import choose_assignee
 from argus.tools.base import ToolRegistry
+from argus.tools.council import council_tools
 
 log = get_logger(__name__)
 
@@ -96,11 +98,17 @@ class CouncilOrchestrator:
         roster = ", ".join(f"{m.name} ({m.role})" for m in members)
         self.brief = f"Your council: {roster}. Mode: {ctx.mode}."
         self.steps: list[Step] = []
+        # Members talk to each other over the council's A2A bus (argus.runtime.council_bus).
+        for tool in council_tools():
+            if tool.name not in tools:
+                tools.register(tool)
+        self.council = CouncilBus(ctx, self)
+        ctx.extra["council_bus"] = self.council
         self.plan_version = 0
         self.load: Counter[str] = Counter()  # steps given to each member, for balancing
 
-    def runner(self, member: MemberSpec) -> AgentRunner:
-        return AgentRunner(member, self.ctx, self.tools, self.bus, self.brief)
+    def runner(self, member: MemberSpec, seat: str | None = None) -> AgentRunner:
+        return AgentRunner(member, self.ctx, self.tools, self.bus, self.brief, seat=seat)
 
     def _find(self, who: str | None) -> MemberSpec | None:
         """The member a plan names, by name, id or role (the least loaded one when a role repeats)."""
@@ -230,6 +238,11 @@ class CouncilOrchestrator:
                 )
             step.output = outcome.text
             step.status = "done" if outcome.ok else "failed"
+            if outcome.ok and outcome.text:
+                # On the board, so members working in parallel see it at their next turn.
+                await self.council.post_board(
+                    step.assignee, f"Step done: {step.title}", outcome.text[:1_500], step_id=step.id
+                )
             await self.ctx.sink.emit(
                 "step.status",
                 {
