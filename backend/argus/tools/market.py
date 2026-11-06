@@ -4,7 +4,8 @@ Both use keyless public sources, so they work without a search provider: the Yah
 API for quotes and history (stocks, indices, FX such as ``USDINR=X``, crypto such as ``BTC-USD``,
 futures such as ``GC=F``), with Stooq as a fallback for plain quotes, and the Google News RSS feed
 for news. Every request goes through ``guarded_fetch``: the run's allowed domains, private-address
-blocking and per-hop redirect checks apply exactly as for ``web_fetch``. Every data URL is recorded
+blocking, per-hop redirect checks, browser request headers and the retries of transient failures
+(timeouts, 429, 502-504) apply exactly as for ``web_fetch``. Every data URL is recorded
 as a citable source with its retrieval time; nothing is ever filled in when a source has no data.
 """
 
@@ -188,6 +189,7 @@ def _history(series: list[tuple[str, float]]) -> list[str]:
 
 class MarketData(_LiveTool):
     name = "market_data"
+    ledger_peer = "query1.finance.yahoo.com"  # the protocol ledger's peer for these requests
     description = (
         "Live market data (no API key): the latest price, previous close and change for stocks "
         "(AAPL, RELIANCE.NS, 005930.KS), indices (^GSPC, ^NSEI), FX pairs (USDINR=X), crypto (BTC-USD) "
@@ -307,6 +309,7 @@ def parse_feed(payload: str, limit: int) -> list[dict[str, str]]:
 
 class NewsSearch(_LiveTool):
     name = "news_search"
+    ledger_peer = "news.google.com"
     description = (
         "Search recent news (Google News, no API key): headlines with their outlet and publication "
         "time, newest coverage first. Use `when` to stay current (1d, 7d, 30d) and `region` (a "

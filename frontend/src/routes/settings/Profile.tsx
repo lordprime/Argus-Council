@@ -2,6 +2,7 @@ import { Monitor, Moon, Rows3, Rows4, ShieldCheck, Sun } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { MfaSection } from "@/components/settings/MfaSection";
+import { PalettePicker } from "@/components/settings/PalettePicker";
 import { SettingsLayout, SettingsSection } from "@/components/settings/SettingsNav";
 import { Badge, Button, Callout, ErrorState, Kbd, Segmented, Skeleton, TextField, Toggle } from "@/components/ui";
 import { ApiError, errorMessage } from "@/lib/api";
@@ -145,6 +146,7 @@ function AppearanceSection() {
       {/* Keep the segmented controls at their natural width instead of stretching across the card. */}
       <div className="flex flex-col gap-4 [&_[role=radiogroup]]:self-start">
         <Segmented label="Theme" value={theme} onChange={setTheme} options={THEMES} />
+        <PalettePicker />
         <Segmented label="Density" value={density} onChange={setDensity} options={DENSITIES} />
       </div>
       <Toggle label="Reduce motion" checked={reduced}

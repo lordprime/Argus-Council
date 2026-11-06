@@ -294,6 +294,8 @@ export function routeMilestones(run: RunState): RouteMilestones {
   // Sub-council internals and approval resolutions fold into their parent pins.
   for (const c of run.comms as CommEvent[]) {
     if (!PIN_KINDS.has(c.kind)) continue;
+    // Web requests are ordinary tool calls; a pin for each would bury the notable exchanges.
+    if (c.kind === "protocol" && c.ledger?.protocol === "http") continue;
     if (c.childRunId && c.kind !== "subcouncil") continue;
     if (c.kind === "subcouncil" && c.to.id !== c.childRunId) continue;
     if (c.kind === "approval" && c.from.kind === "user") continue;

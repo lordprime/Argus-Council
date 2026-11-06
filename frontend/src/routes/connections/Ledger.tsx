@@ -9,7 +9,7 @@ import { errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { LedgerEntry } from "@/lib/types";
 
-type ProtocolFilter = "all" | "mcp" | "a2a" | "acp";
+type ProtocolFilter = "all" | LedgerEntry["protocol"];
 type PurposeFilter = "all" | LedgerPurpose;
 const PURPOSE: Record<LedgerPurpose, { label: string; tone: "info" | "accent" | "neutral"; hint: string }> = {
   run: { label: "Run", tone: "info", hint: "Calls made while a council run was working" },
@@ -77,7 +77,7 @@ function Row({ e }: { e: LedgerEntry }) {
       <tr className={cn("hover:bg-surface-2", open && "bg-surface-2")}>
         <td className="px-3 py-2 tabular text-fg-subtle">{e.seq}</td>
         <td className="px-3 py-2 whitespace-nowrap tabular" title={e.ts}>{when(e.ts)}</td>
-        <td className="px-3 py-2"><Badge tone="accent">{e.protocol}</Badge></td>
+        <td className="px-3 py-2"><Badge tone={e.protocol === "http" ? "neutral" : "accent"}>{e.protocol}</Badge></td>
         <td className="px-3 py-2 whitespace-nowrap">
           <span className={cn("inline-flex items-center gap-1", inbound ? "text-info" : "text-fg-muted")}>
             <DirIcon className="size-4" aria-hidden />{inbound ? "In" : "Out"}
@@ -143,13 +143,14 @@ export default function Ledger() {
 
   return (
     <ConnectionsPage title="Protocol ledger"
-      description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus.">
+      description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus, and of the agents' outbound web requests.">
       <div className="flex flex-col gap-4">
         <VerifyPanel />
         <FilterBar label="Filter ledger entries" canClear={filtered}
           onClear={() => { setProtocol("all"); setPurpose("all"); setRun(""); }}>
           <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
             { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" }, { value: "acp", label: "ACP" },
+            { value: "http", label: "HTTP", hint: "The agents' outbound web requests (web_fetch, web_search, market data, news)" },
           ]} />
           <Segmented label="Purpose" value={purpose} onChange={setPurpose} options={[
             { value: "all", label: "All" },
@@ -181,7 +182,7 @@ export default function Ledger() {
             <EmptyState icon={ScrollText}
               title={!filtered ? "No protocol calls recorded yet" : "No calls match these filters"}
               body={!filtered
-                ? "Calls to MCP servers and remote agents, and calls other systems make to Argus, are appended here with their hashes."
+                ? "Calls to MCP servers and remote agents, calls other systems make to Argus, and the web requests agents make during runs (pages, searches, market data, news) are appended here with their hashes."
                 : `Nothing${protocol === "all" ? "" : ` over ${protocol.toUpperCase()}`}${purpose === "all" ? "" : ` for ${PURPOSE[purpose].label.toLowerCase()}`}${runId ? " in this run" : ""}.`} />
           </Card>
         ) : (

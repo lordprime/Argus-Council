@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, V1 } from "@/lib/api";
-import type { RunStatus } from "@/lib/types";
+import type { AutoMode, RunStatus } from "@/lib/types";
 
 /** Mirrors backend TERMINAL_STATUSES: only these runs can be trashed or deleted. */
 export const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "failed", "cancelled", "halted"]);
@@ -49,5 +49,12 @@ export function useEmptyTrash() {
   return useMutation({
     mutationFn: () => api.post<{ deleted: number }>(`${V1}/runs/trash/empty`),
     onSettled: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
+/** Switch a live run's auto mode (POST /runs/{id}/auto-mode); a flag left out keeps its value. */
+export function useSetAutoMode(runId: string) {
+  return useMutation({
+    mutationFn: (flags: Partial<AutoMode>) => api.post<AutoMode>(`${V1}/runs/${runId}/auto-mode`, flags),
   });
 }

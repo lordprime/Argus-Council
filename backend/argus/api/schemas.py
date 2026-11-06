@@ -375,6 +375,13 @@ class ApprovalDecisionIn(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class AutoModeIn(BaseModel):
+    """Switch a live run's auto mode; a flag left out keeps its current value."""
+
+    tools: bool | None = None  # approve every request except limit raises
+    extensions: bool | None = None  # approve limit raises
+
+
 # ---------------------------------------------------------------- skills
 class SkillIn(BaseModel):
     skill_md: str = Field(min_length=1, max_length=400_000)  # see argus.skills.package.MAX_WORDS

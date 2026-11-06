@@ -123,6 +123,7 @@ export function buildRoute(run: RunState): RouteModel {
 
   for (const c of comms) {
     if (c.kind !== "protocol" && c.kind !== "subcouncil") continue;
+    if (c.ledger?.protocol === "http") continue; // the agents' web requests: tool calls, not milestones
     const t = ms(c.ts);
     const item = run.items[c.id];
     const sid = item && "stepId" in item ? item.stepId : undefined;

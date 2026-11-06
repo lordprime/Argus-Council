@@ -215,4 +215,23 @@ describe("Ledger", () => {
     expect(await screen.findByText("Chain broken at entry #2")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("hash mismatch");
   });
+
+  it("shows the agents' web requests and filters them as HTTP", async () => {
+    const web = entry(3, { protocol: "http", peer: "www.pewresearch.org", method: "web_fetch", detail: { purpose: "run", tool: "web_fetch", archived: true } });
+    const fetchMock = mockFetch((url) => {
+      if (url.startsWith("/api/v1/ledger?limit=100&protocol=http")) return json({ entries: [web] });
+      if (url.startsWith("/api/v1/ledger")) return json({ entries: [] });
+      return undefined;
+    });
+    renderAt("/connections/ledger", <Ledger />);
+    expect(await screen.findByText(/web requests agents make during runs/)).toBeInTheDocument();
+    expect(screen.getByText(/and of the agents' outbound web requests/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: "HTTP" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/ledger?limit=100&protocol=http", expect.anything()));
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("http")).toBeInTheDocument();
+    expect(within(table).getByText("www.pewresearch.org")).toBeInTheDocument();
+    expect(within(table).getByText("web_fetch")).toBeInTheDocument();
+  });
 });

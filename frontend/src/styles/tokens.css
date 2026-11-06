@@ -75,6 +75,315 @@
   color-scheme: dark;
 }
 
+/* ------------------------------------------------------------------ Palettes
+   Wine (above) is the default. Each palette overrides the same tokens for light and dark;
+   AppearanceSection sets :root[data-palette]. Every pair is checked by scripts/check-contrast.py. */
+/* Indigo: the original Argus look. Cool white, indigo accent, near-black dark mode. */
+:root[data-palette="indigo"] {
+  --canvas: 246 247 249;
+  --surface: 255 255 255;
+  --surface-2: 240 242 245;
+  --surface-3: 230 233 238;
+  --border: 220 224 230;
+  --border-strong: 138 147 163;
+  --text: 17 24 39;
+  --text-muted: 75 85 99;
+  --text-subtle: 95 104 120;
+  --accent: 67 56 202;
+  --accent-hover: 55 48 163;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 238 240 255;
+  --focus-ring: 67 56 202;
+  --neutral: 75 85 99;
+  --neutral-subtle: 240 242 245;
+  --success: 4 120 87;
+  --success-subtle: 231 246 239;
+  --warning: 180 83 9;
+  --warning-subtle: 254 243 226;
+  --danger: 185 28 28;
+  --danger-fg: 255 255 255;
+  --danger-subtle: 253 236 236;
+  --info: 3 105 161;
+  --info-subtle: 230 243 250;
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow-2: 0 6px 16px rgb(16 24 40 / 0.1);
+  --shadow-3: 0 16px 40px rgb(16 24 40 / 0.18);
+}
+:root[data-palette="indigo"][data-theme="dark"] {
+  --canvas: 11 13 18;
+  --surface: 18 21 28;
+  --surface-2: 26 30 39;
+  --surface-3: 35 40 53;
+  --border: 42 48 60;
+  --border-strong: 90 100 118;
+  --text: 231 233 238;
+  --text-muted: 170 177 189;
+  --text-subtle: 140 149 165;
+  --accent: 139 147 248;
+  --accent-hover: 165 172 250;
+  --accent-fg: 11 13 18;
+  --accent-subtle: 30 33 64;
+  --focus-ring: 165 172 250;
+  --neutral: 170 177 189;
+  --neutral-subtle: 26 30 39;
+  --success: 52 211 153;
+  --success-subtle: 15 42 32;
+  --warning: 251 191 36;
+  --warning-subtle: 46 36 16;
+  --danger: 248 113 113;
+  --danger-fg: 11 13 18;
+  --danger-subtle: 58 21 23;
+  --info: 56 189 248;
+  --info-subtle: 14 36 51;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.4);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.5);
+}
+/* Graphite: monochrome. Ink accent, no hue at all outside status colours. */
+:root[data-palette="graphite"] {
+  --canvas: 246 246 245;
+  --surface: 255 255 255;
+  --surface-2: 239 239 237;
+  --surface-3: 228 228 225;
+  --border: 224 224 221;
+  --border-strong: 138 138 133;
+  --text: 23 23 23;
+  --text-muted: 82 82 80;
+  --text-subtle: 104 104 101;
+  --accent: 32 32 32;
+  --accent-hover: 10 10 10;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 236 236 234;
+  --focus-ring: 32 32 32;
+  --neutral: 82 82 80;
+  --neutral-subtle: 239 239 237;
+  --success: 4 120 87;
+  --success-subtle: 231 246 239;
+  --warning: 180 83 9;
+  --warning-subtle: 254 243 226;
+  --danger: 185 28 28;
+  --danger-fg: 255 255 255;
+  --danger-subtle: 253 236 236;
+  --info: 3 105 161;
+  --info-subtle: 230 243 250;
+  --shadow-1: 0 1px 2px rgb(20 20 20 / 0.05);
+  --shadow-2: 0 6px 16px rgb(20 20 20 / 0.08);
+  --shadow-3: 0 16px 40px rgb(20 20 20 / 0.16);
+}
+:root[data-palette="graphite"][data-theme="dark"] {
+  --canvas: 15 15 15;
+  --surface: 23 23 23;
+  --surface-2: 32 32 32;
+  --surface-3: 44 44 44;
+  --border: 52 52 52;
+  --border-strong: 112 112 112;
+  --text: 236 236 234;
+  --text-muted: 180 180 177;
+  --text-subtle: 150 150 146;
+  --accent: 236 236 234;
+  --accent-hover: 250 250 248;
+  --accent-fg: 15 15 15;
+  --accent-subtle: 44 44 44;
+  --focus-ring: 236 236 234;
+  --neutral: 180 180 177;
+  --neutral-subtle: 32 32 32;
+  --success: 52 211 153;
+  --success-subtle: 15 42 32;
+  --warning: 251 191 36;
+  --warning-subtle: 46 36 16;
+  --danger: 248 113 113;
+  --danger-fg: 11 13 18;
+  --danger-subtle: 58 21 23;
+  --info: 56 189 248;
+  --info-subtle: 14 36 51;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.55);
+}
+/* Forest: sage paper, deep green accent. */
+:root[data-palette="forest"] {
+  --canvas: 244 245 240;
+  --surface: 255 255 253;
+  --surface-2: 236 239 231;
+  --surface-3: 224 229 218;
+  --border: 221 226 214;
+  --border-strong: 130 140 122;
+  --text: 22 28 22;
+  --text-muted: 74 84 72;
+  --text-subtle: 96 106 93;
+  --accent: 34 94 64;
+  --accent-hover: 25 74 50;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 228 240 232;
+  --focus-ring: 34 94 64;
+  --neutral: 74 84 72;
+  --neutral-subtle: 236 239 231;
+  --success: 62 107 61;
+  --success-subtle: 232 238 222;
+  --warning: 143 84 14;
+  --warning-subtle: 247 237 216;
+  --danger: 150 40 31;
+  --danger-fg: 255 255 255;
+  --danger-subtle: 248 228 222;
+  --info: 31 92 120;
+  --info-subtle: 225 237 241;
+  --shadow-1: 0 1px 2px rgb(22 34 24 / 0.05);
+  --shadow-2: 0 6px 16px rgb(22 34 24 / 0.08);
+  --shadow-3: 0 16px 40px rgb(22 34 24 / 0.16);
+}
+:root[data-palette="forest"][data-theme="dark"] {
+  --canvas: 15 19 16;
+  --surface: 22 27 23;
+  --surface-2: 30 36 31;
+  --surface-3: 41 48 42;
+  --border: 49 57 50;
+  --border-strong: 104 116 105;
+  --text: 228 234 226;
+  --text-muted: 178 190 176;
+  --text-subtle: 146 159 144;
+  --accent: 122 196 152;
+  --accent-hover: 150 212 174;
+  --accent-fg: 15 19 16;
+  --accent-subtle: 26 44 33;
+  --focus-ring: 122 196 152;
+  --neutral: 178 190 176;
+  --neutral-subtle: 30 36 31;
+  --success: 134 189 116;
+  --success-subtle: 31 42 26;
+  --warning: 216 160 86;
+  --warning-subtle: 43 34 20;
+  --danger: 224 122 104;
+  --danger-fg: 20 17 14;
+  --danger-subtle: 43 24 20;
+  --info: 122 178 201;
+  --info-subtle: 24 36 41;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.55);
+}
+/* Ocean: cool slate, deep teal accent. */
+:root[data-palette="ocean"] {
+  --canvas: 243 246 248;
+  --surface: 255 255 255;
+  --surface-2: 234 239 243;
+  --surface-3: 222 230 236;
+  --border: 217 225 232;
+  --border-strong: 123 138 152;
+  --text: 15 26 36;
+  --text-muted: 67 82 97;
+  --text-subtle: 88 103 118;
+  --accent: 12 100 112;
+  --accent-hover: 8 80 90;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 224 241 243;
+  --focus-ring: 12 100 112;
+  --neutral: 67 82 97;
+  --neutral-subtle: 234 239 243;
+  --success: 4 120 87;
+  --success-subtle: 231 246 239;
+  --warning: 180 83 9;
+  --warning-subtle: 254 243 226;
+  --danger: 185 28 28;
+  --danger-fg: 255 255 255;
+  --danger-subtle: 253 236 236;
+  --info: 3 105 161;
+  --info-subtle: 230 243 250;
+  --shadow-1: 0 1px 2px rgb(12 30 44 / 0.06);
+  --shadow-2: 0 6px 16px rgb(12 30 44 / 0.09);
+  --shadow-3: 0 16px 40px rgb(12 30 44 / 0.17);
+}
+:root[data-palette="ocean"][data-theme="dark"] {
+  --canvas: 11 17 22;
+  --surface: 17 24 31;
+  --surface-2: 24 33 42;
+  --surface-3: 34 45 56;
+  --border: 40 52 64;
+  --border-strong: 96 113 130;
+  --text: 226 234 240;
+  --text-muted: 168 182 195;
+  --text-subtle: 137 153 168;
+  --accent: 94 200 208;
+  --accent-hover: 130 216 222;
+  --accent-fg: 11 17 22;
+  --accent-subtle: 18 44 50;
+  --focus-ring: 94 200 208;
+  --neutral: 168 182 195;
+  --neutral-subtle: 24 33 42;
+  --success: 52 211 153;
+  --success-subtle: 15 42 32;
+  --warning: 251 191 36;
+  --warning-subtle: 46 36 16;
+  --danger: 248 113 113;
+  --danger-fg: 11 13 18;
+  --danger-subtle: 58 21 23;
+  --info: 56 189 248;
+  --info-subtle: 14 36 51;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.55);
+}
+/* Ember: warm sand, burnt-orange accent. */
+:root[data-palette="ember"] {
+  --canvas: 249 245 239;
+  --surface: 255 254 252;
+  --surface-2: 243 236 226;
+  --surface-3: 234 224 210;
+  --border: 230 220 205;
+  --border-strong: 150 134 114;
+  --text: 30 22 15;
+  --text-muted: 92 78 64;
+  --text-subtle: 114 98 82;
+  --accent: 160 60 22;
+  --accent-hover: 132 46 14;
+  --accent-fg: 255 255 255;
+  --accent-subtle: 251 233 222;
+  --focus-ring: 160 60 22;
+  --neutral: 92 78 64;
+  --neutral-subtle: 243 236 226;
+  --success: 62 107 61;
+  --success-subtle: 232 238 222;
+  --warning: 143 84 14;
+  --warning-subtle: 247 237 216;
+  --danger: 150 40 31;
+  --danger-fg: 255 255 255;
+  --danger-subtle: 248 228 222;
+  --info: 31 92 120;
+  --info-subtle: 225 237 241;
+  --shadow-1: 0 1px 2px rgb(40 24 12 / 0.05);
+  --shadow-2: 0 6px 16px rgb(40 24 12 / 0.08);
+  --shadow-3: 0 16px 40px rgb(40 24 12 / 0.16);
+}
+:root[data-palette="ember"][data-theme="dark"] {
+  --canvas: 21 16 12;
+  --surface: 29 23 18;
+  --surface-2: 39 31 25;
+  --surface-3: 51 41 33;
+  --border: 60 49 40;
+  --border-strong: 120 104 88;
+  --text: 240 230 218;
+  --text-muted: 194 178 160;
+  --text-subtle: 164 147 128;
+  --accent: 240 140 92;
+  --accent-hover: 246 166 126;
+  --accent-fg: 21 16 12;
+  --accent-subtle: 50 30 20;
+  --focus-ring: 240 140 92;
+  --neutral: 194 178 160;
+  --neutral-subtle: 39 31 25;
+  --success: 134 189 116;
+  --success-subtle: 31 42 26;
+  --warning: 216 160 86;
+  --warning-subtle: 43 34 20;
+  --danger: 224 122 104;
+  --danger-fg: 20 17 14;
+  --danger-subtle: 43 24 20;
+  --info: 122 178 201;
+  --info-subtle: 24 36 41;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 0.55);
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-fast: 0ms;

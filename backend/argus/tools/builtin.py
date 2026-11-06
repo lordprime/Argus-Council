@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -77,19 +79,80 @@ class ArtifactWrite(Tool):
         return ToolResult(f"Wrote {art.path} (v{art.version}, {art.size} bytes)", data={"path": art.path})
 
 
+def workspace_path(path: str, root: str = "/workspace") -> str:
+    """``path`` as the workspace stores it: without ``./``, a leading ``/``, the sandbox root or a
+    leading ``workspace/`` (the shapes models write paths in)."""
+    rel = path.strip().replace("\\", "/")
+    root = root.rstrip("/")
+    while True:
+        before = rel
+        if root and (rel == root or rel.startswith(root + "/")):
+            rel = rel[len(root) :]
+        rel = rel.lstrip("/")
+        while rel.startswith("./"):
+            rel = rel[2:].lstrip("/")
+        if rel.startswith("workspace/"):
+            rel = rel[len("workspace/") :]
+        if rel == before:
+            return rel
+
+
+def match_path(path: str, files: list[dict[str, Any]]) -> str | None:
+    """The workspace file ``path`` most likely means: same path in any case, then the only file
+    with that name in any folder, then a close spelling."""
+    paths = [f["path"] for f in files]
+    low = path.lower()
+    same = [p for p in paths if p.lower() == low]
+    if same:
+        return same[0]
+    name = low.rsplit("/", 1)[-1]
+    by_name = [p for p in paths if p.lower().rsplit("/", 1)[-1] == name]
+    if len(by_name) == 1:
+        return by_name[0]
+    close = difflib.get_close_matches(low, [p.lower() for p in paths], n=1, cutoff=0.8)
+    return next((p for p in paths if close and p.lower() == close[0]), None)
+
+
 class ArtifactRead(Tool):
     name = "artifact_read"
-    description = "Read a file from the run workspace."
+    description = (
+        "Read a file from the run workspace (paths as artifact_list shows them, e.g. 'report.md'). "
+        "Only files written in this run exist: use artifact_list to see them."
+    )
 
     class Args(BaseModel):
         path: str = Field(min_length=1, max_length=400)
         version: int | None = Field(default=None, ge=1)
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
-        art = await ctx.run.workspace.read(args.path, args.version)
-        if art is None:
-            return ToolResult.error(f"No such file: {args.path}")
-        return ToolResult(art.content or "")
+        workspace = ctx.run.workspace
+        art = await workspace.read(args.path, args.version)
+        rel = workspace_path(args.path, ctx.run.engine.rails.sandbox.root) or args.path
+        if art is None and rel != args.path.strip():
+            art = await workspace.read(rel, args.version)
+        if art is not None:
+            return ToolResult(art.content or "", data={"path": art.path})
+        files = await workspace.list()
+        if not files:
+            return ToolResult.error(
+                f"No such file: {args.path}. The workspace is empty: nothing has been written in this "
+                "run yet, so a file must be created with artifact_write before it can be read."
+            )
+        guess = match_path(rel, files)
+        if guess is not None:
+            art = await workspace.read(guess, args.version)
+            if art is not None:
+                return ToolResult(
+                    f"[Read {art.path}, the closest match for '{args.path}']\n{art.content or ''}",
+                    data={"path": art.path},
+                )
+            if args.version:
+                return ToolResult.error(
+                    f"{guess} has no version {args.version}; leave out `version` for the latest."
+                )
+        listing = "\n".join(f"- {f['path']}" for f in files[:50])
+        more = f"\n(and {len(files) - 50} more)" if len(files) > 50 else ""
+        return ToolResult.error(f"No such file: {args.path}. Files in the workspace:\n{listing}{more}")
 
 
 class ArtifactList(Tool):

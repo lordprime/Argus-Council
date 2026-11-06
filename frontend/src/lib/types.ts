@@ -107,6 +107,24 @@ export interface Guardrails {
     loop_threshold: number;
     max_corrections_per_thought: number;
   };
+  /** Approve every request except limit raises without asking (absent on runs from before it existed). */
+  auto_mode?: boolean;
+  extensions?: {
+    enabled: boolean;
+    /** Grant limit raises without asking, within `limits` and `max_extensions`. */
+    auto_approve: boolean;
+    limits: string[];
+    factor: number;
+    max_extensions: number;
+  };
+}
+
+/** A live run's auto mode (POST /runs/{id}/auto-mode, `run.auto_mode` event). */
+export interface AutoMode {
+  /** Approvals other than limit raises. */
+  tools: boolean;
+  /** Limit raises (steps, per-agent turns, runtime, tokens). */
+  extensions: boolean;
 }
 
 export interface Actor {
@@ -266,7 +284,8 @@ export interface RemoteAgentInfo {
 export interface LedgerEntry {
   seq: number;
   ts: string;
-  protocol: "mcp" | "a2a" | "acp";
+  /** "http": an agent's outbound web request (web_fetch, web_search, market and news tools). */
+  protocol: "mcp" | "a2a" | "acp" | "http";
   direction: "inbound" | "outbound";
   peer: string;
   method: string;

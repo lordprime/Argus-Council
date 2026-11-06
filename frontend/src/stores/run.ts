@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { applyComms } from "@/features/viz/comms";
 import { beginDraft, endDraft, writable } from "@/stores/draft";
 import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
-import type { Actor, Member, RunEvent } from "@/lib/types";
+import type { Actor, AutoMode, Member, RunEvent } from "@/lib/types";
 
 export type MemberStatus = "idle" | "thinking" | "tool" | "waiting" | "held" | "blocked" | "error";
 
@@ -74,7 +74,12 @@ export interface ApprovalItem {
   status: "pending" | "approved" | "rejected" | "expired";
   reason?: string;
   resolvedTs?: string;
+  /** "auto" when auto mode answered it rather than the user. */
+  by?: string;
 }
+
+/** An approval still waiting for the user (auto mode's are answered the moment they are asked). */
+export const awaitsUser = (a: ApprovalItem) => a.status === "pending" && a.by !== "auto";
 
 export interface VoteItem {
   kind: "vote";
@@ -146,6 +151,8 @@ export interface RunState {
   comms: CommEvent[];
   /** Sub-councils spawned by this run, keyed by child run id. */
   subcouncils: Record<string, SubCouncilInfo>;
+  /** Auto mode as last switched live (`run.auto_mode`); null until then, when the run's guardrails decide. */
+  autoMode: AutoMode | null;
   /** Oldest timeline items dropped to keep `items` under ITEMS_CAP (pending approvals are never dropped). */
   trimmed?: number;
   /** Lookups the reducer maintains so per-event work stays O(1) (implementation review L5). */
@@ -189,6 +196,7 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     reconnectAttempt: 0,
     comms: [],
     subcouncils: {},
+    autoMode: null,
     trimmed: 0,
     index: { thoughtByEvent: new Map(), thoughtByIntercept: new Map() },
   };
@@ -214,7 +222,7 @@ function trim(s: RunState) {
   for (; i < s.order.length && excess > 0; i++) {
     const id = s.order[i]!;
     const it = items[id];
-    if (it && ((it.kind === "approval" && it.status === "pending") || it.kind === "plan")) {
+    if (it && ((it.kind === "approval" && awaitsUser(it)) || it.kind === "plan")) {
       keep.push(id);
       continue;
     }
@@ -363,14 +371,20 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "approval.requested":
       push(s, {
         kind: "approval", id: d.approval_id, ...base, summary: d.action_summary, risk: d.risk ?? [],
-        toolCallId: d.tool_call_id, status: "pending",
+        toolCallId: d.tool_call_id, status: "pending", by: d.auto ? "auto" : undefined,
       });
       break;
     case "approval.resolved": {
       const a = s.items[d.approval_id];
-      if (a?.kind === "approval") writable(s, "items")[d.approval_id] = { ...a, status: d.decision, reason: d.reason, resolvedTs: ev.ts };
+      if (a?.kind === "approval") {
+        writable(s, "items")[d.approval_id] = { ...a, status: d.decision, reason: d.reason, resolvedTs: ev.ts, by: d.by };
+      }
       break;
     }
+    case "run.auto_mode":
+      s.autoMode = { tools: Boolean(d.tools), extensions: Boolean(d.extensions) };
+      push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
+      break;
     case "vote.opened":
       push(s, { kind: "vote", id: d.vote_id, seq: ev.seq, ts: ev.ts, motion: d.motion, options: d.options, casts: [] });
       break;
@@ -447,6 +461,8 @@ interface RunsStore {
   /** Optimistic local update, e.g. marking an approval as decided before the event arrives. */
   patchItem: (runId: string, id: string, patch: Partial<TimelineItem>) => void;
   setMemberStatus: (runId: string, memberId: string, status: MemberStatus) => void;
+  /** Optimistic local update after switching auto mode, before `run.auto_mode` arrives. */
+  setAutoMode: (runId: string, autoMode: AutoMode) => void;
   drop: (runId: string) => void;
 }
 
@@ -497,6 +513,12 @@ export const useRuns = create<RunsStore>((set) => ({
       const cur = st.runs[runId];
       if (!cur) return st;
       return { runs: { ...st.runs, [runId]: { ...cur, memberStatus: { ...cur.memberStatus, [memberId]: { status } } } } };
+    }),
+  setAutoMode: (runId, autoMode) =>
+    set((st) => {
+      const cur = st.runs[runId];
+      if (!cur) return st;
+      return { runs: { ...st.runs, [runId]: { ...cur, autoMode } } };
     }),
   drop: (runId) =>
     set((st) => {

@@ -78,6 +78,9 @@ function protocolTarget(d: Record<string, unknown>, parent?: string): NodeRef {
     const server = String(detail.server ?? d.peer ?? "mcp");
     return { kind: "mcp", id: `${ns}mcp:${server}`, label: server, parent };
   }
+  // An agent tool's own web request (web_fetch, web_search...): it belongs to that tool's node, not
+  // to a remote agent per website.
+  if (d.protocol === "http") return toolTarget(String(detail.tool ?? d.method ?? "web"), null, parent);
   const agent = String(detail.agent ?? d.peer ?? "remote");
   return { kind: "remote", id: `${ns}remote:${agent}`, label: agent, role: String(d.protocol ?? ""), parent };
 }

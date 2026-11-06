@@ -10,10 +10,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from argus.agents.roles import ROLES
 from argus.core.errors import NotFound
@@ -35,7 +39,7 @@ from argus.runtime.history import (
 )
 from argus.runtime.oversight import Thought, ThoughtBus
 from argus.services.llm import Route
-from argus.tools.base import ToolCallContext, ToolRegistry, ToolResult
+from argus.tools.base import Tool, ToolCallContext, ToolRegistry, ToolResult
 
 log = get_logger(__name__)
 
@@ -110,6 +114,98 @@ class AgentOutcome:
     iterations: int = 0
     tool_calls: int = 0
     reason: str = "done"
+
+
+# Tools with these risks change something: a call that timed out may have done its work, so it is
+# never repeated automatically.
+_SIDE_EFFECTS = frozenset(
+    {"shell", "fs_write", "network_write", "remote_agent", "package_install", "subcouncil"}
+)
+# Sources that write their own protocol ledger entries (MCP servers, remote A2A / ACP agents).
+_LEDGERED_SOURCES = frozenset({"mcp", "a2a", "acp", "remote"})
+# Phrases that show a tool's error already tells the model what to do next.
+_HAS_HINT = re.compile(r"\b(?:try|use|did you mean|available|instead|check|files in the workspace)\b", re.I)
+_NOT_FOUND = ("not found", "no such", "no document", "does not exist", "unknown ", "http 404", "http 410")
+
+
+def _transient(exc: BaseException) -> bool:
+    """A failure worth one more attempt: a timeout or a dropped connection, never a refusal."""
+    if isinstance(exc, TimeoutError | httpx.TimeoutException | httpx.RemoteProtocolError):
+        return True
+    if isinstance(exc, httpx.ConnectError):
+        # The SSRF guard and DNS failures surface as ConnectError too; those would only fail again.
+        detail = str(exc).lower()
+        return "disallowed" not in detail and "resolve" not in detail
+    return isinstance(exc, httpx.NetworkError)
+
+
+def classify_failure(status: str, content: str) -> str | None:
+    """timeout | network | bad_arguments | not_found | blocked, or None when unclear."""
+    low = content.lower()
+    if status == "timeout" or "timed out" in low:
+        return "timeout"
+    if status == "blocked":
+        return "blocked"
+    if low.startswith("invalid arguments"):
+        return "bad_arguments"
+    if any(k in low for k in _NOT_FOUND):
+        return "not_found"
+    if any(k in low for k in ("connecterror", "readerror", "network", "connection", "remoteprotocol")):
+        return "network"
+    return None
+
+
+def _schema_hint(tool: Tool) -> str:
+    schema = tool.spec().input_schema or {}
+    props: dict[str, Any] = schema.get("properties") or {}
+    required = list(schema.get("required") or [])
+
+    def describe(name: str) -> str:
+        p = props.get(name) or {}
+        kind = p.get("type") or "/".join(
+            str(o.get("type")) for o in p.get("anyOf") or [] if o.get("type") not in (None, "null")
+        )
+        return f"{name} ({kind})" if kind else name
+
+    parts = []
+    if required:
+        parts.append("required: " + ", ".join(describe(n) for n in required))
+    optional = [n for n in props if n not in required]
+    if optional:
+        parts.append("optional: " + ", ".join(describe(n) for n in optional[:12]))
+    return "; ".join(parts) or "no arguments"
+
+
+def recovery_hint(kind: str | None, tool: Tool | None, *, retried: bool = False) -> str | None:
+    """One short, specific next step for the model after a failed tool call."""
+    name = tool.name if tool else "the tool"
+    if kind == "timeout":
+        again = " It was retried once automatically." if retried else ""
+        return (
+            f"{name} took too long.{again} Ask for less (a narrower query, fewer items, a smaller "
+            "range) or use another source; do not repeat the same call unchanged."
+        )
+    if kind == "network":
+        again = " It was retried once automatically." if retried else ""
+        return f"A network error interrupted {name}.{again} Use another source or try again later."
+    if kind == "bad_arguments" and tool is not None:
+        return f"Call {name} again with arguments that match its schema ({_schema_hint(tool)})."
+    if kind == "not_found":
+        return (
+            "The name or address does not exist. Look it up first (list, search) and retry with an "
+            "exact value instead of guessing."
+        )
+    if kind == "blocked":
+        return "This is not permitted in this run: do not retry it; continue with what is allowed."
+    return None
+
+
+def _with_hint(result: ToolResult, kind: str | None, tool: Tool | None, *, retried: bool = False) -> None:
+    if not result.is_error or _HAS_HINT.search(result.content):
+        return
+    hint = recovery_hint(kind, tool, retried=retried)
+    if hint:
+        result.content = f"{result.content}\nRecovery: {hint}"
 
 
 def _redact_args(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -366,21 +462,32 @@ class AgentRunner:
 
         t0 = time.monotonic()
         if tool is None:
-            return await finish("error", ToolResult.error(f"Unknown tool '{call.name}'"), t0)
+            names = [s.name for s in self.tools.specs_for(self._allowed)]
+            return await finish(
+                "error",
+                ToolResult.error(
+                    f"Unknown tool '{call.name}'. Available tools: {', '.join(names) or 'none'}."
+                ),
+                t0,
+            )
         v = engine.tool_allowed(call.name, self.member.tools or None)
         if v is not None:
             await self.ctx.violation(v, {"member_id": self.member.id, "tool_call_id": call.id}, actor)
-            return await finish("blocked", ToolResult.error(v.message), t0)
+            blocked = ToolResult.error(v.message)
+            _with_hint(blocked, "blocked", tool)
+            return await finish("blocked", blocked, t0)
         parsed = tool.parse(call.arguments)
         args = call.arguments
         risk = tool.risk_for(parsed) if parsed is not None else tool.risk
         needs = engine.needs_approval(set(risk))
         if needs:
-            await self.ctx.sink.emit(
-                "member.status",
-                {"member_id": self.member.id, "status": "waiting", "detail": "awaiting approval"},
-                actor=actor,
-            )
+            # Auto mode answers at once: no "awaiting approval" flicker on the seat.
+            if not self.ctx.auto_approves(needs):
+                await self.ctx.sink.emit(
+                    "member.status",
+                    {"member_id": self.member.id, "status": "waiting", "detail": "awaiting approval"},
+                    actor=actor,
+                )
             summary = (
                 f"{self.member.name} wants to run {call.name}({json.dumps(safe_args, default=str)[:300]})"
             )
@@ -406,13 +513,32 @@ class AgentRunner:
             "member.status", {"member_id": self.member.id, "status": "tool", "detail": call.name}, actor=actor
         )
         timeout = tool.timeout_for(tool.parse(args) if args is not call.arguments else parsed)
-        try:
+
+        async def attempt() -> ToolResult:
             if timeout is None:
-                result = await tool.invoke(args, tctx)
-            else:
-                result = await asyncio.wait_for(tool.invoke(args, tctx), timeout=timeout)
+                return await tool.invoke(args, tctx)
+            return await asyncio.wait_for(tool.invoke(args, tctx), timeout=timeout)
+
+        # Read-only built-in calls that time out or lose their connection get one more try (what an
+        # MCP server or remote agent does with a call is unknown, so those are never repeated).
+        may_retry = not (set(risk) & _SIDE_EFFECTS) and tool.source not in _LEDGERED_SOURCES
+        sent_args = safe_args if args is call.arguments else _redact_args(args)[0]
+        retried = False
+        t_call = time.monotonic()
+        try:
+            try:
+                result = await attempt()
+            except Exception as exc:
+                if not may_retry or not _transient(exc):
+                    raise
+                log.info("agent.tool_retry", tool=call.name, error=type(exc).__name__)
+                retried = True
+                result = await attempt()
         except TimeoutError:
-            return await finish("timeout", ToolResult.error(f"{call.name} timed out"), t0)
+            failed = ToolResult.error(f"{call.name} timed out")
+            _with_hint(failed, "timeout", tool, retried=retried)
+            await self._ledger_outbound(tool, risk, sent_args, failed, "timeout", t_call, tctx)
+            return await finish("timeout", failed, t0)
         except GuardrailBreach as exc:
             await self.ctx.violation(
                 exc.violation, {"member_id": self.member.id, "tool_call_id": call.id}, actor
@@ -420,7 +546,13 @@ class AgentRunner:
             return await finish("blocked", ToolResult.error(exc.violation.message), t0)
         except Exception as exc:
             log.warning("agent.tool_error", tool=call.name, error=str(exc)[:300])
-            return await finish("error", ToolResult.error(f"{call.name} failed: {str(exc)[:500]}"), t0)
+            failed = ToolResult.error(f"{call.name} failed: {str(exc)[:500]}")
+            _with_hint(failed, "network" if _transient(exc) else None, tool, retried=retried)
+            await self._ledger_outbound(tool, risk, sent_args, failed, "error", t_call, tctx)
+            return await finish("error", failed, t0)
+        status = "error" if result.is_error else "ok"
+        await self._ledger_outbound(tool, risk, sent_args, result, status, t_call, tctx)
+        _with_hint(result, classify_failure(status, result.content), tool)
         cleaned, violations = engine.screen_tool_output(result.content)
         where = {"member_id": self.member.id, "tool_call_id": call.id, "tool": call.name}
         if isinstance(result.data.get("url"), str):
@@ -428,7 +560,62 @@ class AgentRunner:
         for v2 in violations:
             await self.ctx.violation(v2, where, actor)
         result.content = cleaned
-        return await finish("error" if result.is_error else "ok", result, t0)
+        return await finish(status, result, t0)
+
+    async def _ledger_outbound(
+        self,
+        tool: Tool,
+        risk: frozenset[str],
+        args: dict[str, Any],
+        result: ToolResult,
+        status: str,
+        t0: float,
+        tctx: ToolCallContext,
+    ) -> None:
+        """Record a built-in tool's outbound web request in the protocol ledger (protocol "http").
+
+        MCP and remote-agent tools write their own entries. The ledger is a record, never a
+        dependency: a failure to write it is logged and the tool call goes on.
+        """
+        if "network" not in risk or tool.source in _LEDGERED_SOURCES:
+            return
+        from argus.tools.remote import record_call
+
+        data = result.data or {}
+        url = data.get("url") if isinstance(data.get("url"), str) else None
+        target = data.get("original_url") or url or args.get("url")
+        peer = (
+            data.get("peer")
+            or (urlparse(target).hostname if isinstance(target, str) else None)
+            or getattr(tool, "ledger_peer", None)
+            or tool.name
+        )
+        try:
+            await record_call(
+                tctx,
+                protocol="http",
+                direction="outbound",
+                peer=str(peer),
+                method=tool.name,
+                status="ok" if status == "ok" else "error",
+                request=args,
+                response={
+                    "status": data.get("status"),
+                    "url": url,
+                    "error": result.content[:300] if result.is_error else None,
+                },
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                detail={
+                    "purpose": "run",
+                    "tool": tool.name,
+                    "member": self.member.name,
+                    "archived": bool(data.get("archived")),
+                    **({"url": url} if url else {}),
+                    **({"outcome": status} if status not in ("ok", "error") else {}),
+                },
+            )
+        except Exception as exc:
+            log.warning("agent.ledger_failed", tool=tool.name, error=type(exc).__name__)
 
     # ------------------------------------------------------------ context
     async def _fit_context(self, messages: list[Message], task_message: str, step_id: str | None) -> None:

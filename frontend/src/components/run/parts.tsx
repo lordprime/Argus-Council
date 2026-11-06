@@ -25,6 +25,7 @@ import {
   Vote,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -120,7 +121,7 @@ export function CouncilRail({ runId, members, state, live, onFocus, focused }: {
     <aside aria-label="Council" className="flex flex-col gap-4 p-3 overflow-auto">
       {groups.filter(([, ms]) => ms.length).map(([title, ms]) => (
         <section key={title}>
-          <h2 className="text-2xs uppercase tracking-wide text-fg-subtle mb-1.5 px-1">{title}</h2>
+          <h2 className="text-xs font-medium text-fg-subtle mb-1.5 px-1">{title}</h2>
           <ul className="flex flex-col gap-1.5">
             {ms.map((m) => {
               const st = state.memberStatus[m.id]?.status ?? "idle";
@@ -426,15 +427,18 @@ export function ApprovalCard({ runId, a }: { runId: string; a: ApprovalItem }) {
   };
   // In replay (runId "replay:<id>") the card shows history: a pending approval cannot be decided from here.
   const replaying = runId.startsWith("replay:");
-  const pending = a.status === "pending";
+  // Auto mode answers its requests itself: the card is a record, never a question to the user.
+  const auto = a.by === "auto";
+  const pending = a.status === "pending" && !auto;
   const actionable = pending && !replaying;
+  const Icon = auto ? Zap : AlertTriangle;
   return (
     <div role={actionable ? "alert" : undefined}
       className={cn("rounded-lg border-2 p-3", pending ? "border-warning bg-warning-subtle" : "border-border bg-surface")}>
       <div className="flex items-center gap-2">
-        <AlertTriangle className="size-4 text-warning" aria-hidden />
+        <Icon className={cn("size-4", auto ? "text-fg-muted" : "text-warning")} aria-hidden />
         <p className="text-sm font-semibold">
-          {actionable ? "Approval needed" : pending ? "Awaiting approval at this point in the replay" : `Approval ${a.status}`}
+          {auto ? "Auto-approved" : actionable ? "Approval needed" : pending ? "Awaiting approval at this point in the replay" : `Approval ${a.status}`}
         </p>
         {a.risk.map((r) => <Badge key={r} tone="warning">{r}</Badge>)}
       </div>
@@ -510,6 +514,12 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
     case "system":
       if (item.type === "run.status") return <Row icon={d.status === "paused" ? Pause : Bot}>Run {d.status}{d.reason ? `: ${d.reason}` : ""}</Row>;
       if (item.type === "correction.resolved") return <Row icon={Check}>Correction {d.outcome}</Row>;
+      if (item.type === "run.auto_mode") {
+        return <Row icon={Zap}>{item.actor.name ?? "You"} set auto mode: approvals {d.tools ? "on" : "off"}, limit raises {d.extensions ? "on" : "off"}</Row>;
+      }
+      if (item.type === "guardrail.extended") {
+        return <Row icon={Check}>{d.auto ? "Auto-raised" : "Raised"} the <span className="font-mono">{d.rule}</span> limit from {compact(d.from)} to {compact(d.to)} ({d.extensions} of {d.max_extensions})</Row>;
+      }
       if (item.type === "skill.loaded") return <Row icon={Sparkles}>Loaded skill <span className="font-mono">{d.name}</span></Row>;
       if (item.type === "knowledge.linked") {
         const names = ((d.names as string[] | undefined) ?? []).join(", ") || "a knowledge base";

@@ -133,6 +133,22 @@ describe("comms reducer", () => {
     expect(sub[sub.length - 1]).toMatchObject({ kind: "subcouncil", from: { id: "child" }, to: { id: "coder" }, status: "completed" });
   });
 
+  it("draws an agent's web request (protocol http) on its tool's node, not as a remote agent or a route pin", () => {
+    seq = 0;
+    const s = reduceAll(emptyRun("r", MEMBERS), [
+      ev("run.plan", { version: 1, steps: [{ id: "s1", title: "Research", assignee_member_id: "coder", status: "running" }] }, 0, { actor: A("chair") }),
+      ev("tool.call.started", { tool_call_id: "w1", tool: "web_fetch", source: "builtin", args: { url: "https://ex.com/a" } }, 1, { step_id: "s1" }),
+      ev("protocol.call", { ledger_id: 7, hash: "h7", protocol: "http", direction: "outbound", peer: "ex.com", method: "web_fetch",
+        status: "ok", latency_ms: 80, tool_call_id: "w1", detail: { purpose: "run", tool: "web_fetch", archived: false } }, 2, { step_id: "s1" }),
+      ev("tool.call.completed", { tool_call_id: "w1", status: "ok", duration_ms: 90 }, 2, { step_id: "s1" }),
+    ]);
+    const proto = s.comms.filter((c) => c.kind === "protocol");
+    expect(proto).toHaveLength(1);
+    expect(proto[0]).toMatchObject({ to: { kind: "tool", id: "tool:web_fetch" }, ledger: { id: 7, protocol: "http", method: "web_fetch" } });
+    expect(s.comms.some((c) => c.to.kind === "remote" || c.from.kind === "remote")).toBe(false);
+    expect(routeMilestones(s).all.filter((p) => p.kind === "protocol")).toEqual([]);
+  });
+
   it("caps the comm log and ignores duplicate events", () => {
     seq = 0;
     const s = emptyRun("r", MEMBERS);

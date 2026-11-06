@@ -120,6 +120,8 @@ export const GUARDRAIL_DEFAULTS = {
   approval_required: ["shell", "package_install", "remote_agent", "network_write"],
   content_policy: { preset: "standard", blocked_topics: [] as string[] },
   oversight: { intercept_mode: "hold", monitor_sensitivity: "medium" },
+  auto_mode: false,
+  extensions: { auto_approve: false },
 };
 
 const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);

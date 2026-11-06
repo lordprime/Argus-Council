@@ -396,7 +396,7 @@ const tones: Record<Tone, string> = {
 
 export function Badge({ tone = "neutral", children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-sm px-1.5 h-5 text-2xs uppercase tracking-wide", tones[tone], className)}>
+    <span className={cn("inline-flex items-center gap-1 rounded-sm px-1.5 h-5 text-2xs font-medium whitespace-nowrap", tones[tone], className)}>
       {children}
     </span>
   );
@@ -405,7 +405,7 @@ export function Badge({ tone = "neutral", children, className }: { tone?: Tone; 
 export function StatusPill({ status, className }: { status: string; className?: string }) {
   const s = STATUS[status] ?? { tone: "neutral" as Tone, icon: CircleDashed };
   return (
-    <Badge tone={s.tone} className={cn("rounded-full px-2", className)}>
+    <Badge tone={s.tone} className={className}>
       <s.icon className={cn("size-3", s.spin && "animate-spin")} aria-hidden />
       {s.label ?? status}
     </Badge>
@@ -544,7 +544,7 @@ export function PageHeader({ title, description, actions, eyebrow, meta, badge, 
           <ArrowLeft className="size-4" aria-hidden />{back.label}
         </Link>
       )}
-      {eyebrow && <p className="text-xs font-medium uppercase tracking-wide text-fg-subtle mb-1">{eyebrow}</p>}
+      {eyebrow && <p className="text-xs font-medium text-fg-subtle mb-1">{eyebrow}</p>}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -575,13 +575,15 @@ export interface SectionLink {
  */
 export function SectionNav({ label, links, className }: { label: string; links: SectionLink[]; className?: string }) {
   return (
-    <nav aria-label={label} className={cn("mb-6 -mx-4 md:mx-0 border-b border-border overflow-x-auto", className)}>
-      <ul className="flex gap-1 px-4 md:px-0 min-w-max">
+    // The rule under the tabs is an inset shadow on the list, not a border the links overlap with -1px:
+    // that overlap made the scroller overflow vertically and grow a stray scrollbar.
+    <nav aria-label={label} className={cn("mb-6 -mx-4 md:mx-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", className)}>
+      <ul className="flex gap-1 px-4 md:px-0 w-max min-w-full shadow-[inset_0_-1px_0_rgb(var(--border))]">
         {links.map((l) => (
           <li key={l.to}>
             <NavLink to={l.to} end={l.end ?? true}
               className={({ isActive }) => cn(
-                "inline-flex items-center gap-1.5 h-10 px-3 -mb-px text-sm border-b-2 whitespace-nowrap transition-colors duration-fast",
+                "inline-flex items-center gap-1.5 h-10 px-3 text-sm border-b-2 whitespace-nowrap transition-colors duration-fast",
                 touchTarget,
                 isActive ? "border-accent text-fg font-medium" : "border-transparent text-fg-muted hover:text-fg hover:border-border-strong",
               )}>

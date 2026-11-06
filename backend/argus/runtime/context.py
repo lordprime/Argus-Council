@@ -233,6 +233,10 @@ def _fmt(value: float | None) -> str:
     return f"{value:,.2f}".rstrip("0").rstrip(".") if value % 1 else f"{int(value):,}"
 
 
+# The decision auto mode records: ``by`` tells it apart from the user's own answers.
+AUTO_APPROVED: dict[str, Any] = {"decision": "approved", "by": "auto"}
+
+
 @dataclass
 class Approval:
     id: str
@@ -290,6 +294,9 @@ class Controls:
     # Standing orders persist for the rest of the run.
     standing: dict[str, list[Correction]] = field(default_factory=lambda: defaultdict(list))
     user_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Auto mode, switchable while the run is live: approve requests without asking the user.
+    auto_tools: bool = False  # every request except limit raises
+    auto_extensions: bool = False  # limit raises (still within the extension policy)
 
     def __post_init__(self) -> None:
         self.resume = PauseGate(self.clock)
@@ -331,7 +338,9 @@ class RunContext:
         self.workspace = Workspace(run_id, sessionmaker, sink, engine, blob_root)
         self.notes: list[dict[str, Any]] = []
         self.sources: dict[str, dict[str, Any]] = {}
-        self.controls = Controls()
+        self.controls = Controls(
+            auto_tools=engine.rails.auto_mode, auto_extensions=engine.rails.extensions.auto_approve
+        )
         # Paused time, and time spent waiting for the user to raise a limit, does not count
         # toward max_runtime_minutes.
         self._limit_wait_s = 0.0
@@ -420,8 +429,9 @@ class RunContext:
                     "to": self.engine.limit(rule),
                     "extensions": self.extensions[rule],
                     "max_extensions": policy.max_extensions,
+                    **({"auto": True} if decision.get("by") == "auto" else {}),
                 },
-                actor=Actor.user(),
+                actor=Actor.system() if decision.get("by") == "auto" else Actor.user(),
             )
             await self.budget_update()
             return not still_exceeded()
@@ -448,11 +458,16 @@ class RunContext:
         max_wait_s: float | None = None,
     ) -> dict[str, Any]:
         aid = f"apr_{uuid.uuid4().hex[:12]}"
-        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self.approvals[aid] = Approval(aid, member.member_id or "", summary, risk, fut)
+        auto = self.auto_approves(risk)
         self.notify(
             "approval.requested",
-            {"run_id": str(self.run_id), "approval_id": aid, "summary": summary, "risk": risk},
+            {
+                "run_id": str(self.run_id),
+                "approval_id": aid,
+                "summary": summary,
+                "risk": risk,
+                **({"auto": True} if auto else {}),
+            },
         )
         await self.sink.emit(
             "approval.requested",
@@ -463,9 +478,18 @@ class RunContext:
                 "action_summary": summary,
                 "risk": risk,
                 "rule": "approval_required",
+                **({"auto": True} if auto else {}),
             },
             actor=member,
         )
+        if auto:
+            # Asked and answered at once, but on the record like any other decision.
+            decision = dict(AUTO_APPROVED)
+            APPROVALS.labels("approved").inc()
+            await self.sink.emit("approval.resolved", {"approval_id": aid, **decision}, actor=Actor.system())
+            return decision
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self.approvals[aid] = Approval(aid, member.member_id or "", summary, risk, fut)
         # The run's runtime limit keeps running while it waits: never wait past it. A request to
         # raise a limit passes ``max_wait_s``: its wait is not counted toward the runtime.
         remaining = self.engine.rails.max_runtime_minutes * 60 - self.engine.runtime_s
@@ -480,8 +504,32 @@ class RunContext:
         finally:
             self.approvals.pop(aid, None)
         APPROVALS.labels(str(decision.get("decision", "unknown"))).inc()
-        await self.sink.emit("approval.resolved", {"approval_id": aid, **decision}, actor=Actor.user())
+        by = Actor.system() if decision.get("by") == "auto" else Actor.user()
+        await self.sink.emit("approval.resolved", {"approval_id": aid, **decision}, actor=by)
         return decision
+
+    def auto_approves(self, risk: list[str]) -> bool:
+        """Whether auto mode answers a request with these risk tags right now."""
+        if "limit_extension" in risk:
+            return self.controls.auto_extensions
+        return self.controls.auto_tools
+
+    def set_auto_mode(self, *, tools: bool | None = None, extensions: bool | None = None) -> dict[str, bool]:
+        """Switch auto mode while the run is live; approves the open requests that now qualify.
+
+        The run's guardrails follow, so sub-councils started from now on inherit the new setting.
+        """
+        if tools is not None:
+            self.controls.auto_tools = self.engine.rails.auto_mode = tools
+        if extensions is not None:
+            self.controls.auto_extensions = self.engine.rails.extensions.auto_approve = extensions
+        for approval in list(self.approvals.values()):
+            if not approval.future.done() and self.auto_approves(approval.risk):
+                approval.future.set_result(dict(AUTO_APPROVED))
+        return self.auto_mode()
+
+    def auto_mode(self) -> dict[str, bool]:
+        return {"tools": self.controls.auto_tools, "extensions": self.controls.auto_extensions}
 
     def resolve_approval(self, approval_id: str, decision: dict[str, Any]) -> bool:
         approval = self.approvals.get(approval_id)

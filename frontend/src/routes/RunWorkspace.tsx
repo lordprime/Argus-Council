@@ -14,6 +14,7 @@ import {
   ToolChip,
   VoteCard,
 } from "@/components/run/parts";
+import { AutoModeControl } from "@/components/run/AutoModeControl";
 import { ModeLabel } from "@/components/run/ModeLabel";
 import { RunKnowledgeButton } from "@/components/knowledge/RunKnowledge";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
@@ -27,7 +28,7 @@ import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type { OutputFormat, RunDetail } from "@/lib/types";
-import { isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
+import { awaitsUser, isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
 import { toast } from "@/stores/toast";
 
 type Density = "decisions" | "working" | "everything";
@@ -151,6 +152,7 @@ function Header({ run, runId }: { run: RunDetail; runId: string }) {
           <Button icon={Pause} loading={busy === "pause"} onClick={() => void act("pause")}>Pause</Button>
         ))}
         {live && <Button variant="danger-ghost" icon={Square} loading={busy === "cancel"} onClick={() => void act("cancel")}>Stop</Button>}
+        {live && <AutoModeControl runId={runId} guardrails={run.guardrails} />}
         <RunKnowledgeButton runId={runId} topic={run.topic} live={live} />
         {/* Page-level switch, named apart from the Timeline/Map/… tabs inside the workspace (audit C-16). */}
         <nav aria-label="Run pages" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">
@@ -212,7 +214,7 @@ function Timeline({ runId, density, focus, onSelect, selected, reveal, onReveale
       (!focus || ("actor" in it && it.actor?.member_id === focus) || it.kind === "plan" || it.kind === "approval")),
     [order, items, density, focus],
   );
-  const pending = shown.filter((i) => i.kind === "approval" && i.status === "pending");
+  const pending = shown.filter((i) => i.kind === "approval" && awaitsUser(i));
   const prev = useRef(shown.length);
   useEffect(() => {
     const el = ref.current;
@@ -530,7 +532,10 @@ export default function RunWorkspace() {
   }, [viewId, density, focus, setView]);
   const pendingCount = useRun(viewId, (s) => {
     let n = 0;
-    for (const id in s.items) if (s.items[id]!.kind === "approval" && (s.items[id] as { status?: string }).status === "pending") n++;
+    for (const id in s.items) {
+      const it = s.items[id]!;
+      if (it.kind === "approval" && awaitsUser(it)) n++;
+    }
     return n;
   });
   useEffect(() => {

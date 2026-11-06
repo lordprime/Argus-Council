@@ -15,11 +15,12 @@ text. Every thought passes a *thought bus* before it is acted on: guardrails and
 can annotate, hold or block it, risky tool calls wait for a human, and you can intercept and
 correct any agent, or the whole council, at any moment.
 
-!!! tip "Current version: 0.1.2"
-    **0.1.2** is a security release: API keys are hashed with PBKDF2 (existing keys keep working),
-    fetched URLs and every redirect must be plain `http(s)` URLs, `SKILL.md` parsing no longer
-    backtracks on crafted input, and the web image always takes current Alpine fixes. Recent
-    additions:
+!!! tip "Current version: 0.1.3"
+    **0.1.3** adds **auto mode**, so agents run without stopping to ask, with an optional
+    switch that raises step, turn, runtime and token limits automatically. `web_fetch`,
+    `knowledge_read` and `artifact_read` now recover from common failures. The protocol ledger
+    also records the agents' outbound web requests. Home becomes a real home page, and there
+    are six colour palettes to choose from. Recent additions:
 
     * **[Skills marketplace](concepts/skills.md#marketplace)**: eight curated skills to install,
       plus version history and restore for every skill you edit.

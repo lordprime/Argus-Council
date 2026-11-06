@@ -35,7 +35,8 @@ import { cn } from "@/lib/cn";
 import { useRunsList } from "@/lib/queries";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import { useSession } from "@/stores/session";
-import { useUi, type Theme } from "@/stores/ui";
+import { PaletteSwatch } from "@/components/settings/PalettePicker";
+import { PALETTES, useUi, type Palette, type Theme } from "@/stores/ui";
 
 interface NavItem {
   to: string;
@@ -91,6 +92,25 @@ function ThemeItems() {
   );
 }
 
+const menuLabel = "px-2 py-1 text-xs font-medium text-fg-subtle";
+
+function PaletteItems() {
+  const { palette, setPalette } = useUi();
+  return (
+    <>
+      <Dropdown.Separator className="my-1 h-px bg-border" />
+      <Dropdown.Label className={menuLabel}>Palette</Dropdown.Label>
+      <Dropdown.RadioGroup value={palette} onValueChange={(v) => setPalette(v as Palette)}>
+        {PALETTES.map((p) => (
+          <Dropdown.RadioItem key={p.v} value={p.v} className={cn(menuItem, "data-[state=checked]:font-semibold")}>
+            <PaletteSwatch swatch={p.swatch} className="size-4" /> {p.label}
+          </Dropdown.RadioItem>
+        ))}
+      </Dropdown.RadioGroup>
+    </>
+  );
+}
+
 /** Desktop theme switcher. Below md the same choices live in the account menu (audit C-30). */
 function ThemeMenu() {
   const { theme } = useUi();
@@ -101,8 +121,10 @@ function ThemeMenu() {
         <IconButton label={`Theme: ${current.label}`} icon={current.icon} />
       </Dropdown.Trigger>
       <Dropdown.Portal>
-        <Dropdown.Content align="end" sideOffset={6} className={cn(menuPanel, "min-w-36")}>
+        <Dropdown.Content align="end" sideOffset={6} className={cn(menuPanel, "min-w-44")}>
+          <Dropdown.Label className={menuLabel}>Theme</Dropdown.Label>
           <ThemeItems />
+          <PaletteItems />
         </Dropdown.Content>
       </Dropdown.Portal>
     </Dropdown.Root>
@@ -140,8 +162,9 @@ function UserMenu({ withTheme }: { withTheme: boolean }) {
           {withTheme && (
             <>
               <Dropdown.Separator className="my-1 h-px bg-border" />
-              <Dropdown.Label className="px-2 py-1 text-2xs uppercase tracking-wide text-fg-subtle">Theme</Dropdown.Label>
+              <Dropdown.Label className={menuLabel}>Theme</Dropdown.Label>
               <ThemeItems />
+              <PaletteItems />
             </>
           )}
           <Dropdown.Separator className="my-1 h-px bg-border" />
@@ -157,7 +180,7 @@ function UserMenu({ withTheme }: { withTheme: boolean }) {
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
-  const { setTheme } = useUi();
+  const { setTheme, setPalette } = useUi();
   const runs = useRunsList({ limit: 20 });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -202,7 +225,7 @@ export function CommandPalette() {
             {runs.data.slice(0, 8).map((r) => (
               <Command.Item key={r.id} value={`run ${r.topic} ${r.id}`} onSelect={() => go(`/runs/${r.id}`)} className={item}>
                 <Activity className="size-4" aria-hidden /> <span className="truncate">{r.topic}</span>
-                <span className="ml-auto text-2xs uppercase text-fg-subtle">{r.status}</span>
+                <span className="ml-auto text-xs text-fg-subtle">{r.status.replace(/_/g, " ")}</span>
               </Command.Item>
             ))}
           </Command.Group>
@@ -217,6 +240,11 @@ export function CommandPalette() {
               <t.icon className="size-4" aria-hidden /> Theme: {t.label}
             </Command.Item>
           ))}
+          {PALETTES.map((p) => (
+            <Command.Item key={p.v} value={`palette ${p.v} ${p.hint}`} onSelect={() => { setPalette(p.v); setOpen(false); }} className={item}>
+              <PaletteSwatch swatch={p.swatch} className="size-4" /> Palette: {p.label}
+            </Command.Item>
+          ))}
         </Command.Group>
       </Command.List>
     </Command.Dialog>
@@ -228,7 +256,7 @@ function ActiveRuns({ collapsed }: { collapsed: boolean }) {
   if (collapsed || !active.data?.length) return null;
   return (
     <div className="mt-6">
-      <p className="px-3 text-2xs uppercase tracking-wide text-fg-subtle mb-1">Active runs</p>
+      <p className="px-3 text-xs font-medium text-fg-subtle mb-1">Active runs</p>
       <ul>
         {active.data.map((r) => (
           <li key={r.id}>

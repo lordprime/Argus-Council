@@ -78,10 +78,13 @@ class LimitExtension(_Strict):
     """Raising a limit the run hits, with the user's approval, instead of halting.
 
     Each extension adds ``factor`` of the limit the run started with. Money (``budget.usd``) is
-    opt-in. Sub-councils never extend: they stay inside their parent's ceilings.
+    opt-in. Sub-councils never extend: they stay inside their parent's ceilings. With
+    ``auto_approve`` the raise is granted without asking, still within ``limits`` and
+    ``max_extensions``.
     """
 
     enabled: bool = True
+    auto_approve: bool = False
     limits: list[ExtendableLimit] = Field(
         default_factory=lambda: ["max_steps", "max_agent_iterations", "max_runtime_minutes", "budget.tokens"]
     )
@@ -109,6 +112,9 @@ class Guardrails(_Strict):
     approval_required: list[str] = Field(
         default_factory=lambda: ["shell", "package_install", "remote_agent", "network_write"]
     )
+    # Approve every request except limit raises without asking. It only answers questions: what
+    # the guardrails block (tools.deny, dangerous shell, content and network policy) stays blocked.
+    auto_mode: bool = False
     content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
     sandbox: SandboxPolicy = Field(default_factory=SandboxPolicy)
     oversight: Oversight = Field(default_factory=Oversight)
@@ -149,6 +155,7 @@ class Guardrails(_Strict):
         data["skills"]["deny"] = sorted(set(self.skills.deny) | set(parent.skills.deny))
         data["approval_required"] = sorted(set(self.approval_required) | set(parent.approval_required))
         data["extensions"]["enabled"] = False  # a sub-council halts at its ceilings
+        data["auto_mode"] = parent.auto_mode  # whoever answers the parent's questions answers the child's
         return Guardrails.model_validate(data)
 
 

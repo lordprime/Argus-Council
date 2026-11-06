@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Argus Council",
-    "version": "0.1.2"
+    "version": "0.1.3"
   },
   "paths": {
     "/health/live": {
@@ -2855,6 +2855,66 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Decide Api V1 Runs  Run Id  Approvals  Approval Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/auto-mode": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Auto Mode",
+        "operationId": "auto_mode_api_v1_runs__run_id__auto_mode_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoModeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Auto Mode Api V1 Runs  Run Id  Auto Mode Post"
                 }
               }
             }
@@ -7507,6 +7567,35 @@
           "decision"
         ],
         "title": "ApprovalDecisionIn"
+      },
+      "AutoModeIn": {
+        "properties": {
+          "tools": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools"
+          },
+          "extensions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extensions"
+          }
+        },
+        "type": "object",
+        "title": "AutoModeIn",
+        "description": "Switch a live run's auto mode; a flag left out keeps its current value."
       },
       "Body_import_skill_api_v1_skills_import_post": {
         "properties": {

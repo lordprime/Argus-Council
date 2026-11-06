@@ -63,7 +63,9 @@ Tools named in `require_approval` always need approval, whatever the trust level
 
 ## Ledger
 
-Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user ledger. Each entry
+Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user ledger. So is
+every outbound web request an agent makes through a built-in tool (`web_fetch`, `web_search`, the
+market and news tools), as protocol `http`, with the host as the peer. Each entry
 holds the peer, protocol, direction, method, status, latency, run id and SHA-256 digests of the
 request and response (not the payloads themselves), and is chained to the previous entry:
 

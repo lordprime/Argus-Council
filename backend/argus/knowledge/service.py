@@ -9,7 +9,9 @@ evicted first.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
+import re
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -50,6 +52,8 @@ LIBRARY_DESCRIPTION = (
 )
 MAX_LIBRARY_CHUNKS = 20_000
 MAX_CAPTURE_CHARS = 200_000  # per captured source
+MAX_RESOLVE_DOCS = 5_000  # documents compared by name when a reference matches none exactly
+FUZZY_CUTOFF = 0.8
 
 
 class LimitExceeded(ArgusError):
@@ -400,6 +404,112 @@ def _join_overlapping(chunks: list[str]) -> str:
     return out
 
 
+def document_refs(document: str, kb_names: Sequence[str] = ()) -> list[str]:
+    """Spellings to try for a document reference, most literal first.
+
+    Models pass documents the way knowledge_search cites them (``kb name/file#chunk``, or the
+    ``kb://kb name/file#chunk-3`` citation URL), so the chunk suffix and a leading knowledge-base
+    name are stripped, then anything up to the last ``/``."""
+    ref = document.strip()
+    refs = [ref]
+    if ref.lower().startswith("kb://"):
+        ref = ref[5:]
+        refs.append(ref)
+    ref = re.sub(r"#(?:chunk-?)?\d+$", "", ref).strip()
+    refs.append(ref)
+    for name in sorted(kb_names, key=len, reverse=True):
+        if ref.lower().startswith(name.strip().lower() + "/"):
+            ref = ref[len(name.strip()) + 1 :].strip()
+            refs.append(ref)
+            break
+    if "/" in ref:
+        refs.append(ref.rsplit("/", 1)[-1].strip())
+    return [r for r in dict.fromkeys(refs) if r]
+
+
+async def find_document(
+    db: AsyncSession, kb_ids: Sequence[uuid.UUID], document: str
+) -> tuple[KnowledgeDocument, KnowledgeBase] | None:
+    """A document of ``kb_ids`` (already ownership-checked) by a tolerant reference: its id, its
+    file name (any case, with or without the knowledge-base prefix and chunk suffix), its title,
+    then the closest file name or title. The newest document wins a tie."""
+    if not kb_ids:
+        return None
+    base = (
+        select(KnowledgeDocument, KnowledgeBase)
+        .join(KnowledgeBase, KnowledgeBase.id == KnowledgeDocument.kb_id)
+        .where(KnowledgeDocument.kb_id.in_(list(kb_ids)))
+        .order_by(KnowledgeDocument.created_at.desc())
+    )
+    try:
+        doc_id = uuid.UUID(document.strip())
+    except ValueError:
+        doc_id = None
+    if doc_id is not None:
+        row = (await db.execute(base.where(KnowledgeDocument.id == doc_id).limit(1))).first()
+        return (row[0], row[1]) if row else None
+    names = (await db.execute(select(KnowledgeBase.name).where(KnowledgeBase.id.in_(list(kb_ids))))).scalars()
+    refs = document_refs(document, list(names))
+    lowered = [r.lower() for r in refs]
+    for field in ("filename", "title"):
+        column = getattr(KnowledgeDocument, field)
+        rows = (await db.execute(base.where(func.lower(column).in_(lowered)))).all()
+        if rows:
+            # The most literal spelling that matched; ``min`` keeps the newest document within it.
+            ranked = [(lowered.index(getattr(r[0], field).lower()), i) for i, r in enumerate(rows)]
+            doc, kb = rows[min(ranked)[1]]
+            return doc, kb
+    listing = (
+        await db.execute(
+            select(KnowledgeDocument.id, KnowledgeDocument.filename, KnowledgeDocument.title)
+            .where(KnowledgeDocument.kb_id.in_(list(kb_ids)))
+            .order_by(KnowledgeDocument.created_at.desc())
+            .limit(MAX_RESOLVE_DOCS)
+        )
+    ).all()
+    by_name: dict[str, uuid.UUID] = {}
+    for did, filename, title in listing:
+        for label in (filename, title):
+            if label:
+                by_name.setdefault(label.lower(), did)
+    for ref in reversed(lowered):  # the most stripped spelling is the likeliest to be the name
+        close = difflib.get_close_matches(ref, list(by_name), n=1, cutoff=FUZZY_CUTOFF)
+        if close:
+            row = (await db.execute(base.where(KnowledgeDocument.id == by_name[close[0]]).limit(1))).first()
+            if row:
+                return row[0], row[1]
+    return None
+
+
+async def suggest_documents(
+    db: AsyncSession, kb_ids: Sequence[uuid.UUID], document: str, limit: int = 20
+) -> list[str]:
+    """Up to ``limit`` ``kb name/file name`` references of ``kb_ids`` for a reference that matched
+    nothing: the closest names first, then uploaded documents before captured library sources."""
+    if not kb_ids:
+        return []
+    rows = (
+        await db.execute(
+            select(KnowledgeBase.name, KnowledgeBase.kind, KnowledgeDocument.filename)
+            .join(KnowledgeBase, KnowledgeBase.id == KnowledgeDocument.kb_id)
+            .where(KnowledgeDocument.kb_id.in_(list(kb_ids)))
+            .order_by(KnowledgeDocument.created_at.desc())
+            .limit(MAX_RESOLVE_DOCS)
+        )
+    ).all()
+    labels = {f"{name}/{filename}": (kind, filename.lower()) for name, kind, filename in rows}
+    ref = document_refs(document)[-1].lower()
+    by_file: dict[str, list[str]] = {}
+    for label, (_kind, filename) in labels.items():
+        by_file.setdefault(filename, []).append(label)
+    close = difflib.get_close_matches(ref, list(by_file), n=limit, cutoff=0.4)
+    picked = [label for f in close for label in by_file[f]]
+    picked += sorted(
+        (label for label in labels if label not in picked), key=lambda label: labels[label][0] == "library"
+    )
+    return picked[:limit]
+
+
 async def read_document(
     db: AsyncSession,
     kb_ids: Sequence[uuid.UUID],
@@ -408,23 +518,13 @@ async def read_document(
     start: int = 0,
     max_chars: int = 20_000,
 ) -> dict[str, Any] | None:
-    """A document of ``kb_ids`` (already ownership-checked), by id or file name, read in order
-    from chunk ``start`` up to about ``max_chars``. Spreadsheets come back as their full rows."""
-    if not kb_ids:
+    """A document of ``kb_ids`` (already ownership-checked), by id or file name (resolved by
+    ``find_document``), read in order from chunk ``start`` up to about ``max_chars``. Spreadsheets
+    come back as their full rows."""
+    found = await find_document(db, kb_ids, document)
+    if found is None:
         return None
-    q = (
-        select(KnowledgeDocument, KnowledgeBase)
-        .join(KnowledgeBase, KnowledgeBase.id == KnowledgeDocument.kb_id)
-        .where(KnowledgeDocument.kb_id.in_(list(kb_ids)))
-    )
-    try:
-        q = q.where(KnowledgeDocument.id == uuid.UUID(document))
-    except ValueError:
-        q = q.where(func.lower(KnowledgeDocument.filename) == document.strip().lower())
-    row = (await db.execute(q.order_by(KnowledgeDocument.created_at.desc()).limit(1))).first()
-    if row is None:
-        return None
-    doc, kb = row
+    doc, kb = found
     texts: list[str] = []
     used, nxt = 0, start
     rows = await db.execute(

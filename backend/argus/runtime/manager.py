@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 import weakref
 from collections.abc import Awaitable, Callable
@@ -107,6 +108,8 @@ class RunManager:
         def _notify(event: str, data: dict[str, Any]) -> None:
             if self.webhooks is not None:
                 self.webhooks.emit(owner, event, data)
+            if data.get("auto"):
+                return  # auto mode answered it: nothing waits for the user
             if depth == 0 or event == "approval.requested":  # sub-council results surface via the parent
                 notifier.emit(owner, event, data)
 
@@ -498,6 +501,18 @@ class RunManager:
         if live.task is not None and not live.task.done() and not live.finalising:
             log.warning("run.cancel_forced", run_id=str(live.ctx.run_id), grace_s=CANCEL_GRACE_S)
             live.task.cancel()
+
+    async def set_auto_mode(
+        self, run_id: uuid.UUID, *, tools: bool | None = None, extensions: bool | None = None
+    ) -> dict[str, bool]:
+        """Switch a live run's auto mode (and its running sub-councils'); returns the new flags."""
+        live = self._live(run_id)
+        flags = live.ctx.set_auto_mode(tools=tools, extensions=extensions)
+        await live.ctx.sink.emit("run.auto_mode", flags, actor=Actor.user())
+        for child_id in list(live.ctx.children) if tools is not None else ():
+            with contextlib.suppress(Conflict):  # the child is finishing: nothing left to answer
+                await self.set_auto_mode(child_id, tools=tools)
+        return flags
 
     async def resolve_approval(self, run_id: uuid.UUID, approval_id: str, decision: dict[str, Any]) -> None:
         if not self._live(run_id).ctx.resolve_approval(approval_id, decision):

@@ -29,6 +29,7 @@ class SnapshotReducer:
             "violations": [],
             "votes": {},
             "thoughts": 0,
+            "auto_mode": None,  # set once the user switches it live; else the run's guardrails decide
         }
 
     def feed(self, events: Iterable[dict[str, Any]]) -> None:
@@ -57,7 +58,12 @@ class SnapshotReducer:
             elif t == "approval.requested":
                 state["approvals"][d["approval_id"]] = {**d, "status": "pending"}
             elif t == "approval.resolved":
-                state["approvals"].setdefault(d["approval_id"], {})["status"] = d.get("decision")
+                approval = state["approvals"].setdefault(d["approval_id"], {})
+                approval["status"] = d.get("decision")
+                if d.get("by"):
+                    approval["by"] = d["by"]
+            elif t == "run.auto_mode":
+                state["auto_mode"] = {"tools": bool(d.get("tools")), "extensions": bool(d.get("extensions"))}
             elif t == "artifact.upserted":
                 state["artifacts"][d["path"]] = d
             elif t == "intercept.raised":

@@ -34,6 +34,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `network.allow_domains` | `["*"]` | Domains `web_fetch` may reach |
 | `network.block_private_ips` | `true` | Refuse private, loopback, link-local and metadata addresses |
 | `approval_required` | `shell`, `package_install`, `remote_agent`, `network_write` | Risk tags that need a human decision |
+| `auto_mode` | `false` | Approve every request without asking, except limit raises ([Auto mode](#auto-mode)) |
 | `content_policy.preset` | `standard` | `off`, `standard` or `strict` (strict also flags prompt-injection phrases) |
 | `content_policy.blocked_topics` | `[]` | Phrases that block a thought outright |
 | `sandbox.root` | `/workspace` | Workspace root for file tools |
@@ -52,6 +53,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `extensions.limits` | `max_steps`, `max_agent_iterations`, `max_runtime_minutes`, `budget.tokens` | Limits that may be raised; add `budget.usd` to be asked about spend too |
 | `extensions.factor` | `0.5` | Each raise adds this share of the starting limit |
 | `extensions.max_extensions` | `3` | Raises per limit per run |
+| `extensions.auto_approve` | `false` | Raise limits without asking, still within `limits` and `max_extensions` |
 | `context.condense` | `true` | Summarise an agent's older history when it outgrows the budget (below) |
 | `context.budget_chars` | `120000` | History size each agent turn re-sends before trimming and condensing |
 
@@ -101,6 +103,31 @@ curl -X POST localhost:8000/api/v1/runs/$RUN/approvals/$APPROVAL -H "Authorizati
 expire. Calls to MCP servers can also need approval through the server's
 [trust level](../protocols.md#mcp-trust-levels), and remote-agent delegations through the agent's
 `requires_approval` flag.
+
+### Auto mode
+
+With `auto_mode` on, agents never stop to ask. Each request is still put on the record: the
+run emits `approval.requested` (flagged `auto: true`), then at once `approval.resolved` with
+`{"decision": "approved", "by": "auto"}`. The workspace shows those requests as *Auto-approved*,
+and the in-app bell skips them. Report outline check-ins are approved the same way. Auto mode only
+answers questions. It never widens permissions: `tools.deny`, destructive-shell blocks, the
+content policy and the network policy still block.
+
+`extensions.auto_approve` does the same for limit raises (below), so a long run is not stopped
+by "raise the step limit?" questions. It stays within `extensions.limits` and
+`extensions.max_extensions`, and only raises spend when `budget.usd` is listed.
+
+Both can be switched while a run is live, from the **Auto mode** control next to Pause in the run
+workspace, or with:
+
+```bash
+curl -X POST localhost:8000/api/v1/runs/$RUN/auto-mode -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"tools": true, "extensions": true}'
+```
+
+Turning a switch on also approves the requests already waiting that it now covers. The change is
+recorded as a `run.auto_mode` event and passed on to running sub-councils. Sub-councils inherit
+`auto_mode` from their parent.
 
 ## Limits and halting
 

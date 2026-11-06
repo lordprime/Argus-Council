@@ -49,6 +49,15 @@ async def _scope(ctx: ToolCallContext) -> dict[str, Any]:
     return scope
 
 
+def _kb_name(name: str, kbs: dict[str, uuid.UUID]) -> str | None:
+    """The in-scope knowledge base ``name`` refers to, ignoring case and surrounding or repeated
+    whitespace."""
+    if name in kbs:
+        return name
+    want = " ".join(name.split()).casefold()
+    return next((k for k in kbs if " ".join(k.split()).casefold() == want), None)
+
+
 class KnowledgeSearch(Tool):
     name = "knowledge_search"
     description = (
@@ -69,13 +78,14 @@ class KnowledgeSearch(Tool):
         if not kbs:
             return ToolResult.error("No knowledge bases are available to this run")
         if args.knowledge_bases:
-            unknown = [n for n in args.knowledge_bases if n not in kbs]
+            named = {n: _kb_name(n, kbs) for n in args.knowledge_bases}
+            unknown = [n for n, k in named.items() if k is None]
             if unknown:
                 return ToolResult.error(
                     f"Unknown or not permitted knowledge base(s): {', '.join(unknown)}. "
                     f"Available: {', '.join(sorted(kbs))}"
                 )
-            ids = [kbs[n] for n in args.knowledge_bases]
+            ids = list(dict.fromkeys(kbs[k] for k in named.values() if k is not None))
         else:
             ids = list(kbs.values())
         async with ctx.run.sessionmaker() as s:
@@ -118,9 +128,10 @@ class KnowledgeRead(Tool):
     name = "knowledge_read"
     description = (
         "Read a whole document from the user's knowledge bases in order, by file name or document id "
-        "(as knowledge_search cites it). Spreadsheets (CSV, XLSX) come back row by row with every "
-        "column labelled: read them in full before computing totals, ranges or comparisons. Long "
-        "documents are paged: pass the returned `next` as `start` to continue."
+        "(as knowledge_search cites it; 'knowledge base/file name' works too). Spreadsheets (CSV, "
+        "XLSX) come back row by row with every column labelled: read them in full before computing "
+        "totals, ranges or comparisons. Long documents are paged: pass the returned `next` as `start` "
+        "to continue."
     )
 
     class Args(BaseModel):
@@ -131,24 +142,35 @@ class KnowledgeRead(Tool):
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         kbs: dict[str, uuid.UUID] = (await _scope(ctx))["kbs"]
+        every = list(kbs.values())
+        ids = every
         if args.knowledge_base is not None:
-            if args.knowledge_base not in kbs:
+            name = _kb_name(args.knowledge_base, kbs)
+            if name is None:
                 return ToolResult.error(
                     f"Unknown or not permitted knowledge base: {args.knowledge_base}. "
                     f"Available: {', '.join(sorted(kbs))}"
                 )
-            ids = [kbs[args.knowledge_base]]
-        else:
-            ids = list(kbs.values())
+            ids = [kbs[name]]
         async with ctx.run.sessionmaker() as s:
             doc = await service.read_document(
                 s, ids, args.document, start=args.start, max_chars=args.max_chars
             )
+            if doc is None and len(ids) < len(every):
+                # Named the wrong knowledge base: the document may still be in another one in scope.
+                doc = await service.read_document(
+                    s, every, args.document, start=args.start, max_chars=args.max_chars
+                )
+            suggestions = [] if doc is not None else await service.suggest_documents(s, ids, args.document)
         if doc is None:
-            return ToolResult.error(
-                f"No document '{args.document}' in: {', '.join(sorted(kbs)) or 'no knowledge bases'}. "
-                "Use knowledge_search to find file names."
+            where = ", ".join(sorted(kbs)) or "no knowledge bases"
+            hint = (
+                "Did you mean one of these? (pass the file name as `document`):\n"
+                + "\n".join(f"- {name}" for name in suggestions)
+                if suggestions
+                else "Those knowledge bases have no documents."
             )
+            return ToolResult.error(f"No document '{args.document}' in: {where}. {hint}")
         url = doc["source_url"] or f"kb://{doc['kb_name']}/{doc['filename']}"
         sources = ctx.run.sources
         source = sources.get(url)

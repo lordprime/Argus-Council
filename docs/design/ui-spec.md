@@ -617,6 +617,28 @@ Tokens are CSS custom properties on `:root`. Dark mode is set by `[data-theme="d
 | `--accent-subtle` | `#EEF0FF` | `#1E2140` | Selected nav, highlights |
 | `--focus-ring` | `#4338CA` | `#A5ACFA` | 2px ring + 2px offset in `--canvas` |
 
+The table above is the **Indigo** palette (the original look). `frontend/src/styles/tokens.css` is the
+source of truth for every palette's values.
+
+#### Palettes
+
+The user picks a palette in Settings → Appearance, the header theme menu or the command palette. It is
+stored per browser (`argus.palette`) and set as `:root[data-palette]`. Every palette overrides the same
+tokens in light and dark, so components never branch on it.
+
+| Palette | Light paper / accent | Dark accent | Character |
+| --- | --- | --- | --- |
+| Wine (default, no attribute) | `#F7F4EE` / `#7A2048` | `#E08AA5` | Warm editorial paper |
+| Indigo | `#F6F7F9` / `#4338CA` | `#8B93F8` | The original: white, indigo, near-black |
+| Graphite | `#F6F6F5` / `#202020` | `#ECECEA` | Monochrome ink; colour only for status |
+| Forest | `#F4F5F0` / `#225E40` | `#7AC498` | Sage paper, deep green |
+| Ocean | `#F3F6F8` / `#0C6470` | `#5EC8D0` | Cool slate, teal |
+| Ember | `#F9F5EF` / `#A03C16` | `#F08C5C` | Warm sand, burnt orange |
+
+Adding or changing a palette: edit `tokens.css`, add it to `PALETTES` in `frontend/src/stores/ui.ts`, then
+run `python3 scripts/check-contrast.py`. It checks every text pair at 4.5:1 and every non-text pair at 3:1
+in every palette and mode, and fails otherwise.
+
 ### 7.2 Semantic and status
 
 | Token | Light (fg / subtle bg) | Dark (fg / subtle bg) | Status mapping |

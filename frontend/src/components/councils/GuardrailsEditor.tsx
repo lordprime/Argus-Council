@@ -71,6 +71,7 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
   const set = (path: string[], v: unknown) => onChange(setOverride(value, path, v));
 
   const approvals = get<string[]>(["approval_required"]);
+  const autoMode = get<boolean>(["auto_mode"]);
   const intercept = get<string>(["oversight", "intercept_mode"]);
   const preset = get<string>(["content_policy", "preset"]);
   const custom = countOverrides(value);
@@ -104,6 +105,9 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
             value={get<number>(["max_parallel_agents"])} onChange={(v) => set(["max_parallel_agents"], v)}
             hint="Seats working at the same time." onValidityChange={validity("parallel")} />
         </div>
+        <Toggle label="Approve limit raises automatically" checked={get<boolean>(["extensions", "auto_approve"])}
+          onChange={(on) => set(["extensions", "auto_approve"], on)}
+          hint="When the run hits its step, turn, runtime or token limit, raise it without asking (a few times at most). The dollar budget is never raised." />
       </Group>
 
       <Group legend="Tools">
@@ -116,6 +120,8 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
       </Group>
 
       <Group legend="Require my approval for">
+        <Toggle label="Auto mode" checked={autoMode} onChange={(on) => set(["auto_mode"], on)}
+          hint="Agents run without asking for approval. Blocked actions stay blocked." />
         <div className="grid gap-3 sm:grid-cols-2">
           {APPROVAL_KEYS.map((a) => (
             <Toggle key={a.key} label={a.label} hint={a.hint} checked={approvals.includes(a.key)}
@@ -169,12 +175,14 @@ export function GuardrailsSummary({ value }: { value: Dict }) {
   const steps = effective(value, ["max_steps"]) as number;
   const intercept = effective(value, ["oversight", "intercept_mode"]) as string;
   const approvals = (effective(value, ["approval_required"]) as string[]).length;
+  const auto = effective(value, ["auto_mode"]) as boolean;
   return (
     <div className="flex flex-wrap gap-1.5">
+      {auto && <Badge tone="accent">Auto mode</Badge>}
       <Badge>{usd == null ? "No $ cap" : `$${usd} budget`}</Badge>
       <Badge>{steps} steps</Badge>
       <Badge>{intercept} intercepts</Badge>
-      <Badge>{approvals} approvals</Badge>
+      {!auto && <Badge>{approvals} approvals</Badge>}
     </div>
   );
 }

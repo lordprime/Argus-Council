@@ -60,3 +60,28 @@ async def test_ledger_purpose_filter_is_server_side(client, auth, app):
     assert len((await _page(client, auth))["entries"]) == 8
     r = await client.get("/api/v1/ledger", headers=auth, params={"purpose": "bogus"})
     assert r.status_code == 422
+
+
+async def test_ledger_protocol_filter_includes_agent_web_requests(client, auth, app):
+    me = uuid.UUID((await client.get("/api/v1/auth/me", headers=auth)).json()["id"])
+    await _seed(app, me)
+    await ledger.record(
+        app.state.db.sessionmaker,
+        owner_id=me,
+        protocol="http",
+        direction="outbound",
+        peer="www.pewresearch.org",
+        method="web_fetch",
+        status="error",
+        request={"url": "https://www.pewresearch.org/x"},
+        response={"status": 404},
+        run_id=uuid.uuid4(),
+        detail={"purpose": "run", "tool": "web_fetch", "archived": False},
+    )
+    body = await _page(client, auth, protocol="http")
+    assert [(e["seq"], e["peer"], e["method"]) for e in body["entries"]] == [
+        (9, "www.pewresearch.org", "web_fetch")
+    ]
+    assert [e["seq"] for e in (await _page(client, auth, protocol="http", purpose="run"))["entries"]] == [9]
+    assert len((await _page(client, auth, protocol="mcp"))["entries"]) == 8
+    assert (await client.get("/api/v1/ledger/verify", headers=auth)).json()["ok"] is True

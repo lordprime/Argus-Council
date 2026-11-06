@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # web_fetch (driven by model output, so by whatever content the agents read): a run's guardrails
     # can only tighten this, never open private networks on their own.
     web_fetch_allow_private_urls: bool = False
+    # Load pages whose static HTML has almost no text in headless Chromium (needs the ``browser``
+    # extra and ``playwright install chromium``). Off: such pages are read as served.
+    web_fetch_render_js: bool = False
     # Keep every page agents read (web_fetch) in the owner's research library knowledge base.
     knowledge_capture_enabled: bool = True
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)

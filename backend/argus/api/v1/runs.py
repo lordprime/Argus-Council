@@ -17,7 +17,16 @@ from sqlalchemy.orm import load_only
 
 from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SettingsDep, resolve_principal, write_scope
 from argus.api.idempotency import idempotent
-from argus.api.schemas import ApprovalDecisionIn, ExportIn, InterventionIn, PlanIn, RunDetail, RunIn, RunOut
+from argus.api.schemas import (
+    ApprovalDecisionIn,
+    AutoModeIn,
+    ExportIn,
+    InterventionIn,
+    PlanIn,
+    RunDetail,
+    RunIn,
+    RunOut,
+)
 from argus.api.sse import END, HEARTBEAT, SseHub
 from argus.core.errors import ArgusError, NotFound, Unauthorized
 from argus.db.models import Artifact, Run
@@ -314,6 +323,14 @@ async def decide(
     }
     await _manager(request).resolve_approval(run_id, approval_id, decision)
     return {"decision": decision["decision"]}
+
+
+@router.post("/{run_id}/auto-mode", status_code=status.HTTP_202_ACCEPTED)
+async def auto_mode(
+    run_id: uuid.UUID, data: AutoModeIn, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    await _own_run(db, principal.id, run_id)
+    return await _manager(request).set_auto_mode(run_id, tools=data.tools, extensions=data.extensions)
 
 
 @router.get("/{run_id}/events")

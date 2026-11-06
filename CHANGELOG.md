@@ -8,6 +8,57 @@ All notable changes to this project are documented here. The format follows
 (`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
 `mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
+## [0.1.3] - 2026-11-06
+
+### Added
+
+- **Auto mode.** With `guardrails.auto_mode` on, agents never stop to ask. Each approval request is
+  still recorded, as `approval.requested` then `approval.resolved {"decision": "approved",
+  "by": "auto"}`, and the workspace shows it as *Auto-approved*. `guardrails.extensions.auto_approve`
+  does the same for raising the step, per-agent turn, runtime and token limits. It stays within
+  `extensions.limits` and `max_extensions`, and only raises spend when `budget.usd` is listed. Both
+  switches are on Home's run settings (remembered per browser) and in the council guardrails
+  editor. `POST /runs/{id}/auto-mode` and an **Auto mode** control next to Pause change them on a
+  live run; turning one on approves the requests already waiting that it covers. Hard blocks
+  (`tools.deny`, destructive shell, content and network policy) are unchanged. Sub-councils
+  inherit auto mode.
+- **Palettes.** Settings → Appearance, the header theme menu and the command palette offer six
+  palettes, each in light and dark: Wine (default), Indigo (the original look), Graphite, Forest,
+  Ocean and Ember. `scripts/check-contrast.py` checks every palette against WCAG AA.
+- The protocol ledger also records the agents' outbound web requests: `web_fetch`, `web_search`
+  and the market and news tools, as protocol `http`. The live stream gets a `protocol.call` event
+  for each request. The ledger page has an HTTP filter. Before this, the ledger stayed empty for
+  anyone without MCP servers or remote agents.
+- `web_fetch` reads PDFs (up to 15 MB). It can render JavaScript-only pages in headless Chromium
+  when `ARGUS_WEB_FETCH_RENDER_JS=true` and the optional `browser` extra (Playwright) is installed.
+
+### Changed
+
+- **Home is a home page.** The composer leads, and its configuration folds into one *Run settings*
+  row that summarises the choices. Runs waiting for you come first. A side rail shows the last
+  7 days, tools above 20% errors, and whether model providers are answering.
+- `web_fetch` extracts article text with trafilatura and sends ordinary browser request headers.
+  It retries timeouts, 429 and 502–504 responses twice, with backoff, honouring `Retry-After` up
+  to 5 s. On 401/403/404/410/429/451 or a bot-check page it falls back to the Internet Archive's
+  closest snapshot. That goes through the same SSRF checks and only when the run's domain policy
+  allows archive.org. Bot checks are reported, never bypassed. Every error says what to do next:
+  for a 404, for example, search for the real address instead of guessing URLs.
+- `knowledge_read` finds a document by id, exact file name, the `knowledge base/file` form that
+  `knowledge_search` cites (with or without `#chunk`), base name, title, or a close match.
+  Knowledge base names match regardless of case. A miss lists the closest file names.
+- `artifact_read` accepts `./`, `/workspace/` and `workspace/` prefixes, any case, a unique base
+  name or a close match. A miss lists the workspace's files.
+- Failed tool calls end with a `Recovery:` line when the tool gave no guidance: the schema for bad
+  arguments, "look it up first" for missing names, the available tools for an unknown tool.
+  Read-only built-in tools get one automatic retry after a timeout or dropped connection.
+- The interface: badges and menu labels are in sentence case instead of all caps, status badges
+  are square instead of pills, and the Insights KPI cards drop their tinted icon circles.
+
+### Fixed
+
+- Section tabs (Connections, Settings, Insights) no longer show a stray vertical scrollbar at
+  their right edge.
+
 ## [0.1.2] - 2026-11-05
 
 ### Security
@@ -205,5 +256,6 @@ All notable changes to this project are documented here. The format follows
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
   models often send, instead of failing with "Input should be a valid list".
 
+[0.1.3]: https://github.com/lordprime/Argus-Council/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lordprime/Argus-Council/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/lordprime/Argus-Council/releases/tag/v0.1.0

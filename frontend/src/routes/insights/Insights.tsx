@@ -25,13 +25,10 @@ function KpiCard({ icon: Icon, label, value, sub, spark, tone, kind }: {
 }) {
   return (
     <Card as="article" className="p-4 flex flex-col gap-2 min-w-0" aria-label={label}>
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm text-fg-muted font-medium">{label}</h2>
-        <span className="size-7 rounded-full grid place-items-center" style={{ background: color(tone, 0.12), color: color(tone) }}>
-          <Icon className="size-4" aria-hidden />
-        </span>
-      </div>
-      <p className="text-2xl tabular" data-testid={`kpi-${label}`}>{value}</p>
+      <h2 className="flex items-center gap-1.5 text-sm text-fg-muted font-medium">
+        <Icon className="size-3.5 text-fg-subtle" aria-hidden />{label}
+      </h2>
+      <p className="text-2xl font-display tabular" data-testid={`kpi-${label}`}>{value}</p>
       <p className="text-xs text-fg-subtle truncate">{sub}</p>
       <Sparkline values={spark} tone={tone} kind={kind} />
     </Card>
