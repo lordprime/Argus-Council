@@ -429,7 +429,7 @@ class _Builder:
             widths = [FRAME_W * max(n, 4) / total for n in lengths]
         else:
             widths = [FRAME_W * w for w in widths]
-        t = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT")
+        t = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT", splitInRow=1)
         cmds: list[tuple[Any, ...]] = [
             ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -536,7 +536,7 @@ class _Builder:
         if b.text:
             inner.append(Paragraph(markup(b.text), self.s["body"]))
         inner += [Paragraph(f"• {markup(i)}", self.s["body"]) for i in b.items]
-        t = Table([[inner]], colWidths=[FRAME_W], hAlign="LEFT")
+        t = Table([[inner]], colWidths=[FRAME_W], hAlign="LEFT", splitInRow=1)
         t.setStyle(
             TableStyle(
                 [
@@ -572,7 +572,12 @@ class _Builder:
         elif b.type == "callout":
             self.callout(b)
         elif b.type == "quote":
-            q = Table([[Paragraph(markup(b.text), self.s["quote"])]], colWidths=[FRAME_W], hAlign="LEFT")
+            q = Table(
+                [[Paragraph(markup(b.text), self.s["quote"])]],
+                colWidths=[FRAME_W],
+                hAlign="LEFT",
+                splitInRow=1,
+            )
             q.setStyle(
                 TableStyle([("LINEBEFORE", (0, 0), (0, -1), 2, RULE), ("LEFTPADDING", (0, 0), (-1, -1), 10)])
             )
@@ -646,7 +651,7 @@ class _Builder:
             ]
             for k, v in rows
         ]
-        t = Table(data, colWidths=[3.2 * cm, FRAME_W - 3.2 * cm], hAlign="LEFT")
+        t = Table(data, colWidths=[3.2 * cm, FRAME_W - 3.2 * cm], hAlign="LEFT", splitInRow=1)
         t.setStyle(
             TableStyle(
                 [

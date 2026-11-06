@@ -695,7 +695,8 @@ async def test_a_failing_voter_stops_the_other_voters(client, auth, app):
     council = {
         "name": "voting",
         "mode": "chat",
-        "guardrails": {"oversight": {"monitor_sensitivity": "off"}},
+        # The majority vote (debate off; with debate on, co-signing replaces it).
+        "guardrails": {"oversight": {"monitor_sensitivity": "off"}, "debate": {"enabled": False}},
         "members": [
             {"name": "Ann", "role": "assistant", "provider": "voters", "model": "m"},
             {"name": "Chair", "role": "chair", "provider": "voters", "model": "m"},

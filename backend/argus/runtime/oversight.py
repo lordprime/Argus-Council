@@ -226,6 +226,42 @@ class ThoughtBus:
         self.overseers = sorted(overseers, key=lambda o: _ROLE_PRIORITY.get(o.role, 9))
         rails = ctx.engine.rails
         self.loops = LoopDetector(rails.oversight.loop_threshold)
+        # Overseer notes without a correction, delivered to the member at its next turn.
+        self.notes: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+    def take_notes(self, member_id: str) -> list[tuple[str, str]]:
+        """The overseers' notes for a member since its last turn, as ``(by, note)``."""
+        return self.notes.pop(member_id, [])
+
+    def _as_overseers_see_it(self, thought: Thought) -> Thought:
+        """A member with a secret stance never gives it away, not even to the overseers."""
+        from argus.runtime.council_bus import conceal
+
+        bus = self.ctx.extra.get("council_bus")
+        member = bus.members.get(thought.member.member_id or "") if bus is not None else None
+        if member is None or not member.stance:
+            return thought
+
+        def clean(value: Any) -> Any:
+            if isinstance(value, str):
+                return conceal(member, value)
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [clean(v) for v in value]
+            return value
+
+        calls = [ToolCall(id=c.id, name=c.name, arguments=clean(c.arguments)) for c in thought.tool_calls]
+        return Thought(
+            thought.thought_id,
+            thought.member,
+            conceal(member, thought.text),
+            calls,
+            thought.step_id,
+            thought.step_title,
+            thought.final,
+            thought.event_id,
+        )
 
     def _guardrail_verdicts(self, thought: Thought) -> list[Verdict]:
         out: list[Verdict] = []
@@ -269,7 +305,8 @@ class ThoughtBus:
             verdicts.append(loop)
         if not any(v.action == "block" and v.deterministic for v in verdicts):
             wanted = [o for o in self.overseers if o.wants(thought, rails.oversight.monitor_sensitivity)]
-            results = await asyncio.gather(*(o.review(thought, self.ctx) for o in wanted))
+            seen = self._as_overseers_see_it(thought) if wanted else thought
+            results = await asyncio.gather(*(o.review(seen, self.ctx) for o in wanted))
             ceiling = _RANK[rails.oversight.intercept_mode]
             for v in results:
                 if v is None or v.action == "pass":
@@ -311,6 +348,9 @@ class ThoughtBus:
                     step_id=thought.step_id,
                     causation_id=env.id,
                 )
+            elif v.action == "annotate" and v.note and thought.member.member_id:
+                # An annotation without a correction still reaches the member: "[Note from X]".
+                self.notes[thought.member.member_id].append((v.by.name or v.by.role or "overseer", v.note))
             if _RANK[v.action] > _RANK[effective.action]:
                 effective = v
         if len(verdicts) > 1 and effective.action != "pass":

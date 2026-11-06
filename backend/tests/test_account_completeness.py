@@ -19,6 +19,8 @@ from argus.db.models import (
     CliSession,
     Council,
     CouncilMember,
+    GraphEdge,
+    GraphNode,
     KnowledgeBase,
     KnowledgeChunk,
     KnowledgeDocument,
@@ -145,6 +147,17 @@ async def _seed_everything(app, uid: uuid.UUID, email: str) -> dict[str, uuid.UU
         await s.flush()
         s.add(KnowledgeChunk(kb_id=kb.id, document_id=doc.id, text="chunk"))
         s.add(MemoryItem(owner_id=uid, council_id=council.id, text="remember this", run_id=run.id))
+        s.add(GraphNode(owner_id=uid, council_id=council.id, run_id=run.id, key="clm_1", type="claim"))
+        s.add(
+            GraphEdge(
+                owner_id=uid,
+                council_id=council.id,
+                run_id=run.id,
+                src="clm_1",
+                dst="ent_1",
+                relation="mentions",
+            )
+        )
         s.add(
             AuditEvent(
                 ts=NOW,

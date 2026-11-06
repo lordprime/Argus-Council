@@ -53,6 +53,89 @@ All notable changes to this project are documented here. The format follows
     `reply_to_user`, shown as *Ben replied to you*.
   - `POST /runs/{id}/a2a` takes an A2A `message/send` message (`metadata.to`: a member's name or
     role; omitted, the whole council) and returns the recorded message.
+- **The council debates and concludes together.** See [the design](https://lordprime.github.io/Argus-Council/design/parallel-council/).
+  - **Debate over A2A.** Members make claims with evidence and a confidence (`make_claim`), and
+    challenge a claim or a teammate (`challenge`), demanding proof, a counterexample or a
+    clarification. The challenged member must defend, concede or revise
+    (`respond_to_challenge`), and the challenger accepts or rejects the answer
+    (`resolve_challenge`).
+    - A defence of a proof demand that brings no evidence is marked *unsupported* and stays open.
+    - A member cannot finish its work while challenges against it are open: it is sent back up to
+      `debate.max_nudges` times.
+    - A review that asks for a revision opens a challenge.
+    - Every move is an A2A message with a `data` part. Each one is recorded in the ledger and on
+      the timeline as `debate.*` events.
+  - **A collective conclusion.** After the work come four phases. Every non-overseer member is a
+    debater and a co-author.
+    - *Deliberate*: rounds in which all debaters challenge at once, then answer at once.
+    - *Converge*: every debater states a position, endorsing or objecting to each claim. Agreement
+      is computed in code against `debate.consensus` (two thirds by default), and the debaters
+      revise while claims stay contested.
+    - *Compile*: a scribe (the writer seat, or else the chair) assembles only what was agreed,
+      shows contested claims with both sides, records dissent, and adds *How the council reached
+      this*.
+    - *Co-sign*: every author signs, amends or blocks, with a quorum. Amendments that the consensus
+      endorses are applied.
+    - Co-signing replaces the vote, in report mode too, where the report's byline lists the
+      council. `debate.enabled: false` restores one synthesis and a majority vote.
+  - **Debate cost.** The debate saves without cutting rounds, participants or the threshold:
+    - Light moves (a challenge, a position, a signature, an amendment vote) read a digest. They run
+      as one call without tools, on the newest cheap model of the seat's own provider that still
+      scores at least `debate.light_min_reasoning` (70) for reasoning. That is Claude Haiku 5.5 for
+      a Claude seat, with the seat's model as the fallback.
+    - Answers to challenges, which keep the read-only tools to fetch proof, and the compiled text
+      stay on the seat's model.
+    - A debater shown nothing new since its last challenge is not asked again.
+    - Each phase reports its cost as `debate.cost`, and the Debate view shows the total.
+    - `debate.light_model: "seat"` keeps every move on the seat's model.
+  - **A secret devil's advocate.** At the start of a run, one debater (never an overseer or the
+    chair) is picked at random in code to argue the other side and demand proof. The pick needs at
+    least two debaters, and is skipped and recorded otherwise.
+    - Only you know who it is. The run records `council.role_assigned` with `secret: true`, and the
+      UI shows the badge with a private marker.
+    - No agent is told. The stance never reaches a roster, agent card, board, inbox, digest, the
+      graph or the deliverable.
+    - Giveaway phrases are removed from everything the advocate says, writes or thinks into a
+      shared place: messages, notes, claims, tool arguments, the live view and graph nodes.
+    - A resumed run keeps the same advocate.
+  - **The Debate tab.** It shows the phase and round, the numbered claims with their status and
+    evidence, each challenge as a thread, a table of members' positions on the key claims, and the
+    conclusion's signatures. From any claim or challenge you can message the member.
+- **Truly parallel by default.**
+  - Eight agents work at once (`max_parallel_agents` was 4).
+  - The read-only tools and council (A2A) tools an agent calls in one turn run concurrently, and
+    their results come back in call order. A turn with a writing, shell or approval-gated tool
+    keeps the calls in order.
+  - Every member sees what its teammates are doing right now: a *Working now* section with the tail
+    of each teammate's latest thought (`member.live`).
+- **Runtime helpers.** Any member can bring in helpers while it works with `spawn_agents`, waiting
+  for them or collecting them later with `await_agents`.
+  - A helper is a council member for as long as it lives. It is an A2A task with its own agent card.
+    It sees the board, can make claims and challenge others while it works, can spawn helpers of
+    its own, and can be held, corrected or messaged like a seat. It takes no position and does not
+    co-sign: the conclusion belongs to the seated council.
+  - The model is chosen for the role from the council's providers.
+  - Helpers run in parallel through the run's slots. The limits are in `guardrails.spawn`
+    (`max_agents` 8, `max_depth` 2, `max_live` 6).
+  - The chair can add plan steps mid-run (`add_step`), and they start as soon as their
+    dependencies are done.
+  - Cancelling the run cancels its helpers. Resume replays both helpers and added steps.
+- **Graph context: fewer tokens, and a council that remembers.** Each council keeps a knowledge
+  graph (tables `graph_nodes` and `graph_edges`, migration `0021`).
+  - The graph holds claims, evidence, results, entities, decisions and open questions, linked by
+    supports, refutes, cites and derived-from edges.
+  - It is built from the run's events with no model calls.
+  - Instead of pasting up to 24k characters of earlier steps, a step gets a digest of each
+    dependency: its summary and claims, with ids. Members read detail on demand with `graph_read`,
+    search with `graph_query` and link nodes with `graph_link`.
+  - The board is rendered from the graph.
+  - A new run starts from *what this council already knows*: the nodes from its earlier runs that
+    best match the topic.
+  - On a two-step offline run, the dependent step's context fell from 8,247 to 1,792 characters.
+    Each step reports its saving as `context.saved`, shown in the run header.
+  - On Anthropic models, the stable part of the system prompt and the tools are sent with
+    `cache_control`, so turns after the first read them from the prompt cache.
+  - `guardrails.graph` turns this off or tunes it.
 - **Auto mode.** With `guardrails.auto_mode` on, agents never stop to ask. Each approval request is
   still recorded, as `approval.requested` then `approval.resolved {"decision": "approved",
   "by": "auto"}`, and the workspace shows it as *Auto-approved*. `guardrails.extensions.auto_approve`
@@ -118,6 +201,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **PDF exports no longer fail with `internal_error`.** Two problems in a row caused it:
+  - A table cell, callout or quote taller than one page made reportlab raise `LayoutError` on
+    every render attempt. Those rows now split across pages.
+  - The renderer's last fallback, the plain exporter, then crashed on the report's in-page links
+    (`#executive-summary` in the table of contents). Only absolute links (`http`, `https`,
+    `mailto`) become clickable now, and the others stay as text.
+  - The last fallback can no longer fail; at worst it keeps the words as plain paragraphs. If an
+    export still cannot be rendered, `POST /runs/{id}/exports` answers `422 export_failed` with the
+    reason, instead of a bare 500.
 - Section tabs (Connections, Settings, Insights) no longer show a stray vertical scrollbar at
   their right edge.
 

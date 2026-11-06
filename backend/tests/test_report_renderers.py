@@ -319,3 +319,21 @@ def test_pdf_embeds_a_unicode_font_so_currency_symbols_survive():
         if "/BaseFont" in font.get_object()
     }
     assert {"DejaVuSans", "DejaVuSans-Bold", "DejaVuSansMono"} <= {f.split("+")[-1] for f in used}
+
+
+def test_report_pdf_with_oversized_cells_renders_as_written():
+    # A table cell, callout or quote taller than a page used to raise LayoutError on every attempt,
+    # which drove the renderer to its last resort, which then crashed on the report's "#anchor" links.
+    from argus.reports.model import Block, Table
+    from argus.reports.render import render_verified
+
+    long = "word " * 6000
+    r = rich_report()
+    r.sections[0].blocks += [
+        Block(type="table", table=Table(title="t", columns=["a", "b"], rows=[[long, "x"]])),
+        Block(type="callout", title="c", text=long),
+        Block(type="quote", text=long),
+    ]
+    data, mime, _, log = render_verified(r, "pdf")
+    assert data.startswith(b"%PDF") and mime == "application/pdf"
+    assert not any("fell back" in line for line in log), log

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import uuid
 from collections import Counter
@@ -15,11 +16,14 @@ from argus.providers.base import ProviderError
 from argus.runtime.agent import AgentOutcome, AgentRunner, MemberSpec
 from argus.runtime.context import RunCancelled, RunContext
 from argus.runtime.council_bus import CouncilBus
+from argus.runtime.debate import Debate
+from argus.runtime.graph import UPSTREAM_CHARS, graph_for
 from argus.runtime.guardrails import GuardrailBreach, ReportPolicy
 from argus.runtime.oversight import OverseerAgent, ThoughtBus, parse_json_object
 from argus.services.autocouncil import choose_assignee
 from argus.tools.base import ToolRegistry
-from argus.tools.council import council_tools
+from argus.tools.council import council_tools, debate_tools
+from argus.tools.spawn import MAX_STEPS, HelperPool, run_slot, spawn_tools
 
 log = get_logger(__name__)
 
@@ -104,8 +108,34 @@ class CouncilOrchestrator:
                 tools.register(tool)
         self.council = CouncilBus(ctx, self)
         ctx.extra["council_bus"] = self.council
+        # The debate (argus.runtime.debate): the claim ledger's tools, only for a council that debates.
+        if self.council.debating:
+            for tool in debate_tools():
+                if tool.name not in tools:
+                    tools.register(tool)
+        self.debate = Debate(self)
         self.plan_version = 0
         self.load: Counter[str] = Counter()  # steps given to each member, for balancing
+        # Runtime helpers and a plan that grows while the council works (argus.tools.spawn). Steps and
+        # helpers share one parallelism semaphore.
+        for tool in spawn_tools():
+            if tool.name not in tools:
+                tools.register(tool)
+        self.sem = asyncio.Semaphore(ctx.engine.rails.max_parallel_agents)
+        self.helpers = HelperPool(self)
+        self._executing = False
+        self._steps_changed = asyncio.Event()
+        self.added_steps = 0
+
+    # ------------------------------------------------------------ members joining while it works
+    def add_member(self, member: MemberSpec) -> None:
+        """A helper joins: it is in the roster (and the live run's, the same list) until it leaves."""
+        if all(m.id != member.id for m in self.members):
+            self.members.append(member)
+
+    def remove_member(self, member_id: str) -> None:
+        for m in [m for m in self.members if m.id == member_id and m.ephemeral]:
+            self.members.remove(m)
 
     def runner(self, member: MemberSpec, seat: str | None = None) -> AgentRunner:
         return AgentRunner(member, self.ctx, self.tools, self.bus, self.brief, seat=seat)
@@ -143,7 +173,8 @@ class CouncilOrchestrator:
             '"instructions": "...", "depends_on": []}]}. '
             f"Use 2-8 steps. Available roles: {', '.join(roles)}. "
             f"Requested output formats: {', '.join(self.ctx.outputs) or 'markdown'}. "
-            "Steps without dependencies run in parallel. Do not include steps for overseers."
+            "Steps without dependencies run in parallel, so make steps independent (empty depends_on) unless "
+            "a step truly needs another step's output. Do not include steps for overseers."
         )
         outcome = await self.runner(self.chair).run_task(prompt, step_title="Planning", phase="plan")
         data = parse_json_object(outcome.text) or {}
@@ -203,8 +234,28 @@ class CouncilOrchestrator:
         )
 
     # ------------------------------------------------------------ execute
+    async def _upstream(self, step: Step) -> str:
+        """What a step gets from the steps it depends on.
+
+        With the council graph on (guardrails.graph): a digest per dependency (its summary, claims
+        and key points, with node ids for graph_read) instead of the raw text; ``context.saved``
+        records the chars this avoids. Off: the raw outputs, as before (the last 24k chars).
+        """
+        deps = [d for d in self.steps if d.id in step.depends_on and d.output]
+        raw = "\n\n".join(f"## {d.title} ({d.assignee.name})\n{d.output}" for d in deps)[-UPSTREAM_CHARS:]
+        graph = graph_for(self.ctx, self.tools)
+        if graph is None:
+            return raw
+        await graph.ready()
+        sent = graph.upstream_digest(deps)
+        board_raw, board_sent = self.council.board_text_raw(), self.council.board_text()
+        await graph.context_saved(
+            step.assignee, step.title, len(raw) + len(board_raw), len(sent) + len(board_sent)
+        )
+        return sent
+
     async def _run_step(self, step: Step, sem: asyncio.Semaphore) -> None:
-        async with sem:
+        async with run_slot(sem):  # the slot is given back while it waits on its helpers
             step.status = "running"
             await self.ctx.sink.emit(
                 "step.status",
@@ -212,17 +263,13 @@ class CouncilOrchestrator:
                 actor=step.assignee.actor,
                 step_id=step.id,
             )
-            upstream = "\n\n".join(
-                f"## {d.title} ({d.assignee.name})\n{d.output}"
-                for d in self.steps
-                if d.id in step.depends_on and d.output
-            )
+            upstream = await self._upstream(step)
             try:
                 outcome: AgentOutcome = await self.runner(step.assignee).run_task(
                     step.instructions,
                     step_id=step.id,
                     step_title=step.title,
-                    context=upstream[-24_000:],
+                    context=upstream,
                 )
             except (ProviderError, NotFound) as exc:
                 # A provider that keeps failing (after retries and fallbacks) or was removed fails
@@ -256,12 +303,25 @@ class CouncilOrchestrator:
             )
 
     async def execute(self) -> None:
-        sem = asyncio.Semaphore(self.ctx.engine.rails.max_parallel_agents)
+        """Run every step whose dependencies are done, in parallel, until the plan is worked through.
+
+        Steps the chair adds while the council works (``add_step``) start as soon as they are ready,
+        and the phase ends only when the helpers still working have finished too.
+        """
+        sem = self.sem
         pending = {s.id: s for s in self.steps}
+        known = set(pending)
         running: dict[str, asyncio.Task[None]] = {}
         finished: set[str] = set()
+        self._executing = True
         try:
-            while pending or running:
+            await self._restore_added_steps()
+            while True:
+                self._steps_changed.clear()
+                for st in self.steps:
+                    if st.id not in known:
+                        known.add(st.id)
+                        pending[st.id] = st
                 for sid, st in list(pending.items()):
                     if all(d in finished for d in st.depends_on):
                         failed_dep = any(self._step(d).status in ("failed", "skipped") for d in st.depends_on)
@@ -277,28 +337,113 @@ class CouncilOrchestrator:
                             continue
                         running[sid] = asyncio.create_task(self._run_step(st, sem), name=f"step-{sid}")
                         pending.pop(sid)
-                if not running:
+                helpers = self.helpers.running_tasks()
+                if not running and not helpers:
                     break
-                done, _ = await asyncio.wait(running.values(), return_when=asyncio.FIRST_COMPLETED)
+                waker = asyncio.ensure_future(self._steps_changed.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        [*running.values(), *helpers, waker], return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    waker.cancel()
                 for task in done:
-                    sid = next(k for k, v in running.items() if v is task)
+                    sid = next((k for k, v in running.items() if v is task), None)
+                    if sid is None:
+                        continue  # a helper finished, or a step was added
                     running.pop(sid)
                     finished.add(sid)
                     task.result()  # propagate cancellation / guardrail halts
         finally:
+            self._executing = False
             for t in running.values():
                 t.cancel()
             if running:
                 await asyncio.gather(*running.values(), return_exceptions=True)
+            await self.helpers.cancel_all()
+
+    async def add_step(
+        self,
+        title: str,
+        instructions: str,
+        assignee: str | None,
+        depends_on: list[str],
+        *,
+        by: MemberSpec,
+        step_id: str | None = None,
+    ) -> tuple[Step, bool]:
+        """Add a step to the plan while the council works. Returns (step, added); the same title and
+        instructions again return the existing step. Raises ValueError when it cannot be added."""
+        title, instructions = title.strip()[:200], instructions.strip()[:4000]
+        same = next((s for s in self.steps if s.title == title and s.instructions == instructions), None)
+        if same is not None:
+            return same, False
+        if not self._executing:
+            raise ValueError(
+                "Steps can be added only while the council works through its plan; put the work in "
+                "your plan, or do it yourself."
+            )
+        if len(self.steps) >= MAX_STEPS:
+            raise ValueError(f"The plan already has {MAX_STEPS} steps, the most it may have.")
+        ids = [s.id for s in self.steps]
+        deps = list(dict.fromkeys(d.strip() for d in depends_on if d.strip()))
+        unknown = [d for d in deps if d not in ids]
+        if unknown:
+            raise ValueError(f"No step called {', '.join(unknown)}. Steps: {', '.join(ids)}.")
+        if step_id is None:
+            self.added_steps += 1
+            step_id = f"a{self.added_steps}"
+            while step_id in ids:
+                self.added_steps += 1
+                step_id = f"a{self.added_steps}"
+        member = self._assign(assignee, title, instructions)
+        step = Step(step_id, title, instructions, member, deps)
+        self.steps.append(step)
+        await self.ctx.sink.emit(
+            "step.added",
+            {
+                "step": {
+                    "id": step.id,
+                    "title": title,
+                    "assignee": member.id,
+                    "depends_on": deps,
+                    "instructions": instructions,  # what a resumed run restores the step from
+                },
+                "by": by.id,
+            },
+            actor=by.actor,
+            step_id=step.id,
+        )
+        await self._emit_plan({"added": [step.id]})
+        self._steps_changed.set()
+        return step, True
+
+    async def _restore_added_steps(self) -> None:
+        """A resumed run starts with the steps its old run added while working (their work replays)."""
+        resume = self.ctx.extra.get("resume")
+        for raw in getattr(resume, "added_steps", None) or []:
+            by = next((m for m in self.members if m.id == raw.get("by")), self.chair)
+            assignee = next((m for m in self.workers if m.id == raw.get("assignee")), None)
+            with contextlib.suppress(ValueError):
+                await self.add_step(
+                    str(raw.get("title") or ""),
+                    str(raw.get("instructions") or raw.get("title") or ""),
+                    assignee.name if assignee else None,
+                    [str(d) for d in raw.get("depends_on") or []],
+                    by=by,
+                    step_id=str(raw.get("id") or "") or None,
+                )
 
     def _step(self, sid: str) -> Step:
         return next(s for s in self.steps if s.id == sid)
 
     # ------------------------------------------------------------ synthesise & vote
     def _work_so_far(self) -> str:
-        return "\n\n".join(
+        work = "\n\n".join(
             f"## {s.title} — {s.assignee.name} [{s.status}]\n{s.output}" for s in self.steps if s.output
-        )[-60_000:]
+        )
+        debate = self.debate.summary()  # what the council agreed and disputed, once it has converged
+        return (f"{debate}\n\n{work[-(60_000 - len(debate)) :]}" if debate else work[-60_000:]).strip()
 
     async def synthesise(self, critiques: str = "") -> str:
         fmt = ", ".join(self.ctx.outputs) or "markdown"
@@ -379,16 +524,21 @@ class CouncilOrchestrator:
 
     async def run(self, max_revisions: int = 1) -> str:
         await self.plan()
+        await self.debate.seat_devils_advocate()  # a secret pick; skipped (and recorded) without two debaters
         await self.execute()
         policy = self.report_policy()
         if policy is not None:
             return await self.run_report(policy, max_revisions)
-        deliverable = await self.synthesise()
-        for _ in range(max_revisions):
-            approved, critiques = await self.vote(deliverable)
-            if approved:
-                break
-            deliverable = await self.synthesise(critiques)
+        if self.debate.active:
+            # deliberate → converge → compile → co-sign (argus.runtime.debate)
+            deliverable = await self.debate.conclude(max_revisions)
+        else:
+            deliverable = await self.synthesise()
+            for _ in range(max_revisions):
+                approved, critiques = await self.vote(deliverable)
+                if approved:
+                    break
+                deliverable = await self.synthesise(critiques)
         name = DELIVERABLE_NAMES.get(self.ctx.mode, "deliverable.md")
         await self.ctx.workspace.write(
             name, deliverable, by=self.writer.name, kind="document", mime="text/markdown"
@@ -402,6 +552,11 @@ class CouncilOrchestrator:
         from argus.reports.render_text import to_markdown
 
         pipeline = ReportPipeline(self, policy)
+        debating = self.debate.active
+        if debating:
+            # The council argues and converges first; the report is built from what it agreed.
+            await self.debate.deliberate()
+            await self.debate.converge()
         try:
             report = await pipeline.build()
         except (RunCancelled, GuardrailBreach):
@@ -412,17 +567,43 @@ class CouncilOrchestrator:
                 "report.stage", {"stage": "pipeline", "status": "failed", "detail": type(exc).__name__}
             )
             report = pipeline.from_deliverable(await self.synthesise())
-        deliverable = to_markdown(report)
-        for _ in range(max_revisions):
-            approved, critiques = await self.vote(deliverable)
-            await pipeline.checkin(
-                "council vote", "council", "approved" if approved else "revised", critiques
-            )
-            if approved:
-                break
-            report = await pipeline.revise_after_vote(critiques)
+        if debating:
+            # Co-signing is the report's vote: every author signs, amends or blocks it.
+            self.debate.annotate_report(report)
             deliverable = to_markdown(report)
+            rounds = max_revisions + 1
+            for n in range(1, rounds + 1):
+                outcome, problems, endorsed = await self.debate.cosign(deliverable, n, final=n == rounds)
+                critiques = "\n".join(
+                    [problems]
+                    + [
+                        f'[{self.debate._name(a["member_id"])}] amend: replace "{a["passage"][:500]}" with '
+                        f'"{a["replacement"][:800]}" ({a["reason"][:200]})'
+                        for a in endorsed
+                    ]
+                ).strip()
+                await pipeline.checkin(
+                    "council vote", "council", "approved" if outcome == "signed" else "revised", critiques
+                )
+                if outcome != "revise":
+                    break
+                report = await pipeline.revise_after_vote(critiques)
+                self.debate.annotate_report(report)
+                deliverable = to_markdown(report)
+        else:
+            deliverable = to_markdown(report)
+            for _ in range(max_revisions):
+                approved, critiques = await self.vote(deliverable)
+                await pipeline.checkin(
+                    "council vote", "council", "approved" if approved else "revised", critiques
+                )
+                if approved:
+                    break
+                report = await pipeline.revise_after_vote(critiques)
+                deliverable = to_markdown(report)
         report = pipeline.finish(report)
+        if debating:
+            self.debate.annotate_report(report)
         deliverable = to_markdown(report)
         self.ctx.extra["report"] = report
         await self.ctx.workspace.write(

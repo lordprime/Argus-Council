@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from argus.core.config import Settings
-from argus.core.errors import ArgusError, Conflict, NotFound
+from argus.core.errors import ArgusError, Conflict, ExportFailed, GuardrailViolation, NotFound
 from argus.core.logging import fresh_log_context, get_logger
 from argus.core.metrics import RUN_DURATION, RUNS_ACTIVE, RUNS_FINISHED, RUNS_STARTED
 from argus.db.models import Run, RunEvent
@@ -60,7 +60,9 @@ class LiveRun:
     def __init__(self, ctx: RunContext, orchestrator: CouncilOrchestrator, members: list[MemberSpec]) -> None:
         self.ctx = ctx
         self.orchestrator = orchestrator
-        self.members = members
+        # The orchestrator's own roster: helpers that join while the run works (argus.tools.spawn) are
+        # in it, so hold, correct and message reach them like any seat.
+        self.members = getattr(orchestrator, "members", members)
         self.task: asyncio.Task[None] | None = None
         # Set once the run starts recording its final status: commands are refused from then on.
         self.finalising = False
@@ -253,6 +255,8 @@ class RunManager:
             await attach_connections(registry, self.sessionmaker, run.owner_id, self.settings, sink.emit)
             or []
         )
+        # The strategy the run's models were chosen with also picks its helpers' (argus.tools.spawn).
+        ctx.extra["model_strategy"] = (run.council_snapshot.get("plan") or {}).get("strategy") or "balanced"
         orchestrator = CouncilOrchestrator(ctx, members, registry)
         return LiveRun(ctx, orchestrator, members)
 
@@ -346,7 +350,13 @@ class RunManager:
                 ctx.notify("run.started", {"run_id": str(ctx.run_id), "topic": ctx.topic, "mode": ctx.mode})
                 await ctx.sink.emit("run.status", {"status": "running"})
                 await self._carry_over(ctx)
-                result = await live.orchestrator.run()
+                try:
+                    result = await live.orchestrator.run()
+                finally:
+                    # Helpers still working when the run ends (or stops) have nothing left to give.
+                    helpers = getattr(live.orchestrator, "helpers", None)
+                    if helpers is not None:
+                        await helpers.cancel_all()
                 await self._auto_export(ctx, result)
             except RunCancelled:
                 status = "cancelled"
@@ -766,9 +776,20 @@ async def _export_deliverable(
     from argus.services.exports import export_markdown, export_report
 
     art = await ws.read("report.json")
-    if art is not None and art.content:
-        try:
-            return await export_report(ws, Report.model_validate_json(art.content), fmt)
-        except ValidationError:
-            log.warning("run.report_unreadable", run_id=meta.get("run_id"))
-    return await export_markdown(ws, markdown, fmt, title=title, run_meta=meta)
+    try:
+        if art is not None and art.content:
+            try:
+                return await export_report(ws, Report.model_validate_json(art.content), fmt)
+            except ValidationError:
+                log.warning("run.report_unreadable", run_id=meta.get("run_id"))
+        return await export_markdown(ws, markdown, fmt, title=title, run_meta=meta)
+    except GuardrailBreach as exc:
+        raise GuardrailViolation(f"{fmt.upper()} export blocked: {exc}") from exc
+    except ArgusError:
+        raise
+    except Exception as exc:
+        # A renderer crash is the export's failure, not the server's: say so instead of a bare 500.
+        log.exception("run.export_failed", run_id=meta.get("run_id"), format=fmt)
+        raise ExportFailed(
+            f"Could not render the {fmt.upper()} export ({type(exc).__name__}: {str(exc)[:200]})"
+        ) from exc

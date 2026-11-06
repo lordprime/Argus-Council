@@ -103,11 +103,47 @@ class ContextPolicy(_Strict):
     budget_chars: int = Field(default=120_000, ge=20_000, le=2_000_000)
 
 
+class DebatePolicy(_Strict):
+    """How the council argues and concludes (docs/design/parallel-council.md, section 2)."""
+
+    enabled: bool = True  # off: one synthesis and a majority vote, as before 0.1.3
+    devils_advocate: bool = True  # one debater, picked at random in code, argues the other side
+    rounds: int = Field(default=2, ge=0, le=6)  # deliberation rounds (challenge, then answer)
+    converge_rounds: int = Field(default=2, ge=0, le=6)  # rounds of revising positions
+    consensus: float = Field(default=0.67, gt=0.5, le=1)  # share of debaters that makes a claim agreed
+    max_challenges: int = Field(default=30, ge=0, le=500)  # per run
+    max_nudges: int = Field(default=2, ge=0, le=6)  # times a member is sent back to answer challenges
+    # Light moves (challenges, positions, signatures, amendment votes) read digests they are given,
+    # so they run as one call without tools, on the newest cheap model of the seat's own provider
+    # that is still a strong reasoner ("latest_cheapest"), or on the seat's own model ("seat").
+    # Answers to challenges and the compiled text always use the seat's model.
+    light_model: Literal["latest_cheapest", "seat"] = "latest_cheapest"
+    light_min_reasoning: float = Field(default=70, ge=0, le=100)  # competence floor (providers/profiles.py)
+
+
+class SpawnPolicy(_Strict):
+    """Runtime sub-agents (helpers) that join the council while it works (section 3)."""
+
+    enabled: bool = True
+    max_agents: int = Field(default=8, ge=0, le=64)  # helpers per run, in total
+    max_depth: int = Field(default=2, ge=0, le=4)  # helpers spawning helpers
+    max_live: int = Field(default=6, ge=1, le=64)  # helpers alive at once
+
+
+class GraphPolicy(_Strict):
+    """The council knowledge graph and graph-based context (section 4)."""
+
+    enabled: bool = True
+    digest_chars: int = Field(default=1_500, ge=200, le=20_000)  # per dependency, instead of raw text
+    council_recall: int = Field(default=12, ge=0, le=100)  # nodes from earlier runs shown at start
+    prompt_cache: bool = True  # cache the stable system-prompt prefix where the provider supports it
+
+
 class Guardrails(_Strict):
     budget: Budget = Field(default_factory=Budget)
     max_steps: int = Field(default=80, ge=1, le=10_000)
     max_runtime_minutes: float = Field(default=60, gt=0, le=24 * 60)
-    max_parallel_agents: int = Field(default=4, ge=1, le=64)
+    max_parallel_agents: int = Field(default=8, ge=1, le=64)
     max_agent_iterations: int = Field(default=12, ge=1, le=200)
     max_subcouncil_depth: int = Field(default=2, ge=0, le=5)
     tools: ToolPolicy = Field(default_factory=ToolPolicy)
@@ -125,6 +161,9 @@ class Guardrails(_Strict):
     report: ReportPolicy = Field(default_factory=ReportPolicy)
     extensions: LimitExtension = Field(default_factory=LimitExtension)
     context: ContextPolicy = Field(default_factory=ContextPolicy)
+    debate: DebatePolicy = Field(default_factory=DebatePolicy)
+    spawn: SpawnPolicy = Field(default_factory=SpawnPolicy)
+    graph: GraphPolicy = Field(default_factory=GraphPolicy)
 
     @classmethod
     def resolve(cls, *layers: dict[str, Any] | None) -> Guardrails:

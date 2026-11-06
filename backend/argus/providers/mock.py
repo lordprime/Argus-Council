@@ -128,8 +128,12 @@ def council_responder(req: CompletionRequest) -> dict[str, Any]:
             "content": f"# {topic}\n\n## Summary\nOffline demo deliverable produced by the mock council.\n\n"
             "## Findings\n- Planned, executed, reviewed and approved by the council.\n"
         }
+    if phase in _DEBATE_PHASES:  # the debate (argus.runtime.debate)
+        return _debate_reply(str(phase), topic, req)
+    if phase == "spawn":  # a helper's task (argus.tools.spawn)
+        return _helper_answer(topic, role, req)
     if phase == "execute":
-        calls = _collaboration_calls(req, topic, role)
+        calls = _spawn_calls(req, topic, role) + _collaboration_calls(req, topic, role)
         if calls:
             return {
                 "content": f"{role.title()} is checking in with the council before finishing.",
@@ -150,6 +154,44 @@ def council_responder(req: CompletionRequest) -> dict[str, Any]:
 
 _ROSTER_LINE = re.compile(r"^- (.+) \(([^()]+)\)( \(you\))?$")
 _USER_MESSAGE = re.compile(r"^\[A2A message(?: (\S+))? from the user\]")
+# Runtime helpers: a researcher splits a comparison ("A vs B", "compare A and B") into one helper per
+# side, spawned at once on the first turn of its step (argus.tools.spawn).
+_COMPARISON = re.compile(r"\b(?:vs\.?|versus|compare[ds]?|comparison)\b", re.I)
+_SIDES = re.compile(r"\s+(?:vs\.?|versus|and|or|with)\s+", re.I)
+
+
+def _spawn_calls(req: CompletionRequest, topic: str, role: str) -> list[dict[str, Any]]:
+    """Two helpers in parallel, one per side of a comparison, on the researcher's first turn."""
+    if role != "researcher" or "spawn_agents" not in {t.name for t in req.tools}:
+        return []
+    if not _COMPARISON.search(topic) or any(m.role == "tool" for m in req.messages):
+        return []
+    subject = re.sub(r"(?i)^\s*(?:a\s+)?(?:compare|comparison\s+of|comparing)\s+", "", topic).strip()
+    sides = [s.strip(" .?") for s in _SIDES.split(subject, maxsplit=1) if s.strip(" .?")]
+    if len(sides) < 2:
+        sides = [f"{subject} (the case for)", f"{subject} (the case against)"]
+    return [
+        {
+            "name": "spawn_agents",
+            "arguments": {
+                "agents": [
+                    {"role": "researcher", "instructions": f"Gather evidence on {side} for: {topic}"}
+                    for side in sides[:2]
+                ],
+                "wait": True,
+            },
+        }
+    ]
+
+
+def _helper_answer(topic: str, role: str, req: CompletionRequest) -> dict[str, Any]:
+    task = next((m.content for m in req.messages if m.role == "user"), "")
+    focus = next((line for line in task.splitlines() if line.startswith("Gather evidence on ")), "")
+    on = focus[len("Gather evidence on ") :].split(" for: ", 1)[0] if focus else topic
+    return {
+        "content": f"Helper findings on {on} ({role}, offline demo): two sources agree; Option A scored 72 "
+        "points against 64 for Option B, and adoption rose from 12% in 2024 to 35% in 2027."
+    }
 
 
 def _with_ids(calls: list[dict[str, Any]], req: CompletionRequest) -> list[dict[str, Any]]:
@@ -266,7 +308,165 @@ def _collaboration_calls(req: CompletionRequest, topic: str, role: str) -> list[
                     },
                 }
             )
+    claim = _CLAIMS.get(role)
+    if claim and "make_claim" in tools and claim[0] not in req.system_prompt:
+        statement, source, quote = claim
+        calls.append(
+            {
+                "name": "make_claim",
+                "arguments": {
+                    "statement": statement,
+                    "evidence": [{"source": source, "quote": quote}],
+                    "confidence": 0.8,
+                },
+            }
+        )
     return calls
+
+
+# ---------------------------------------------------------------- the debate (argus.runtime.debate)
+# The mock council debates deterministically: researchers and analysts put a claim on record while
+# they work; the secret devil's advocate (it recognises its own orders) challenges a teammate's claim
+# demanding proof and objects once before it is persuaded; the challenged member defends with
+# evidence; the challenger accepts; everyone endorses, the scribe compiles and every author signs.
+_DEBATE_PHASES = frozenset({"deliberate_challenge", "deliberate_answer", "position", "compile", "cosign"})
+_CLAIMS = {
+    "researcher": (
+        "Adoption rose from 12% in 2024 to 35% in 2027.",
+        "https://example.org/demo/adoption-survey",
+        "35% of organisations had adopted it by 2027",
+    ),
+    "analyst": (
+        "Option A leads with 72 points, 8 ahead of Option B.",
+        "https://example.org/demo/scores",
+        "Option A 72, Option B 64, Option C 58",
+    ),
+    "architect": (
+        "A modular design keeps the components independently testable.",
+        "SUMMARY.md",
+        "each module has its own interface",
+    ),
+}
+_ADVOCATE_MARK = "strongest case against the emerging view"
+_CLAIM_LINE = re.compile(r"^- (clm_\w+) \[(\w+)\] by (.+?): (.*)$")
+_CHALLENGE_ID = re.compile(r"^- (chl_\w+) \[")
+_WORK_LINE = re.compile(r"^- .+ \((.+?), \w+\): ")
+
+
+def _section(text: str, heading: str) -> list[str]:
+    """The lines of a ``## heading`` section of a prompt."""
+    if f"## {heading}" not in text:
+        return []
+    body = text.split(f"## {heading}", 1)[1].split("\n## ", 1)[0]
+    return [line for line in body.splitlines()[1:] if line.strip()]
+
+
+def _matches(text: str, heading: str, pattern: re.Pattern[str], group: int = 1) -> list[str]:
+    return [m.group(group) for line in _section(text, heading) if (m := pattern.match(line))]
+
+
+def _debate_reply(phase: str, topic: str, req: CompletionRequest) -> dict[str, Any]:
+    import json
+
+    me = str(req.metadata.get("member") or "")
+    users = [m.content for m in req.messages if m.role == "user"]
+    # The task itself (teammates' messages read at this turn come after it).
+    task = next((u for u in users if "Your task:" in u), users[-1] if users else "")
+    advocate = _ADVOCATE_MARK in req.system_prompt
+    claims = [m.groups() for line in _section(task, "Claims on record") if (m := _CLAIM_LINE.match(line))]
+    if phase == "deliberate_challenge":
+        settle = _matches(task, "Answers to your challenges", _CHALLENGE_ID)
+        out: dict[str, Any] = {
+            "challenges": [],
+            "resolutions": [
+                {"challenge_id": c, "outcome": "accepted", "note": "The evidence answers my objection."}
+                for c in settle
+            ],
+        }
+        if advocate:
+            theirs = [c for c in claims if c[2] != me]
+            if theirs:
+                cid, _, _, statement = theirs[0]
+                target, about = cid, statement.split(" (evidence:", 1)[0][:120]
+            else:
+                names = _matches(task, "The council's work", _WORK_LINE)
+                target, about = next((n for n in names if n != me), ""), "the conclusions in this work"
+            if target:
+                out["challenges"].append(
+                    {
+                        "target": target,
+                        "objection": f"Where is the proof for '{about}'? It may rest on a single favourable "
+                        "source; show the primary data.",
+                        "demand": "proof",
+                    }
+                )
+        return {"content": json.dumps(out)}
+    if phase == "deliberate_answer":
+        mine = _matches(task, "Challenges against you", _CHALLENGE_ID)
+        return {
+            "content": json.dumps(
+                {
+                    "responses": [
+                        {
+                            "challenge_id": c,
+                            "stance": "defend",
+                            "argument": "Two independent demo datasets give the same figures; the primary "
+                            "table is cited below.",
+                            "evidence": [
+                                {
+                                    "source": "https://example.org/demo/primary-table",
+                                    "quote": "Option A 72, Option B 64, Option C 58; adoption 12% (2024) "
+                                    "to 35% (2027)",
+                                }
+                            ],
+                        }
+                        for c in mine
+                    ]
+                }
+            )
+        }
+    if phase == "position":
+        first_round = "Converge, round 1:" in task
+        theirs = next((c[0] for c in claims if c[2] != me), None)
+        stances = []
+        for cid, _, _, _ in claims:
+            doubt = advocate and first_round and cid == theirs
+            stances.append(
+                {
+                    "claim_id": cid,
+                    "stance": "object" if doubt else "endorse",
+                    "reason": "The cost side is not yet shown."
+                    if doubt
+                    else "The evidence and the debate support it.",
+                }
+            )
+        out = {
+            "conclusion": f"On {topic}, Option A is the strongest choice on the evidence, and adoption is "
+            "rising year on year (offline demo).",
+            "stances": stances,
+        }
+        if advocate and first_round:
+            out["alternative"] = "Option B could still win on total cost once licences are counted."
+        return {"content": json.dumps(out)}
+    if phase == "compile":
+        agreed = [s.split(" (", 1)[0] for s in _matches(task, "Agreed claims", _CLAIM_LINE, 4)]
+        contested = [
+            s.split(" (", 1)[0]
+            for s in _matches(task, "Contested claims (give both sides and their evidence)", _CLAIM_LINE, 4)
+        ]
+        body = "\n".join(f"- {s}" for s in agreed) or "- The council reached no agreed claim."
+        text = (
+            f"# {topic}\n\n## Summary\nThe council's agreed conclusion (offline demo): Option A is the "
+            f"strongest choice, and adoption is rising.\n\n## What the council agreed\n{body}\n"
+        )
+        if contested:
+            text += "\n## Still contested\n" + "\n".join(f"- {s}" for s in contested) + "\n"
+        return {"content": text}
+    # cosign
+    if "## Amendments" in task:
+        ids = re.findall(r"^- (am_\d+) by", task, re.M)
+        return {"content": json.dumps({"endorse": ids})}
+    return {"content": json.dumps({"action": "sign", "reason": "It states what the council agreed."})}
 
 
 def _a2a_answer(form: str, topic: str, role: str, req: CompletionRequest) -> dict[str, Any]:

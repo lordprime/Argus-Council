@@ -255,6 +255,18 @@ def render_verified(report: Report, fmt: str) -> tuple[bytes, str, str, list[str
         markdown = to_markdown(report)
     except Exception:
         markdown = f"# {report.title}\n\n{report.executive_summary}\n"
-    data, mime, ext = export_markdown(markdown, fmt, title=report.title, metadata=report.meta.model_dump())
-    log.append(f"{fmt}: fell back to the plain exporter")
+    meta = report.meta.model_dump()
+    try:
+        data, mime, ext = export_markdown(markdown, fmt, title=report.title, metadata=meta)
+        log.append(f"{fmt}: fell back to the plain exporter")
+    except Exception as exc:
+        # Even the plain exporter can trip on the Markdown (a pathological table, a link it cannot
+        # resolve): keep the words, as unstyled paragraphs, rather than fail the export.
+        log.append(f"{fmt}: plain exporter failed ({type(exc).__name__}: {str(exc)[:160]})")
+        flat = re.sub(r"[|*_`#>\[\]()]+", " ", _CONTROL.sub("", markdown))
+        paras = [p.strip()[:4_000] for p in re.split(r"\n\s*\n", flat) if p.strip()]
+        data, mime, ext = export_markdown(
+            "\n\n".join([f"# {report.title}", *paras]), fmt, title=report.title, metadata=meta
+        )
+        log.append(f"{fmt}: fell back to plain paragraphs")
     return data, mime, ext, log

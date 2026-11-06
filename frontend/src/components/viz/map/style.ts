@@ -12,6 +12,8 @@ export const GROUPS = [
   { id: "vote", label: "Vote", kinds: ["vote"] },
   { id: "user", label: "User", kinds: ["user"] },
   { id: "a2a", label: "A2A", kinds: ["a2a"] },
+  { id: "challenge", label: "Debate", kinds: ["challenge"] },
+  { id: "spawn", label: "Helpers", kinds: ["spawn"] },
   { id: "protocol", label: "Protocol", kinds: ["protocol"] },
   { id: "subcouncil", label: "Sub-council", kinds: ["subcouncil"] },
   { id: "status", label: "Status", kinds: ["status"] },
@@ -36,6 +38,8 @@ export const EDGE_CLASS: Record<string, string> = {
   user: "stroke-success",
   protocol: "stroke-info",
   a2a: "stroke-info",
+  challenge: "stroke-warning",
+  spawn: "stroke-success",
   subcouncil: "stroke-accent",
   status: "stroke-neutral",
 };
@@ -46,6 +50,8 @@ export const EDGE_DASH: Record<string, string | undefined> = {
   approval: "8 3 2 3",
   status: "1 4",
   a2a: "5 2",
+  challenge: "4 2 1 2",
+  spawn: "8 2",
 };
 
 export const PULSE_CLASS: Record<string, string> = {
@@ -60,6 +66,8 @@ export const PULSE_CLASS: Record<string, string> = {
   user: "fill-success",
   protocol: "fill-info",
   a2a: "fill-info",
+  challenge: "fill-warning",
+  spawn: "fill-success",
   subcouncil: "fill-accent",
   status: "fill-neutral",
 };
@@ -74,6 +82,8 @@ export const SWATCH_CLASS: Record<GroupId, string> = {
   user: "stroke-success",
   protocol: "stroke-info",
   a2a: "stroke-info",
+  challenge: "stroke-warning",
+  spawn: "stroke-success",
   subcouncil: "stroke-accent",
   status: "stroke-neutral",
 };

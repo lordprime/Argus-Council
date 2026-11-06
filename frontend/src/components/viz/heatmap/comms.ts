@@ -8,7 +8,7 @@ import type { RunState, TimelineItem } from "@/stores/run";
 
 export type CommKind =
   | "assign" | "thought" | "tool" | "tool_result" | "intercept" | "correction"
-  | "approval" | "vote" | "user" | "protocol" | "subcouncil" | "status" | "a2a";
+  | "approval" | "vote" | "user" | "protocol" | "subcouncil" | "status" | "a2a" | "challenge" | "spawn";
 
 export interface NodeRefLike { kind: string; id: string; label: string; role?: string; parent?: string }
 
@@ -81,6 +81,8 @@ function itemKind(it: TimelineItem): CommKind | "error" {
       if (it.type.startsWith("subcouncil")) return "subcouncil";
       if (it.type.startsWith("protocol") || it.type.startsWith("remote")) return "protocol";
       if (it.type.startsWith("a2a")) return "a2a";
+      if (["debate.challenge", "debate.response", "debate.resolution"].includes(it.type)) return "challenge";
+      if (it.type === "member.joined" || it.type === "member.left") return "spawn";
       return "status";
   }
 }

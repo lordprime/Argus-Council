@@ -35,7 +35,11 @@ export type CommKind =
   | "subcouncil"
   | "status"
   /** A2A message or task between council members (or a member and the user). */
-  | "a2a";
+  | "a2a"
+  /** Debate: a challenge (challenger → target), its answer (target → challenger) and resolution. */
+  | "challenge"
+  /** A runtime helper joining (parent → helper) or leaving (helper → parent). */
+  | "spawn";
 
 export interface CommEvent {
   id: string;

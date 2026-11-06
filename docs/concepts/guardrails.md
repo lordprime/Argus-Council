@@ -26,7 +26,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `budget.tokens` | `2000000` | Token limit, input plus output (`null` for none) |
 | `max_steps` | `80` | Agent model calls the whole run may make |
 | `max_runtime_minutes` | `60` | Wall-clock limit |
-| `max_parallel_agents` | `4` | Steps that may run at once |
+| `max_parallel_agents` | `8` | Steps and helpers that may run at once (1 to 64); each debate phase runs this many tasks at a time |
 | `max_agent_iterations` | `12` | Model and tool round-trips per agent per step |
 | `max_subcouncil_depth` | `2` | How deep sub-councils may nest (0 to 5) |
 | `tools.allow`, `tools.deny` | `["*"]`, `[]` | Glob patterns of tool names. A deny entry such as `shell:rm -rf*` matches the command line |
@@ -57,6 +57,18 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `extensions.auto_approve` | `false` | Raise limits without asking, still within `limits` and `max_extensions` |
 | `context.condense` | `true` | Summarise an agent's older history when it outgrows the budget (below) |
 | `context.budget_chars` | `120000` | History size each agent turn re-sends before trimming and condensing |
+| `debate.enabled` | `true` | The council debates and co-signs its conclusion; `false` restores one synthesis and a majority vote ([below](#debate-helpers-and-graph-context)) |
+| `debate.devils_advocate` | `true` | Appoint a secret devil's advocate at random |
+| `debate.rounds`, `debate.converge_rounds` | `2`, `2` | Deliberation rounds, and extra rounds of revising positions (0 to 6 each) |
+| `debate.consensus` | `0.67` | Share of the debaters that makes a claim agreed and an amendment applied (over 0.5, up to 1) |
+| `debate.max_challenges`, `debate.max_nudges` | `30`, `2` | Challenges per run (0 to 500); times a member is sent back to answer open challenges (0 to 6) |
+| `debate.light_model`, `debate.light_min_reasoning` | `latest_cheapest`, `70` | Run the light debate moves on the newest cheap model of each seat's provider that scores at least the floor (0 to 100) for reasoning, or on the seat's own model (`seat`) |
+| `spawn.enabled` | `true` | Members may start [helpers](councils.md#helpers) |
+| `spawn.max_agents`, `spawn.max_live`, `spawn.max_depth` | `8`, `6`, `2` | Helpers per run (0 to 64), at once (1 to 64), and how deep they may nest (0 to 4) |
+| `graph.enabled` | `true` | Context from the [council knowledge graph](councils.md#the-council-knowledge-graph) instead of raw text |
+| `graph.digest_chars` | `1500` | Size of each dependency's digest (200 to 20,000) |
+| `graph.council_recall` | `12` | Nodes from the council's earlier runs shown at the start (0 to 100) |
+| `graph.prompt_cache` | `true` | Split each system prompt into a cached stable prefix and a volatile tail |
 
 ```json
 {
@@ -180,3 +192,59 @@ sources and decisions so far, and what remains) into its task message, keeping t
 verbatim; a `context.condensed` event records how much was folded. The call counts toward the
 budget but not toward `max_steps`. Seats that run through a CLI agent keep their own session
 context and are not condensed, and a failed summary leaves the trimmed history as it was.
+
+## Debate, helpers and graph context
+
+Three blocks shape how the council works together. Each can be set per council or per run like any
+other guardrail, and in the guardrails editor under **Debate**, **Helpers** and **Context**.
+
+```json
+{
+  "max_parallel_agents": 8,
+  "debate": {"enabled": true, "devils_advocate": true, "rounds": 2, "converge_rounds": 2,
+             "consensus": 0.67, "max_challenges": 30, "max_nudges": 2,
+             "light_model": "latest_cheapest", "light_min_reasoning": 70},
+  "spawn": {"enabled": true, "max_agents": 8, "max_depth": 2, "max_live": 6},
+  "graph": {"enabled": true, "digest_chars": 1500, "council_recall": 12, "prompt_cache": true}
+}
+```
+
+**`debate`** ([The debate](councils.md#the-debate)). The debate runs in top-level runs whose council
+has at least two debaters (members that are not overseers); sub-councils never debate. `rounds`
+caps the deliberation rounds, which also stop early once no challenge is open. Converging takes one
+round of positions plus up to `converge_rounds` more while claims stay contested. `consensus` is
+the share of the debaters that must endorse a claim for it to be agreed, and an amendment for it to
+be applied; it must be over half. `max_nudges` is how often a member that tries to finish a step
+with challenges still open against it is sent back to answer them. Debate tasks count against the
+budget and the step limit like any other task.
+
+**What the debate costs.** The debate keeps its rounds, its participants and its threshold. It saves
+by not paying for calls that add nothing:
+
+- **Light moves are one call without tools**, and run on a *light model*. These moves are a
+  challenge, a position, a signature and a vote on amendments, and each reads only the digest it is
+  given.
+- **The light model** is the cheapest model the owner can run on the seat's own provider that scores
+  at least `light_min_reasoning` for reasoning (in `providers/profiles.py`). Among models at the same
+  price, the stronger wins, which in a family is the newer one.
+  - The seat's own model is the fallback.
+  - The member stays the same in every other way: its name, persona and secret stance.
+  - CLI seats keep their own model, and so do seats already on the cheapest qualifying model.
+  - `light_model: "seat"` keeps every move on the seat's model.
+- **The moves that shape the result stay on the seat's model**: answering a challenge, with the
+  read-only tools so it can fetch proof, and the scribe's compile.
+- **A debater whose inputs have not changed since its last challenge is not asked again.** That
+  covers the claims, the work, the open challenges and the answers it must settle.
+- **The cost is shown.** Each phase reports what it cost, how many tasks it ran and on which light
+  models, as `debate.cost`. The Debate view sums it.
+
+**`spawn`** ([Helpers](councils.md#helpers)). Helpers share the run's budget and the
+`max_parallel_agents` slots with the steps. `max_agents` counts every helper the run starts,
+`max_live` those working at once, and `max_depth` how far helpers may spawn helpers. A request over
+a limit is refused with the reason, and the member does the work itself.
+
+**`graph`** ([The council knowledge graph](councils.md#the-council-knowledge-graph)). With `enabled`
+off, steps get their dependencies' raw output again (the last 24,000 characters) and the board shows
+raw notes; the graph tools are not offered. `prompt_cache` works on its own: it marks the stable
+prefix of each system prompt for Anthropic's prompt caching even with the graph off.
+

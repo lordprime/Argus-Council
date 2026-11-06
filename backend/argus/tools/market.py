@@ -45,6 +45,7 @@ _XML = ("application/rss+xml", "application/atom+xml", "application/xml", "text/
 
 class _LiveTool(Tool):
     risk = frozenset({"network"})
+    parallel_safe = True  # read-only lookups
 
     def __init__(
         self,

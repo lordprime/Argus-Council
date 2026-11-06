@@ -52,6 +52,13 @@ class GuardrailViolation(ArgusError):
     code = "guardrail_violation"
 
 
+class ExportFailed(ArgusError):
+    """The deliverable could not be rendered in the requested format (the reason is in the message)."""
+
+    status_code = 422
+    code = "export_failed"
+
+
 class ServiceUnavailable(ArgusError):
     """A dependency this request cannot safely do without is down (retry later)."""
 

@@ -4,6 +4,7 @@
 import { create } from "zustand";
 
 import { applyComms } from "@/features/viz/comms";
+import { emptyDebate, reduceDebate, type ContextSavings, type DebateState, type HelperInfo, type LiveTail } from "@/stores/debate";
 import { beginDraft, endDraft, writable } from "@/stores/draft";
 import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
 import type { Actor, AutoMode, Member, RunEvent } from "@/lib/types";
@@ -94,7 +95,8 @@ export interface VoteItem {
 }
 
 export interface SimpleItem {
-  kind: "artifact" | "violation" | "citation" | "system" | "user" | "error" | "plan" | "a2a";
+  /** debate: claims, challenges, rounds, positions, consensus; council: helpers joining and leaving, added steps. */
+  kind: "artifact" | "violation" | "citation" | "system" | "user" | "error" | "plan" | "a2a" | "debate" | "council";
   id: string;
   seq: number;
   ts: string;
@@ -155,6 +157,16 @@ export interface RunState {
   subcouncils: Record<string, SubCouncilInfo>;
   /** Auto mode as last switched live (`run.auto_mode`); null until then, when the run's guardrails decide. */
   autoMode: AutoMode | null;
+  /** Claims, challenges, positions and the co-signed conclusion (debate.* events). */
+  debate: DebateState;
+  /** Helpers spawned during the run (members with `ephemeral`), by member id. */
+  helpers: Record<string, HelperInfo>;
+  /** What each member is working on right now (`member.live`, ephemeral). */
+  live: Record<string, LiveTail>;
+  /** Context the graph digest avoided sending, summed over tasks (`context.saved`). */
+  contextSaved: ContextSavings;
+  /** Nodes and edges added to the council knowledge graph during this run (`graph.updated`). */
+  graph: { nodes: number; edges: number };
   /** Oldest timeline items dropped to keep `items` under ITEMS_CAP (pending approvals are never dropped). */
   trimmed?: number;
   /** Lookups the reducer maintains so per-event work stays O(1) (implementation review L5). */
@@ -199,10 +211,21 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     comms: [],
     subcouncils: {},
     autoMode: null,
+    debate: emptyDebate(),
+    helpers: {},
+    live: {},
+    contextSaved: { raw: 0, sent: 0, tasks: 0 },
+    graph: { nodes: 0, edges: 0 },
     trimmed: 0,
     index: { thoughtByEvent: new Map(), thoughtByIntercept: new Map() },
   };
 }
+
+/** A2A forms the debate.* events already show (stance is never sent: the advocate is a secret). */
+const DEBATE_FORMS = new Set(["claim", "challenge", "response", "resolution", "stance", "position", "signature"]);
+
+/** Context characters the graph digest saved, never negative. */
+export const contextCharsSaved = (c: ContextSavings | undefined) => Math.max(0, (c?.raw ?? 0) - (c?.sent ?? 0));
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "halted"]);
 export const isTerminal = (status: string) => TERMINAL.has(status);
@@ -280,6 +303,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "run.status":
       s.status = d.status;
       s.statusReason = d.reason;
+      if (isTerminal(d.status) && s.live && Object.keys(s.live).length) s.live = {};
       push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
       break;
     case "run.plan":
@@ -437,10 +461,79 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "task.completed":
     case "a2a.task":
       break; // bookkeeping (resuming a run; a delegated task's states, shown by its messages)
-    case "a2a.message":
-      // The user's own messages already show as their bubble (user.message).
-      if ((d.message as { role?: string } | undefined)?.role !== "user") push(s, { kind: "a2a", id: ev.id, ...base, type: ev.type, data: d });
+    case "a2a.message": {
+      // The user's own messages already show as their bubble (user.message); debate exchanges show as
+      // their richer debate.* rows.
+      const msg = d.message as { role?: string; metadata?: { form?: string } } | undefined;
+      if (msg?.role !== "user" && !DEBATE_FORMS.has(String(msg?.metadata?.form ?? ""))) push(s, { kind: "a2a", id: ev.id, ...base, type: ev.type, data: d });
       break;
+    }
+    case "council.role_assigned":
+    case "debate.claim":
+    case "debate.challenge":
+    case "debate.response":
+    case "debate.resolution":
+    case "debate.round":
+    case "debate.position":
+    case "debate.consensus":
+      s.debate = reduceDebate(s.debate ?? emptyDebate(), ev.type, d, ev);
+      push(s, { kind: "debate", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    case "debate.claim_status":
+    case "debate.cost":
+      s.debate = reduceDebate(s.debate ?? emptyDebate(), ev.type, d, ev);
+      break; // shown in the Debate panel (claim chips, the cost line), not as timeline rows
+    case "member.joined": {
+      const m = (d.member ?? {}) as Partial<Member>;
+      if (!m.id) break;
+      const member: Member = {
+        id: m.id, name: m.name ?? "Helper", role: m.role ?? "helper", provider: m.provider ?? "", model: m.model ?? "",
+        system_prompt: "", temperature: null, position: s.members.length, enabled: true, config: {},
+        ephemeral: m.ephemeral ?? true, parent_id: m.parent_id ?? null,
+      };
+      s.members = s.members.some((x) => x.id === member.id)
+        ? s.members.map((x) => (x.id === member.id ? { ...x, ...member, position: x.position } : x))
+        : [...s.members, member];
+      s.helpers = { ...(s.helpers ?? {}), [member.id]: { parentId: member.parent_id ?? undefined, status: "live", joinedTs: ev.ts } };
+      push(s, { kind: "council", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    }
+    case "member.left": {
+      const prev = s.helpers?.[d.member_id];
+      const status = (["completed", "failed", "cancelled"].includes(d.status) ? d.status : "completed") as HelperInfo["status"];
+      s.helpers = { ...(s.helpers ?? {}), [d.member_id]: { ...(prev ?? { joinedTs: ev.ts }), status, resultPreview: d.result_preview, leftTs: ev.ts } };
+      if (s.live?.[d.member_id]) {
+        const live = { ...s.live };
+        delete live[d.member_id];
+        s.live = live;
+      }
+      push(s, { kind: "council", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    }
+    case "step.added": {
+      const st = (d.step ?? {}) as { id?: string; title?: string; assignee?: string; depends_on?: string[] };
+      if (st.id) {
+        const step: PlanStep = { id: st.id, title: st.title ?? "", assignee_member_id: st.assignee, depends_on: st.depends_on ?? [], status: "pending" };
+        const steps = s.plan?.steps ?? [];
+        if (!steps.some((x) => x.id === st.id)) s.plan = { version: s.plan?.version ?? 1, steps: [...steps, step] };
+      }
+      push(s, { kind: "council", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    }
+    case "member.live":
+      if (s.helpers?.[d.member_id] && s.helpers[d.member_id]!.status !== "live") break; // a late tail from a finished helper
+      if (d.member_id) s.live = { ...(s.live ?? {}), [d.member_id]: { task: d.task || undefined, tail: String(d.tail ?? ""), ts: ev.ts } };
+      break;
+    case "context.saved": {
+      const cur = s.contextSaved ?? { raw: 0, sent: 0, tasks: 0 };
+      s.contextSaved = { raw: cur.raw + Number(d.raw_chars ?? 0), sent: cur.sent + Number(d.sent_chars ?? 0), tasks: cur.tasks + 1 };
+      break;
+    }
+    case "graph.updated": {
+      const cur = s.graph ?? { nodes: 0, edges: 0 };
+      s.graph = { nodes: cur.nodes + Number(d.nodes ?? 0), edges: cur.edges + Number(d.edges ?? 0) };
+      break;
+    }
     default:
       if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
   }
@@ -452,7 +545,11 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
  * stores/draft.ts), so `state` is never mutated and a batch of text deltas does not copy the timeline.
  */
 export function reduceAll(state: RunState, events: RunEvent[]): RunState {
-  const s: RunState = { ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {} };
+  const s: RunState = {
+    ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {}, debate: state.debate ?? emptyDebate(),
+    helpers: state.helpers ?? {}, live: state.live ?? {}, contextSaved: state.contextSaved ?? { raw: 0, sent: 0, tasks: 0 },
+    graph: state.graph ?? { nodes: 0, edges: 0 },
+  };
   beginDraft(s);
   try {
     for (const ev of events) applyEvent(s, ev);

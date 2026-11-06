@@ -38,6 +38,10 @@ export interface Member {
   position: number;
   enabled: boolean;
   config: { tools?: string[]; overseer?: boolean; [k: string]: unknown };
+  /** A helper spawned while the run works (`member.joined`); it leaves when its task ends. */
+  ephemeral?: boolean;
+  /** The member that spawned this helper. */
+  parent_id?: string | null;
 }
 
 export interface Council {
@@ -121,6 +125,23 @@ export interface Guardrails {
     factor: number;
     max_extensions: number;
   };
+  /** How the council argues and concludes (claims, challenges, positions, co-signing). */
+  debate?: {
+    enabled: boolean;
+    devils_advocate: boolean;
+    rounds: number;
+    converge_rounds: number;
+    consensus: number;
+    max_challenges: number;
+    max_nudges: number;
+    /** Light moves on the newest cheap strong model of the seat's provider, or on the seat's own. */
+    light_model?: "latest_cheapest" | "seat";
+    light_min_reasoning?: number;
+  };
+  /** Runtime helpers that members spawn while they work. */
+  spawn?: { enabled: boolean; max_agents: number; max_depth: number; max_live: number };
+  /** The council knowledge graph and graph-based context. */
+  graph?: { enabled: boolean; digest_chars: number; council_recall: number; prompt_cache: boolean };
 }
 
 /** A live run's auto mode (POST /runs/{id}/auto-mode, `run.auto_mode` event). */

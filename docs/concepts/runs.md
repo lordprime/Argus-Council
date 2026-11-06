@@ -26,6 +26,41 @@ between), and then one of `completed`, `failed`, `cancelled` or `halted`. Contro
 through their parent). For a live run it includes `pending_approvals`, the approval requests
 waiting for you.
 
+## How a run works
+
+A run goes through these phases. Each one's tasks run at the same time wherever they can, up to
+`max_parallel_agents` (8 by default).
+
+```mermaid
+flowchart LR
+    P[Plan] --> A[Seat the devil's advocate<br/>secret, at random] --> E[Execute<br/>steps and helpers in parallel,<br/>members debate as they work]
+    E --> D[Deliberate<br/>challenge, then answer] --> C[Converge<br/>positions, agreement in code]
+    C --> K[Compile<br/>the scribe assembles] --> S[Co-sign<br/>sign, amend or block]
+    S -->|blocked, amended<br/>or no quorum| K
+    S --> O[Deliverable]
+```
+
+1. **Plan.** The chair splits the topic into steps with assignees, keeping them independent unless
+   one truly needs another's output, so most of them start at once.
+2. **Seat the devil's advocate.** One debater is picked at random, in code, and told privately
+   ([The devil's advocate](councils.md#the-devils-advocate)). Only you see who.
+3. **Execute.** Every step whose dependencies are done runs, in parallel. Members see each other's
+   work on the board and in *Working now*, run their read-only and council tool calls at the same
+   time, start [helpers](councils.md#helpers), and claim, challenge and answer while they work. The
+   chair can add steps with `add_step`; they start as soon as they are ready. The phase ends when
+   every step and every helper has finished.
+4. **Deliberate, converge, compile, co-sign.** The council argues out what is still open, takes
+   positions, has the agreed text compiled by a scribe and co-signs it
+   ([A collective conclusion](councils.md#a-collective-conclusion)).
+5. **Deliver.** The deliverable, with its *How the council reached this* section and the authors'
+   byline, is written to the workspace and exported.
+
+In report mode (research and general runs by default) the report pipeline builds the report after
+converging, in place of the scribe, and co-signing is its vote ([Reports](reports.md)). With
+`debate.enabled: false`, with fewer than two debaters, and in sub-councils, steps 4 and 5 are one
+synthesis by the writer and a majority vote, with one revision if the vote fails. You can step in at
+any phase ([Stepping in](#stepping-in)); the council never stops to wait for you.
+
 ## Resuming a stopped run
 
 A run that is `halted`, `failed` or `cancelled` can be resumed where it stopped: **Resume where it
@@ -40,6 +75,19 @@ step counted. Only work that never finished calls a model. A run halted while wr
 therefore goes straight back to the report, with its research intact. Citations keep their
 numbers. Notes and workspace files carry over, but exports are made again. The timeline opens with
 a *Resumed from the earlier run* row saying how much was reused.
+
+The debate and the council's growth resume too:
+
+* **The devil's advocate** is the same member as in the old run (its pick is recorded as a finished
+  task).
+* **Debate moves** (claims, challenges, answers, resolutions) made while the old run worked are put
+  back on record before deliberating. Deliberation, positions, compiling and co-signing are tasks
+  like any other: finished ones replay with their moves, and ids follow from content, so nothing is
+  recorded twice.
+* **Steps the chair added** with `add_step` are added again, with the same ids, at the start of the
+  execute phase (from the old run's `step.added` events); their finished work replays.
+* **Helpers** keep their ids when the same member spawns the same work again, so a helper that had
+  finished replays its answer. A step that had finished replays without spawning its helpers again.
 
 Each finished task is recorded as a `task.completed` event, which is what a resume replays. Runs
 from before resuming existed have no such records. For those, the plan and every finished step are recovered
@@ -108,6 +156,8 @@ reads CSV, TSV, RSS and Atom documents (for example a statistics agency's CSV do
 | `correct` | Correct one member (and release it) or, with no target, the whole council |
 | `halt_all` | Hold every member |
 | `release_all` | Release every member |
+
+Helpers are members too while they work: you can message, hold and correct them like any seat.
 
 A message from you is an A2A message with role `user` ([How members talk to each
 other](councils.md#how-members-talk-to-each-other)). The members it addresses that are working

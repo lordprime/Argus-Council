@@ -43,22 +43,22 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 
 | Area | What you get |
 | --- | --- |
-| **Councils** | Resizable groups of seats with a role, provider, model, persona and tools; twelve built-in roles and a priority roster per mode |
-| **Council communication** | Members talk to each other as A2A messages in eight forms: direct, ask, broadcast, group, delegate, topics, a shared board every member sees on every turn, and review; your messages during a run are A2A messages that stay in the addressed agents' instructions ([docs](https://lordprime.github.io/Argus-Council/concepts/councils/#how-members-talk-to-each-other)) |
+| **Councils** | Resizable groups of seats with a role, provider, model, persona and tools; twelve built-in roles and a priority roster per mode; truly parallel by default (eight agents, read-only and council tool calls run at once). Members debate: claims, challenges that demand proof, a [secret devil's advocate](https://lordprime.github.io/Argus-Council/concepts/councils/#the-devils-advocate) only you can see, and a conclusion every member co-authors and co-signs ([docs](https://lordprime.github.io/Argus-Council/concepts/councils/#the-debate)) |
+| **Council communication** | Members talk to each other as A2A messages in eight forms: direct, ask, broadcast, group, delegate, topics, a shared board every member sees on every turn, and review; your messages during a run are A2A messages that stay in the addressed agents' instructions; members see each other's work as it happens (*Working now*), and the debate adds claim, challenge, response, resolution, position and signature forms ([docs](https://lordprime.github.io/Argus-Council/concepts/councils/#how-members-talk-to-each-other)) |
 | **Modes** | `research` (cited reports), `coding` (versioned workspace and a network-less sandbox), `chat`, `general` |
 | **Oversight** | A thought bus with deterministic guardrails, a loop detector and overseer agents; hold, correct, release, halt and message from the UI or API |
 | **Guardrails and approvals** | Budgets in dollars and tokens, step, runtime, parallelism and file limits, tool, skill and domain allow and deny lists, content policy, and human approval for risky tools (with argument editing); *auto mode* approves requests and limit extensions without stopping (still recorded), and a *budget reserve* is drawn instead of halting ([docs](https://lordprime.github.io/Argus-Council/concepts/guardrails/#auto-mode)) |
 | **Resume** | *Resume where it stopped* on a halted, failed or cancelled run starts a new run that replays every finished task from its recorded answer, so only unfinished work calls a model ([docs](https://lordprime.github.io/Argus-Council/concepts/runs/#resuming-a-stopped-run)) |
-| **Sub-councils** | Members delegate self-contained tasks to child councils with clamped guardrails, a depth limit and budget charge-back |
+| **Sub-councils** | Members delegate self-contained tasks to child councils with clamped guardrails, a depth limit and budget charge-back; for lighter work they spawn [helpers](https://lordprime.github.io/Argus-Council/concepts/councils/#helpers), A2A sub-agents that join the council while they work, and the chair can add steps mid-run |
 | **Model choice** | Each seat gets the model most competent for its role, weighed against its expected input and output token cost and the run's budget (`quality`, `balanced` or `economy`); unassigned steps go to the best-fitting member by competence, load and cost |
 | **Reports** | Research and general runs deliver a structured report built by specialist agents (outline, data, parallel sections, editing), with check-ins, a review-and-revise loop until it passes its quality checks, charts, tables, a risk matrix and a QA appendix ([docs](https://lordprime.github.io/Argus-Council/concepts/reports/)) |
 | **Models** | Anthropic, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Ollama, vLLM, LM Studio, llama.cpp, any OpenAI-compatible endpoint, and an offline `mock` provider; retries, fallbacks, caching, cost accounting and health checks |
 | **CLI agents** | Opt-in seats on Claude Code, the Codex CLI or the Gemini CLI, signed in with your own account or a CLI API key, mixed with API-key seats and falling back between them ([docs](https://github.com/lordprime/Argus-Council/blob/main/docs/cli-agents.md)) |
 | **Skills** | `SKILL.md` packages loaded on demand, six built-ins, an eight-skill marketplace, import and export, version history and restore |
-| **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory |
+| **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory; a [council knowledge graph](https://lordprime.github.io/Argus-Council/concepts/councils/#the-council-knowledge-graph) built from each run's events sends short digests instead of raw text, recalls what earlier runs knew, and Anthropic prompt caching covers the stable prompt prefix |
 | **Research tools** | `web_fetch` extracts article text (trafilatura), reads PDFs, retries with backoff and falls back to the Internet Archive's closest snapshot; `knowledge_read` and `artifact_read` resolve names, paths and close matches; failed tool calls end with a `Recovery:` line |
 | **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call, including agents' outbound web requests (`http`) and members' A2A exchanges (direction `internal`) ([docs](https://lordprime.github.io/Argus-Council/protocols/)) |
-| **Run views** | Timeline, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
+| **Run views** | Timeline, Debate, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
 | **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, rendered from the structured report, checked after rendering and regenerated on demand |
 | **Web UI** | Home leads with the composer and the runs waiting for you; an Insights dashboard with period-over-period changes, tool reliability, model health and oversight; six palettes in light and dark (Wine, Indigo, Graphite, Forest, Ocean, Ember) |
 | **Operations** | Webhooks, templates with variables, in-app notifications, Prometheus metrics, an audit log, insights, data retention, account export and deletion, and deploy, update, rollback, backup and restore scripts |
@@ -247,10 +247,14 @@ sequenceDiagram
         end
     end
     U-)B: intercept, correct, message, halt at any time
-    C->>W: work so far
-    W->>W: synthesise, then reviewers vote (ties approve)
-    opt vote fails
-        W->>W: one revision with the critiques
+    alt debate (default)
+        M->>M: deliberate, converge, then co-sign what the scribe compiles
+    else debate off
+        C->>W: work so far
+        W->>W: synthesise, then reviewers vote (ties approve)
+        opt vote fails
+            W->>W: one revision with the critiques
+        end
     end
     W-->>U: deliverable and exports
 ```
@@ -259,7 +263,7 @@ sequenceDiagram
 2. **Execute**: independent steps run in parallel (bounded by `max_parallel_agents`); each agent loops between the model and its tools.
 3. **Oversight**: deterministic guardrails, a loop detector and overseer agents (security, monitor, critic) review every thought; `oversight.intercept_mode` caps what overseers may do, and the user outranks everyone.
 4. **Approvals**: tools tagged with a risk in `approval_required` (by default `shell`, `package_install`, `remote_agent`, `network_write`) wait for a human decision, which can also edit the arguments. With `guardrails.auto_mode` (or `extensions.auto_approve` for limit extensions) they are approved without stopping and recorded as `by: auto`; hard blocks still apply. The **Auto mode** control or `POST /runs/{id}/auto-mode` switches it on a live run.
-5. **Synthesise and vote**: the writer produces the deliverable, the chair, critic, analyst, security officer and tester vote, and one revision round follows if the vote fails.
+5. **Debate and co-sign**: the members deliberate, converge on what they agree (computed in code), a scribe compiles it and every author signs, amends or blocks it. With `debate.enabled: false` (and in sub-councils) the writer produces the deliverable, the chair, critic, analyst, security officer and tester vote, and one revision round follows if the vote fails.
 6. **Limits**: budget, steps, runtime and file size are enforced throughout; a breach halts the run, unless a budget reserve (`budget.buffer_usd`, `budget.buffer_tokens`) is left to draw. The **Budget** control or `POST /runs/{id}/budget` raises the budget or the reserve on a live run.
 
 Members talk to each other while they work: `send_message`, `ask_agent`, `broadcast`,

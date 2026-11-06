@@ -42,6 +42,27 @@ exchange A2A messages and tasks inside Argus, without HTTP
 ([How members talk to each other](concepts/councils.md#how-members-talk-to-each-other)). This is
 separate from Argus's own public A2A endpoint and agent card above.
 
+## Internal A2A forms
+
+Every internal message carries its form in `metadata.form`. Besides the eight communication forms
+(`direct`, `request`, `broadcast`, `group`, `delegate`, `topic`, `board`, `review`), the
+[debate](concepts/councils.md#the-debate) adds six. Each has a `text` part and a `data` part
+`{"kind": "data", "data": {"type": "argus.<form>", ...}}`:
+
+| Form | Addressed to | A2A shape | `data` |
+| --- | --- | --- | --- |
+| `claim` | the board | `message/send` | `claim_id`, `author_id`, `statement`, `evidence` (`[{source, quote?}]`), `confidence`, `status` |
+| `challenge` | the target | `tasks/send`: opens a task, state `input-required` | `challenge_id`, `claim_id`, `challenger_id`, `target_id`, `objection`, `demand`, `round` |
+| `response` | the challenger | `message/send` on that task, `metadata.inReplyTo` the challenge | `challenge_id`, `responder_id`, `stance`, `argument`, `evidence`, `unsupported` |
+| `resolution` | the target | `message/send` on that task, in reply to the answer | `challenge_id`, `outcome`, `note` |
+| `position` | the council | `message/send` | `member_id`, `round`, `conclusion`, `stances`, `alternative` |
+| `signature` | the council | `message/send` | `member_id`, `action` (`sign`, `amend`, `block`), `reason`, `amendment`, `claim_id` |
+
+A [helper](concepts/councils.md#helpers) has its own agent card while it lives, and its work is a
+`delegate` task with `metadata.spawned: true`, from `submitted` to `working` to `completed`,
+`failed` or `canceled`. All of these are ledgered as protocol `a2a`, direction `internal`, like the
+other council exchanges ([Ledger](#ledger)).
+
 ## Connecting a client
 
 ```bash

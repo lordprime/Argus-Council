@@ -1,4 +1,5 @@
-"""The council's communication tools: the eight forms of A2A exchange between members.
+"""The council's communication tools: the eight forms of A2A exchange between members, and the
+debate's claim ledger (claims, challenges, answers and resolutions).
 
 Every member gets these whatever its role's tool list says (``source = "council"``); the run's
 ``tools.allow`` / ``tools.deny`` guardrails still apply. See ``argus.runtime.council_bus``.
@@ -6,9 +7,9 @@ Every member gets these whatever its role's tool list says (``source = "council"
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from argus.tools.base import StrList, Tool, ToolCallContext, ToolResult
 
@@ -205,6 +206,133 @@ class ReplyToUser(CouncilTool):
     async def act(self, args: Args, ctx: ToolCallContext, bus: Any, sender: Any) -> ToolResult:
         await bus.reply_to_user(sender, args.text, args.message_id, ctx.step_id)
         return ToolResult("Sent to the user.")
+
+
+# ---------------------------------------------------------------- the debate (claim ledger)
+class Evidence(BaseModel):
+    source: str = Field(
+        min_length=1, max_length=500, description="A [Source n], a URL, an artifact path or a claim id"
+    )
+    quote: str | None = Field(default=None, max_length=1_000)
+
+
+def _evidence_list(value: Any) -> Any:
+    """Accept a bare string, or a list of strings, for evidence."""
+    if isinstance(value, str):
+        return [{"source": value}] if value.strip() else []
+    if isinstance(value, list):
+        return [{"source": v} if isinstance(v, str) else v for v in value]
+    return value
+
+
+class _WithEvidence(BaseModel):
+    evidence: list[Evidence] = Field(default_factory=list, max_length=12)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def _bare_sources(cls, value: Any) -> Any:
+        return _evidence_list(value)
+
+
+class DebateTool(CouncilTool):
+    async def run(self, args: Any, ctx: ToolCallContext) -> ToolResult:
+        bus, _ = self.bus_and_sender(ctx)
+        if bus is not None and not bus.debating:
+            return ToolResult.error("The council is not debating in this run.")
+        return await super().run(args, ctx)
+
+    @staticmethod
+    def reply(item: Any, message: str, key: str) -> ToolResult:
+        if item is None:
+            return ToolResult.error(message)
+        return ToolResult(message, data={key: item[key]})
+
+
+class MakeClaim(DebateTool):
+    name = "make_claim"
+    description = (
+        "Put a finding on record as a claim the council can challenge and endorse. Give the evidence "
+        "for it: a [Source n], a URL, an artifact path or another claim's id, with a short quote."
+    )
+
+    class Args(_WithEvidence):
+        statement: str = Field(min_length=3, max_length=2_000)
+        confidence: float | None = Field(default=None, ge=0, le=1, description="0 to 1")
+
+    async def act(self, args: Args, ctx: ToolCallContext, bus: Any, sender: Any) -> ToolResult:
+        claim = await bus.make_claim(
+            sender, args.statement, args.evidence, args.confidence, step_id=ctx.step_id
+        )
+        return ToolResult(
+            f"Claim {claim['claim_id']} is on record ({claim['status']}).",
+            data={"claim_id": claim["claim_id"]},
+        )
+
+
+class Challenge(DebateTool):
+    name = "challenge"
+    description = (
+        "Challenge a claim (by its clm_ id) or a teammate's work (by name or role) when it is weak, "
+        "unsupported or wrong. demand: proof (evidence), counterexample, or clarification. The target "
+        "must answer before it finishes."
+    )
+
+    class Args(BaseModel):
+        target: str = Field(min_length=1, max_length=120, description="A claim id or a member")
+        objection: str = Field(min_length=3, max_length=4_000)
+        demand: Literal["proof", "counterexample", "clarification"] = "proof"
+
+    async def act(self, args: Args, ctx: ToolCallContext, bus: Any, sender: Any) -> ToolResult:
+        ch, message = await bus.open_challenge(
+            sender, args.target, args.objection, args.demand, step_id=ctx.step_id
+        )
+        return self.reply(ch, message, "challenge_id")
+
+
+class RespondToChallenge(DebateTool):
+    name = "respond_to_challenge"
+    description = (
+        "Answer a challenge against you. stance: defend (give evidence; a defence against a proof "
+        "demand without evidence stays open), concede, or revise (give the corrected statement)."
+    )
+
+    class Args(_WithEvidence):
+        challenge_id: str = Field(min_length=1, max_length=40)
+        stance: Literal["defend", "concede", "revise"]
+        argument: str = Field(min_length=1, max_length=4_000)
+
+    async def act(self, args: Args, ctx: ToolCallContext, bus: Any, sender: Any) -> ToolResult:
+        ch, message = await bus.respond(
+            sender, args.challenge_id, args.stance, args.argument, args.evidence, step_id=ctx.step_id
+        )
+        return self.reply(ch, message, "challenge_id")
+
+
+class ResolveChallenge(DebateTool):
+    name = "resolve_challenge"
+    description = (
+        "Settle a challenge you raised: accepted (the answer holds) or rejected (the claim stays "
+        "disputed; the target may answer once more)."
+    )
+
+    class Args(BaseModel):
+        challenge_id: str = Field(min_length=1, max_length=40)
+        outcome: Literal["accepted", "rejected"]
+        note: str = Field(default="", max_length=2_000)
+
+    async def act(self, args: Args, ctx: ToolCallContext, bus: Any, sender: Any) -> ToolResult:
+        ch, message = await bus.resolve_challenge(
+            sender, args.challenge_id, args.outcome, args.note, step_id=ctx.step_id
+        )
+        return self.reply(ch, message, "challenge_id")
+
+
+DEBATE_TOOL_NAMES = frozenset({"make_claim", "challenge", "respond_to_challenge", "resolve_challenge"})
+
+
+def debate_tools() -> list[Tool]:
+    """The claim ledger's tools; registered only for a council that debates."""
+    return [MakeClaim(), Challenge(), RespondToChallenge(), ResolveChallenge()]
 
 
 COUNCIL_TOOL_NAMES = frozenset(

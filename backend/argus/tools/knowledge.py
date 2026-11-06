@@ -60,6 +60,7 @@ def _kb_name(name: str, kbs: dict[str, uuid.UUID]) -> str | None:
 
 class KnowledgeSearch(Tool):
     name = "knowledge_search"
+    parallel_safe = True
     description = (
         "Search the user's uploaded knowledge bases (documents) for passages relevant to a query. "
         "Returns ranked passages with citations [knowledge base/document#chunk]; cite them when used."
@@ -126,6 +127,7 @@ class KnowledgeSearch(Tool):
 
 class KnowledgeRead(Tool):
     name = "knowledge_read"
+    parallel_safe = True
     description = (
         "Read a whole document from the user's knowledge bases in order, by file name or document id "
         "(as knowledge_search cites it; 'knowledge base/file name' works too). Spreadsheets (CSV, "
@@ -238,6 +240,7 @@ class MemoryWrite(Tool):
 
 class MemorySearch(Tool):
     name = "memory_search"
+    parallel_safe = True
     description = (
         "Recall notes from this council's long-term memory (saved in earlier runs). "
         "An empty query returns the most recent notes."

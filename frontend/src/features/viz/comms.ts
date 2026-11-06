@@ -10,6 +10,9 @@ import type { CommEvent, CommKind, NodeRef, SubCouncilInfo } from "./types";
 
 export const COMMS_CAP = 4000;
 
+/** A2A forms drawn from their debate.* events instead (as challenge edges), so they are not counted twice. */
+const CHALLENGE_FORMS = new Set(["challenge", "response", "resolution", "stance"]);
+
 /** Roles the backend flags as overseers (backend/argus/agents/roles.py). */
 export const OVERSEER_ROLES = new Set(["critic", "monitor", "security"]);
 
@@ -184,6 +187,7 @@ export function applyComms(s: RunState, ev: RunEvent): void {
     case "a2a.message": {
       const msg = (d.message ?? {}) as { messageId?: string; role?: string; metadata?: Record<string, any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
       const meta = msg.metadata ?? {};
+      if (CHALLENGE_FORMS.has(String(meta.form ?? ""))) break; // drawn as challenge edges from debate.*
       const node = (ref: { member_id?: string; kind?: string } | undefined): NodeRef =>
         (ref?.member_id ? memberById(s, ref.member_id) : undefined) ?? (ref?.kind === "user" ? USER_NODE : COUNCIL_NODE);
       const from = msg.role === "user" ? USER_NODE : node(meta.from);
@@ -195,6 +199,42 @@ export function applyComms(s: RunState, ev: RunEvent): void {
           ledger: d.ledger_id ? { id: d.ledger_id, hash: d.hash, protocol: "a2a", latencyMs: 0, method: String(d.method ?? "message/send") } : undefined,
         }));
       });
+      break;
+    }
+    case "debate.challenge": {
+      const from = memberById(s, d.challenger_id) ?? actorRef(s, ev.actor);
+      const claim = d.claim_id ? s.debate?.claims[d.claim_id] : undefined;
+      const to = memberById(s, d.target_id) ?? memberById(s, claim?.authorId) ?? COUNCIL_NODE;
+      add(s, mk(ev.id, "challenge", from, to, { label: String(d.demand ?? "challenge"), status: "open", itemId: ev.id }));
+      break;
+    }
+    case "debate.response": {
+      const ch = s.debate?.challenges[d.challenge_id];
+      const from = memberById(s, d.responder_id) ?? actorRef(s, ev.actor);
+      const to = memberById(s, ch?.challengerId) ?? COUNCIL_NODE;
+      add(s, mk(ev.id, "challenge", from, to, { label: String(d.stance ?? "response"), status: d.unsupported ? "unsupported" : "ok", itemId: ev.id }));
+      break;
+    }
+    case "debate.resolution": {
+      const ch = s.debate?.challenges[d.challenge_id];
+      if (!ch) break;
+      const from = memberById(s, ch.challengerId) ?? actorRef(s, ev.actor);
+      const to = memberById(s, ch.responses[ch.responses.length - 1]?.responderId ?? ch.targetId) ?? COUNCIL_NODE;
+      add(s, mk(ev.id, "challenge", from, to, { label: String(d.outcome ?? "resolved"), status: d.outcome === "rejected" ? "rejected" : "ok", itemId: ev.id }));
+      break;
+    }
+    case "member.joined": {
+      const helper = memberById(s, d.member?.id);
+      if (!helper) break;
+      const parent = memberById(s, d.member?.parent_id) ?? actorRef(s, ev.actor);
+      add(s, mk(ev.id, "spawn", parent, helper, { label: short(d.member?.role), status: "running", itemId: ev.id }));
+      break;
+    }
+    case "member.left": {
+      const helper = memberById(s, d.member_id);
+      if (!helper) break;
+      const parentId = s.helpers?.[d.member_id]?.parentId;
+      add(s, mk(ev.id, "spawn", helper, memberById(s, parentId) ?? COUNCIL_NODE, { label: short(d.result_preview), status: d.status, itemId: ev.id }));
       break;
     }
     case "tool.call.started": {

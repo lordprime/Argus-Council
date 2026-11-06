@@ -539,3 +539,48 @@ class CliSession(IdMixin, TimestampMixin, Base):
     member_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     label: Mapped[str] = mapped_column(String(120), default="")
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GraphNode(IdMixin, TimestampMixin, Base):
+    """A node of a council's knowledge graph (argus.runtime.graph), scoped like ``memory_items``:
+    owner plus council, or owner plus null for ad-hoc runs. ``key`` is the id members see."""
+
+    __tablename__ = "graph_nodes"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    council_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("councils.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    type: Mapped[str] = mapped_column(String(16))  # claim | evidence | result | entity | decision | question
+    label: Mapped[str] = mapped_column(String(300), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    author: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(24), default="")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    terms: Mapped[dict[str, Any]] = mapped_column(default=dict)  # BM25 term counts
+    length: Mapped[int] = mapped_column(Integer, default=0)
+    meta: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class GraphEdge(IdMixin, TimestampMixin, Base):
+    """A relation between two graph nodes, by their keys (nodes of earlier runs included)."""
+
+    __tablename__ = "graph_edges"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    council_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("councils.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    src: Mapped[str] = mapped_column(String(64))
+    dst: Mapped[str] = mapped_column(String(64))
+    # supports | refutes | cites | derived_from | answers | mentions | about
+    relation: Mapped[str] = mapped_column(String(24))
+    author: Mapped[str] = mapped_column(String(120), default="")

@@ -14,7 +14,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -25,9 +25,11 @@ from argus.core.logging import get_logger
 from argus.core.metrics import TOOL_CALLS, TOOL_LATENCY, tool_label
 from argus.providers.base import ProviderError
 from argus.providers.cli.provider import CLI_PROVIDERS
-from argus.providers.types import CompletionRequest, CompletionResponse, Message, ToolCall
+from argus.providers.types import CompletionRequest, CompletionResponse, Message, SystemPrompt, ToolCall
 from argus.runtime.context import Correction, RunContext
+from argus.runtime.council_bus import conceal
 from argus.runtime.events import Actor
+from argus.runtime.graph import graph_for
 from argus.runtime.guardrails import GuardrailBreach
 from argus.runtime.history import (
     CONDENSE_SYSTEM,
@@ -58,6 +60,16 @@ def _skill_summary(description: str) -> str:
     return text[:SKILL_SUMMARY_CHARS].rsplit(" ", 1)[0] + " … (full description: use_skill)"
 
 
+def _conceal_args(member: MemberSpec, value: Any) -> Any:
+    if isinstance(value, str):
+        return conceal(member, value)
+    if isinstance(value, dict):
+        return {k: _conceal_args(member, v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_conceal_args(member, v) for v in value]
+    return value
+
+
 @dataclass
 class MemberSpec:
     id: str
@@ -73,6 +85,17 @@ class MemberSpec:
     temperature: float | None = None
     # CLI agents: resume this existing vendor session (validated against the run owner's sessions).
     cli_session: str | None = None
+    # Runtime helpers (argus.tools.spawn): joined while the run works, gone when their task ends.
+    ephemeral: bool = False
+    parent_id: str | None = None
+    # A secret stance assigned at the start of the run, e.g. "devils_advocate" (debate). Only the
+    # run's owner may see it: never render it into a roster, agent card, board or another prompt.
+    stance: str | None = None
+
+    @property
+    def debater(self) -> bool:
+        """Every member but the overseers takes part in the debate and co-authors the conclusion."""
+        return not self.overseer
 
     @property
     def actor(self) -> Actor:
@@ -284,13 +307,24 @@ class AgentRunner:
             parts.append(
                 "\nknowledge_search also covers the research library: every source earlier runs read."
             )
+        # The council's knowledge graph (argus.runtime.graph); its tools join the registry with it.
+        graph = graph_for(self.ctx, self.tools)
+        if graph is not None:
+            parts.append(graph.recall_text())  # earlier runs' knowledge: fixed once loaded
         _, standing = self.ctx.corrections_for_peek(self.member.id)
         if standing:
             parts.append("\nStanding orders (always follow):\n" + "\n".join(f"- {c.text}" for c in standing))
+        # Everything above is the stable prefix (cached where the provider can); what follows
+        # changes from turn to turn (board, working now, guidance).
+        stable = "\n".join(p for p in parts if p)
+        tail: list[str] = []
         bus = self.ctx.extra.get("council_bus")
         if bus is not None:
-            parts.append(bus.prompt_for(self.member, self._allowed))
-        return "\n".join(p for p in parts if p)
+            tail.append(bus.prompt_for(self.member, self._allowed))
+        text = "\n".join(p for p in [stable, *tail] if p)
+        if rails.graph.prompt_cache and stable and len(stable) < len(text):
+            return SystemPrompt(text, len(stable))
+        return text
 
     def _member_tools(self, name: str) -> list[str] | None:
         """The seat's tool grant for ``name``; the council's communication tools belong to every seat."""
@@ -300,6 +334,13 @@ class AgentRunner:
         return self.member.tools or None
 
     def _allowed(self, name: str) -> bool:
+        mode = getattr(self, "_tool_mode", "all")
+        if mode == "none":
+            return False
+        if mode == "read":
+            tool = self.tools.get(name)
+            if tool is None or not tool.is_read_only():
+                return False
         return self.ctx.engine.tool_allowed(name, self._member_tools(name)) is None
 
     # ------------------------------------------------------------ LLM turn
@@ -443,6 +484,10 @@ class AgentRunner:
             causation_id=started.id,
         )
         await self.ctx.budget_update()
+        bus = self.ctx.extra.get("council_bus")
+        if bus is not None:  # the "Working now" view teammates see (CouncilBus.live)
+            tail = response.content or ", ".join(f"calling {c.name}" for c in response.tool_calls)
+            await bus.set_live(self.member, getattr(self, "_live_task", "") or phase, tail)
         return thought_id, done.id, response
 
     # ------------------------------------------------------------ tools
@@ -450,6 +495,10 @@ class AgentRunner:
         actor = self.member.actor
         engine = self.ctx.engine
         tool = self.tools.get(call.name)
+        if self.member.stance and isinstance(call.arguments, dict):
+            # Whatever a member with a secret stance writes through a tool (memory, the board, the
+            # graph, files) can reach the council or a later run: it never gives the stance away.
+            call.arguments = _conceal_args(self.member, call.arguments)
         safe_args, redacted = _redact_args(call.arguments)
         source = tool.source if tool else "builtin"
         await self.ctx.sink.emit(
@@ -585,6 +634,34 @@ class AgentRunner:
             await self.ctx.violation(v2, where, actor)
         result.content = cleaned
         return await finish(status, result, t0)
+
+    def _parallel_turn(self, calls: list[ToolCall]) -> bool:
+        """True when every call of the turn may run at the same time: each is a known parallel-safe
+        tool (read-only, or council/A2A) that this seat may use and that needs no approval."""
+        if len(calls) < 2:
+            return False
+        engine = self.ctx.engine
+        for call in calls:
+            tool = self.tools.get(call.name)
+            if tool is None or not tool.runs_in_parallel() or not self._allowed(call.name):
+                return False
+            parsed = tool.parse(call.arguments)
+            if engine.needs_approval(set(tool.risk_for(parsed) if parsed is not None else tool.risk)):
+                return False
+        return True
+
+    async def _run_tools_concurrently(
+        self, calls: list[ToolCall], step_id: str | None, cause: str | None
+    ) -> list[ToolResult]:
+        """Run the calls at once; the results come back in call order. A call that stops the run
+        (cancel, guardrail halt) stops the others too."""
+        tasks = [asyncio.create_task(self._run_tool(c, step_id, cause), name=f"tool-{c.name}") for c in calls]
+        try:
+            return list(await asyncio.gather(*tasks))
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _ledger_outbound(
         self,
@@ -723,6 +800,10 @@ class AgentRunner:
         one_shot, _ = self.ctx.corrections_for(self.member.id)
         for c in one_shot:
             messages.append(Message.user(f"[Correction from {c.by}] {c.text}"))
+        # Overseer annotations without a correction (argus.runtime.oversight.ThoughtBus.notes).
+        take_notes = getattr(self.bus, "take_notes", None)
+        for by, note in take_notes(self.member.id) if take_notes else []:
+            messages.append(Message.user(f"[Note from {by}] {note}"))
         inbox = [
             m
             for m in self.ctx.controls.user_messages
@@ -747,6 +828,28 @@ class AgentRunner:
                 messages.append(Message.user(bus.render(msg)))
         return one_shot
 
+    def _finish_gate(self, phase: str, answer: str) -> str | None:
+        """Answer before you finish: a member's work that is still under open challenges goes back
+        to it (at most ``debate.max_nudges`` times per task, and not again once it hands in the same
+        answer unchanged; the challenges then stay open and are recorded as dissent)."""
+        bus = self.ctx.extra.get("council_bus")
+        if bus is None or phase != "execute" or not getattr(bus, "debating", False):
+            return None
+        if not self._allowed("respond_to_challenge"):
+            return None
+        nudges = getattr(self, "_nudges", 0)
+        if nudges >= self.ctx.engine.rails.debate.max_nudges or answer == getattr(self, "_nudged", None):
+            return None
+        pending = bus.open_challenges(self.member.id)
+        if not pending:
+            return None
+        self._nudges, self._nudged = nudges + 1, answer
+        n = len(pending)
+        return (
+            f"{n} challenge{'s are' if n != 1 else ' is'} open against your work: answer each with "
+            "respond_to_challenge.\n" + "\n".join(bus.challenge_line(c) for c in pending)
+        )
+
     async def run_task(
         self,
         task: str,
@@ -755,11 +858,16 @@ class AgentRunner:
         step_title: str = "",
         context: str = "",
         phase: str = "execute",
+        tools: Literal["all", "read", "none"] = "all",
     ) -> AgentOutcome:
         """Do one task, or, in a resumed run, replay the answer the old run already gave it.
 
+        ``tools`` narrows what the task may call: ``"read"`` offers only the read-only tools, and
+        ``"none"`` none at all, so the task is one model call (a debate's light moves).
+
         Every finished task is recorded as ``task.completed`` (see ``argus.runtime.resume``).
         """
+        self._tool_mode = tools
         key = task_key(phase, step_id, step_title, self.member.id)
         record = {"key": key, "phase": phase, "step_title": step_title[:200], "member_id": self.member.id}
         resume = self.ctx.extra.get("resume")
@@ -773,9 +881,15 @@ class AgentRunner:
                 step_id=step_id,
             )
             return AgentOutcome(answer, ok=True, reason="replayed")
-        outcome = await self._run_task(
-            task, step_id=step_id, step_title=step_title, context=context, phase=phase
-        )
+        self._live_task = (step_title or next(iter(task.strip().splitlines()), "") or phase)[:160]
+        bus = self.ctx.extra.get("council_bus")
+        try:
+            outcome = await self._run_task(
+                task, step_id=step_id, step_title=step_title, context=context, phase=phase
+            )
+        finally:
+            if bus is not None:
+                await bus.clear_live(self.member, self._live_task)
         await self.ctx.sink.emit(
             TASK_EVENT,
             {
@@ -881,19 +995,34 @@ class AgentRunner:
                     thought_event_id=last_event,
                 )
             if not resp.tool_calls:
+                nudge = self._finish_gate(phase, resp.content)
+                if nudge:
+                    messages.append(Message.user(nudge))
+                    continue
                 await self.ctx.sink.emit(
                     "member.status", {"member_id": self.member.id, "status": "idle"}, actor=self.member.actor
                 )
                 return AgentOutcome(
-                    resp.content,
+                    # A secret stance never reaches the council through the member's own answer.
+                    conceal(self.member, resp.content),
                     ok=True,
                     iterations=iteration,
                     tool_calls=tool_calls,
                     thought_event_id=event_id,
                 )
-            for call in resp.tool_calls:
+            # Read-only and council calls of one turn run at the same time; a turn with anything
+            # else keeps the calls in order. Results go back in call order either way.
+            if self._parallel_turn(resp.tool_calls):
                 await self.ctx.checkpoint(self.member.id)
-                result = await self._run_tool(call, step_id, event_id)
+                results = await self._run_tools_concurrently(resp.tool_calls, step_id, event_id)
+            else:
+                results = None
+            for i, call in enumerate(resp.tool_calls):
+                if results is not None:
+                    result = results[i]
+                else:
+                    await self.ctx.checkpoint(self.member.id)
+                    result = await self._run_tool(call, step_id, event_id)
                 tool_calls += 1
                 messages.append(
                     Message.tool_result(

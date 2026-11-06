@@ -34,6 +34,7 @@ _READ = (
     "run.plan",
     "step.status",
     "tool.call.started",
+    "step.added",
 )
 
 
@@ -52,6 +53,8 @@ class ResumeState:
     sources: list[dict[str, Any]] = field(default_factory=list)
     notes: list[dict[str, Any]] = field(default_factory=list)
     legacy: bool = False  # recovered from plan and step events (a run from before task records)
+    # Steps the chair added while the old run worked (add_step), in order: the resumed run adds them again.
+    added_steps: list[dict[str, Any]] = field(default_factory=list)
     replayed: int = 0
 
     @property
@@ -98,6 +101,11 @@ async def load_resume_state(sessionmaker: async_sessionmaker, run_id: uuid.UUID)
                 seen.add(d["url"])
                 state.sources.append(d)
     state.notes = _notes(events)
+    for e in events:
+        if e.get("type") == "step.added":
+            d = e.get("data") or {}
+            if isinstance(d.get("step"), dict):
+                state.added_steps.append({**d["step"], "by": d.get("by")})
     return state
 
 

@@ -35,12 +35,14 @@ import { Badge, Button, IconButton, touchTarget } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
+import { AdvocateBadge, CouncilRow, DebateRow, HelperBadge, LiveTailLine, MessageMember, useAdvocate } from "@/components/run/debate";
 import { RESUMABLE } from "@/features/runs/queries";
 import { api, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, compact, usd } from "@/lib/format";
 import type { Member, Mode } from "@/lib/types";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
+import type { DebateState } from "@/stores/debate";
 import type {
   ApprovalItem,
   Budget,
@@ -116,10 +118,12 @@ export function CouncilRail({ runId, members, state, live, onFocus, focused }: {
     }
   };
   const groups: [string, Member[]][] = [
-    ["Chair", members.filter((m) => m.role === "chair")],
-    ["Workers", members.filter((m) => m.role !== "chair" && !m.config?.overseer)],
-    ["Overseers", members.filter((m) => m.config?.overseer)],
+    ["Chair", members.filter((m) => m.role === "chair" && !m.ephemeral)],
+    ["Workers", members.filter((m) => m.role !== "chair" && !m.config?.overseer && !m.ephemeral)],
+    ["Helpers", members.filter((m) => m.ephemeral)],
+    ["Overseers", members.filter((m) => m.config?.overseer && !m.ephemeral)],
   ];
+  const advocate = state.debate?.advocate?.memberId;
   return (
     <aside aria-label="Council" className="flex flex-col gap-4 p-3 overflow-auto">
       {groups.filter(([, ms]) => ms.length).map(([title, ms]) => (
@@ -131,6 +135,9 @@ export function CouncilRail({ runId, members, state, live, onFocus, focused }: {
               const detail = state.memberStatus[m.id]?.detail;
               const spend = state.budget?.by_member?.[m.id];
               const s = roleStyle(m.role);
+              const helper = m.ephemeral ? state.helpers?.[m.id] : undefined;
+              const gone = Boolean(helper && helper.status !== "live");
+              const parent = m.parent_id ? members.find((x) => x.id === m.parent_id)?.name ?? "a member" : undefined;
               return (
                 <li key={m.id}
                   className={cn("rounded-lg border bg-surface p-2.5 border-l-[3px]", focused === m.id ? "border-accent" : "border-border",
@@ -142,21 +149,30 @@ export function CouncilRail({ runId, members, state, live, onFocus, focused }: {
                       <p className="text-2xs font-mono text-fg-subtle truncate">{m.provider}/{m.model}</p>
                     </div>
                   </div>
+                  {(m.id === advocate || m.ephemeral) && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {m.id === advocate && <AdvocateBadge />}
+                      {m.ephemeral && <HelperBadge parent={parent} info={helper} />}
+                    </div>
+                  )}
                   <p className={cn("text-xs mt-1.5 flex items-center gap-1",
                     st === "held" || st === "waiting" ? "text-warning" : st === "blocked" || st === "error" ? "text-danger" : "text-fg-muted")}>
                     {st === "thinking" && <span className="size-1.5 rounded-full bg-info animate-pulse" aria-hidden />}
                     {STATUS_LINE[st] ?? st}{detail && st === "tool" ? `: ${detail}` : ""}
                     {spend && <span className="ml-auto tabular text-fg-subtle">{usd(spend.usd)}</span>}
                   </p>
-                  <div className="flex gap-1 mt-1.5">
+                  {live && !gone && <LiveTailLine tail={state.live?.[m.id]} />}
+                  {gone && helper?.resultPreview && <p className="mt-1.5 text-xs text-fg-muted line-clamp-2">{helper.resultPreview}</p>}
+                  <div className="flex flex-wrap gap-1 mt-1.5">
                     <Button size="sm" variant="ghost" icon={Eye} onClick={() => onFocus(focused === m.id ? null : m.id)} aria-pressed={focused === m.id}>
                       {focused === m.id ? "Unfocus" : "Focus"}
                     </Button>
-                    {live && (st === "held" ? (
+                    {live && !gone && (st === "held" ? (
                       <Button size="sm" variant="ghost" icon={Play} onClick={() => void hold(m, true)}>Release</Button>
                     ) : (
                       <Button size="sm" variant="ghost" icon={Hand} onClick={() => void hold(m, false)}>Hold</Button>
                     ))}
+                    {live && !gone && <MessageMember runId={runId} member={m} label="Message" />}
                   </div>
                 </li>
               );
@@ -340,6 +356,7 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
   const [expanded, setExpanded] = useState(false);
   const [correcting, setCorrecting] = useState(false);
   const s = roleStyle(t.actor.role);
+  const advocate = useAdvocate(runId);
   const held = t.intercepts.some((i) => i.action === "hold" && i.outcome === "pending" && !i.correction);
   const intercept = async () => {
     try {
@@ -359,6 +376,7 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
         <button type="button" className="min-h-6 text-sm font-semibold hover:underline" onClick={onSelect}>{t.actor.name}</button>
         <span className="text-xs text-fg-subtle tabular">{clock(t.ts)}</span>
         {held && <Badge tone="warning">held</Badge>}
+        {advocate && t.actor.member_id === advocate && <AdvocateBadge short />}
         {!t.streaming && t.tokensOut != null && (
           <span className="text-xs text-fg-subtle tabular ml-auto">{compact((t.tokensIn ?? 0) + t.tokensOut)} tok · {usd(t.costUsd)}</span>
         )}
@@ -490,7 +508,13 @@ export function VoteCard({ v, members }: { v: VoteItem; members: Member[] }) {
   );
 }
 
-export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenArtifact: (path: string) => void }) {
+export function SimpleRow({ item, onOpenArtifact, members = [], debate }: {
+  item: SimpleItem;
+  onOpenArtifact: (path: string) => void;
+  /** For debate and helper rows, which name members by id. */
+  members?: Member[];
+  debate?: DebateState;
+}) {
   const d = item.data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   switch (item.kind) {
     case "artifact":
@@ -516,6 +540,10 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
       return <Row icon={AlertTriangle} tone="text-danger">{d.message}</Row>;
     case "a2a":
       return <A2ARow d={d} />;
+    case "debate":
+      return <DebateRow item={item} members={members} debate={debate} />;
+    case "council":
+      return <CouncilRow item={item} members={members} />;
     case "system":
       if (item.type === "run.status") return <Row icon={d.status === "paused" ? Pause : Bot}>Run {d.status}{d.reason ? `: ${d.reason}` : ""}</Row>;
       if (item.type === "correction.resolved") return <Row icon={Check}>Correction {d.outcome}</Row>;
@@ -680,7 +708,7 @@ export function InterventionBar({ runId, members, disabled, status, followUp }: 
       <label className={wide ? "sr-only" : "text-sm font-medium"} htmlFor="iv-target">Send to</label>
       <select id="iv-target" value={target} onChange={(e) => setTarget(e.target.value)} className={select}>
         <option value="council">Council</option>
-        {members.map((m) => <option key={m.id} value={m.id}>@{m.name}</option>)}
+        {members.map((m) => <option key={m.id} value={m.id}>@{m.name}{m.ephemeral ? " (helper)" : ""}</option>)}
       </select>
       <label className={wide ? "sr-only" : "text-sm font-medium mt-1"} htmlFor="iv-kind">Type</label>
       <select id="iv-kind" value={kind} onChange={(e) => setKind(e.target.value as "message" | "correct")} className={select}>

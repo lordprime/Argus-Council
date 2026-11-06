@@ -587,6 +587,7 @@ def failure_message(exc: httpx.HTTPError, url: str) -> str:
 
 class WebFetch(Tool):
     name = "web_fetch"
+    parallel_safe = True
     description = (
         "Fetch a web page, text document or PDF and return its readable text. Only fetch URLs taken "
         "from search results, from pages you have read, or from the user: never construct or guess "
@@ -798,6 +799,7 @@ class WebFetch(Tool):
 
 class WebSearch(Tool):
     name = "web_search"
+    parallel_safe = True
     description = (
         "Search the web. Returns titles, URLs and snippets; use web_fetch to read promising results."
     )

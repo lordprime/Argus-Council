@@ -1,13 +1,16 @@
 # Run Views
 
-The run workspace (`/runs/:runId`) shows a live or finished run in five views, switched from the
-toolbar. All five read one communication log derived from the run's event stream: who sent what
-to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
-`protocol.call`s. Selecting an item in any view jumps to it in the timeline.
+The run workspace (`/runs/:runId`) shows a live or finished run in six views, switched from the
+toolbar. Five of them read one communication log derived from the run's event stream: who sent
+what to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
+`protocol.call`s. The **Debate** view reads the debate's record from the same stream. Selecting an
+item in any view jumps to it in the timeline.
 
 ```mermaid
 flowchart LR
     S[Event stream<br/>SSE, resumable] --> ST[Run store]
+    ST --> DB[Debate record<br/>claims, challenges,<br/>positions, signatures]
+    DB --> D[Debate]
     ST --> CL[Communication log<br/>sender, receiver, kind, time,<br/>tokens, cost, errors]
     CL --> T[Timeline]
     CL --> M[Map]
@@ -19,6 +22,7 @@ flowchart LR
 | View | Shows |
 | --- | --- |
 | **Timeline** | A chronological feed of the plan, thoughts, tool calls, intercepts, corrections, approvals, votes and messages between members, with a density control |
+| **Debate** | The council's argument: the phase it is in, the claims with their challenge threads, each member's position on each claim, and the co-signed conclusion ([below](#the-debate-view)) |
 | **Map** | An isometric map of agents, overseers, sub-councils, tools, MCP servers and remote agents, with live message pulses along the links, filters, pause and live, zoom and pan, and a details panel that includes the ledger id and hash of protocol calls |
 | **Gantt** | Steps and per-agent activity over time, with a live now-line |
 | **Heatmap** | Who talks when: rows for agents, sub-agents and external peers, auto-sized time bins, and intensity by messages, tokens, cost or errors |
@@ -26,7 +30,49 @@ flowchart LR
 
 Around the views, the workspace has the intercept and correct controls, pending approvals (with
 argument editing), votes, a budget meter, an inspector for the selected item, and the deliverable
-with its exports.
+with its exports. Under the budget meter, once the [knowledge graph](concepts/councils.md#the-council-knowledge-graph)
+has kept text out of prompts, a *Context N chars saved (x%)* line sums the run's `context.saved`
+events: the characters its digests avoided sending, against pasting the raw text.
+
+## The council rail
+
+The council rail lists the members in groups: Chair, Workers, **Helpers** and Overseers. Each card
+shows the member's model, status and spend, with **Focus**, and **Hold** (or **Release**) and
+**Message** while the run is live. Under the status, *Working now* shows the member's current task and the tail
+of its latest thought, as its teammates see it.
+
+* A [helper](concepts/councils.md#helpers) is badged *Helper of* the member that spawned it, with
+  its state (working, finished, failed or cancelled). Once it has left, the card keeps the start of
+  its result and drops the live controls. In the **Send to** list of the intervention bar it is
+  marked *(helper)*.
+* The [devil's advocate](concepts/councils.md#the-devils-advocate) carries a *Devil's advocate*
+  badge, here, on its thought cards and wherever the Debate view names it. The badge says
+  "Secret: only you can see this; the council does not know". It is shown only to you: the
+  council is never told, and nothing the badge shows goes back to the server.
+
+## The Debate view
+
+The **Debate** view follows the [debate](concepts/councils.md#the-debate) as it happens:
+
+* **Phases.** Deliberate, Converge, Compile and Co-sign, with the one under way highlighted, its
+  round, and the number of open challenges. Before the first phase it reads "Members debate while
+  they work". Beside it: who the devil's advocate is (with the secret badge), or why there is none,
+  and how much context the graph saved.
+* **Conclusion.** The co-signing outcome (*Signed by the council*, *Sent back to revise* or *Not
+  signed*), whether the quorum was met, and each author's signature, amendment (with the proposed
+  text) or block, with the reason.
+* **Positions.** A table of each member's stance (endorse or object, with the reason on hover) on
+  each key claim, a row with the agreement computed for each claim (agreed, contested or rejected),
+  and every member's conclusion.
+* **Claims.** Each claim with its number, status, author, confidence and evidence (links for URLs),
+  and under it its challenge threads: who challenged whom, the demand, each answer (defended,
+  conceded or revised, marked *unsupported* when a proof demand got no evidence) and the
+  challenger's resolution. Challenges against a member's work rather than a claim are listed
+  separately.
+
+On a live run, every claim and challenge has **Message** buttons for its author, challenger or
+target. They send an ordinary message to that member, about that claim or challenge; nothing
+waits for your answer.
 
 ## Header controls
 
@@ -51,6 +97,23 @@ posts are addressed to "the board" and broadcasts to "the council". A member's a
 as a bubble headed "*name* replied to you". Your own messages show as your usual message bubble,
 not as A2A rows.
 
+Debate exchanges are not shown as A2A rows. They have rows of their own:
+
+| Row | Event |
+| --- | --- |
+| "*name* is the devil's advocate (picked at random from N debaters)", with the secret badge, or "No devil's advocate this run: *reason*" | `council.role_assigned` |
+| "*author* claimed #n", with its status and statement | `debate.claim` |
+| "*challenger* challenged *target* on claim #n", with the demand and the objection | `debate.challenge` |
+| "*member* defended / conceded / revised", marked *unsupported* when it should be | `debate.response` |
+| "*challenger* accepted / rejected the response" | `debate.resolution` |
+| "Deliberate / Converge / Compile / Co-sign round N started / finished · N open challenges" | `debate.round` |
+| "*member* took a position: endorses N, objects to N" | `debate.position` |
+| "Converging, round N: N agreed, N contested, N rejected", then "Co-signing: *outcome*, N signed, N amended, N blocked · quorum met" | `debate.consensus` |
+| "*member* spawned helper *name* (*role*, *model*)" and "Helper *name* finished / failed / cancelled", with the start of its result | `member.joined`, `member.left` |
+| "*chair* added a step: *title* → *assignee*" | `step.added` |
+
+Co-signing also shows as a vote card (Sign, Amend, Block), as the vote did before.
+
 A few system rows record changes to what the run can do:
 
 | Row | When |
@@ -65,7 +128,7 @@ The density control sets which rows the timeline shows:
 
 | Density | Shows |
 | --- | --- |
-| **Decisions** | Everything except tool calls, citations and system rows |
+| **Decisions** | Everything except tool calls, citations and system rows (debate and helper rows stay) |
 | **Working** (default) | Everything except system rows, other than run status changes |
 | **Everything** | Every row |
 
@@ -78,6 +141,16 @@ edge from the sender (or you) to that member, or to the council for board posts 
 council-wide messages. An edge's details include the ledger id and hash of the recorded message.
 The **Heatmap** counts A2A messages, and its cell tooltips list them as `a2a` beside the other
 kinds.
+
+Two more kinds come from the debate and from helpers. The Map draws them in its legend and filters
+as **Debate** and **Helpers**, and the Heatmap counts them as `challenge` and `spawn`:
+
+* **Debate** edges, in the warning colour: a challenge from the challenger to its target, the
+  answer back to the challenger, and the resolution from the challenger to the member who answered.
+  The A2A messages of these forms are not drawn a second time. Claims, positions and signatures,
+  which go to the whole council, stay A2A edges to the council.
+* **Helpers** edges, in the success colour: from the parent to the helper when it is spawned
+  (labelled with its role) and back from the helper when it leaves (with the start of its result).
 
 ## Accessibility
 

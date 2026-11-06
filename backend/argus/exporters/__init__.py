@@ -29,6 +29,8 @@ FORMATS = {
     "json": ("application/json", "json"),
 }
 
+_LINKABLE = re.compile(r"(?i)^(https?|mailto):")
+
 _md = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable("table").enable("strikethrough")
 
 
@@ -300,7 +302,9 @@ def _rl_markup(spans: list[Span]) -> str:
             t = f"<b>{t}</b>"
         if s.italic:
             t = f"<i>{t}</i>"
-        if s.href:
+        # Only absolute links: reportlab raises on an in-page "#anchor" it has no destination for
+        # (a report's table of contents) and on relative paths, which would fail the whole PDF.
+        if s.href and _LINKABLE.match(s.href):
             t = f'<link href="{html.escape(s.href)}" color="blue">{t}</link>'
         out.append(t)
     return "".join(out)
@@ -350,7 +354,7 @@ def to_pdf(blocks: list[Block], title: str) -> bytes:
             story.append(Paragraph(f"<i>{_rl_markup(b.spans)}</i>", styles["BodyText"]))
         elif b.kind == "table" and b.rows:
             data = [[Paragraph(_rl_markup(c), styles["BodyText"]) for c in row] for row in b.rows]
-            tbl = Table(data, repeatRows=1)
+            tbl = Table(data, repeatRows=1, splitInRow=1)
             tbl.setStyle(
                 TableStyle(
                     [

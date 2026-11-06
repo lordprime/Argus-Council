@@ -49,6 +49,7 @@ class NotesWrite(Tool):
 
 class NotesRead(Tool):
     name = "notes_read"
+    parallel_safe = True
     # The council board: every seat may read and post, whatever its role's tool list says.
     source = "council"
     description = "Read the council's shared notes, optionally filtered by a keyword or tag."
@@ -126,6 +127,7 @@ def match_path(path: str, files: list[dict[str, Any]]) -> str | None:
 
 class ArtifactRead(Tool):
     name = "artifact_read"
+    parallel_safe = True
     description = (
         "Read a file from the run workspace (paths as artifact_list shows them, e.g. 'report.md'). "
         "Only files written in this run exist: use artifact_list to see them."

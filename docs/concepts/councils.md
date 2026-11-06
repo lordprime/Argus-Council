@@ -182,3 +182,218 @@ In the run workspace, the timeline shows each exchange as a row (*Ada → Ben*, 
 *Question*, *Answer*, *Delegated task* or *Board post*, and the text), and the map and the heatmap
 draw it as an A2A edge from the sender to each recipient. The user's own messages are A2A messages
 too ([Stepping in](runs.md#stepping-in)).
+
+**Seeing each other work.** Members also see what their teammates are doing while they do it. Every
+member's instructions carry a *Working now* section: each other member's current task and the tail
+(about 300 characters) of its latest thought, newest first, up to about 2,000 characters in all. A
+member can correct or build on a teammate's work as it happens, not only after the result is posted.
+The section is rebuilt on every turn from ephemeral `member.live` events.
+
+**At the same time.** Within one turn, a member's tool calls run at once when every call in the turn
+is parallel-safe: the read-only tools (`web_search`, `web_fetch`, `news_search`, `market_data`,
+`knowledge_search`, `knowledge_read`, `memory_search`, `notes_read`, `artifact_read`, `graph_query`,
+`graph_read`) and every council tool (the communication tools above, the board, the debate tools,
+`spawn_agents`, `await_agents`, `graph_link`). A turn that has a writing, shell or approval-gated
+call runs its calls in order, as before. Either way, the results go back to the model in call order.
+
+### The debate forms
+
+While the council [debates](#the-debate), the bus carries six more forms. Each is an A2A `Message`
+with a `text` part for people and a `data` part for structure, `{"type": "argus.<form>", ...}`,
+recorded in the ledger and on the timeline like the eight forms above.
+
+| Form | Tool or phase | What happens |
+| --- | --- | --- |
+| `claim` | `make_claim` | Puts a finding on record as claim `clm_…`, posted to the board, with its evidence and a confidence |
+| `challenge` | `challenge` | Opens challenge `chl_…` against a claim or a member's work, demanding `proof`, a `counterexample` or a `clarification`. It is an A2A task, `input-required` on the target |
+| `response` | `respond_to_challenge` | The target answers (in reply to the challenge): `defend`, `concede` or `revise` |
+| `resolution` | `resolve_challenge` | The challenger settles the answer: `accepted` or `rejected` |
+| `position` | converge phase | A debater's conclusion, and `endorse` or `object` on each claim, sent to the council |
+| `signature` | co-sign phase | A debater signs, amends or blocks the compiled conclusion, sent to the council |
+
+A helper's work travels as an ordinary `delegate` task with `metadata.spawned: true`
+([Helpers](#helpers)).
+
+## The debate
+
+Members do not only work side by side: they argue, and the conclusion is theirs together. The
+debate is on by default (`debate.enabled`, [Guardrails](guardrails.md#debate-helpers-and-graph-context))
+for top-level runs whose council has at least two *debaters*. Every member except the overseers is
+a debater, and every debater is an author of the conclusion. Sub-councils keep their own plan,
+synthesis and vote. With `debate.enabled: false` a run goes back to one synthesis and a majority
+vote.
+
+**Claims and challenges.** Any member may, at any time while it works:
+
+* put a finding on record with `make_claim(statement, evidence[], confidence)`. Each evidence item is
+  `{source, quote?}`, where `source` is a `[Source n]`, a URL, an artifact path or another claim's id.
+* challenge a claim (by its `clm_` id) or a teammate's work (by name or role) with
+  `challenge(target, objection, demand)`, where `demand` is `proof`, `counterexample` or
+  `clarification`.
+* answer a challenge against it with `respond_to_challenge(challenge_id, stance, argument,
+  evidence[])`, where `stance` is `defend`, `concede` or `revise`.
+* settle a challenge it raised with `resolve_challenge(challenge_id, outcome, note)`: `accepted`
+  (the answer holds) or `rejected` (the claim is disputed). After a first rejection the target may
+  answer once more; a second rejection closes it as rejected.
+
+A claim's status follows from this: `open`, then `supported`, `disputed`, `conceded` or `revised`,
+and after converging `agreed`, `contested` or `rejected`. The latest claims (up to 12), the
+challenges a member must answer and the answers it must settle are in every member's instructions.
+A run allows `debate.max_challenges` challenges (30 by default).
+
+**Rules the runtime enforces.**
+
+* **Proof needs evidence.** A `defend` against a `proof` demand that brings no evidence is recorded
+  as *unsupported*, and the challenge stays open.
+* **Answer before you finish.** A member that hands in its step while challenges against it are
+  open is sent back to its work: "N challenges are open against your work: answer each with
+  `respond_to_challenge`". This happens at most `debate.max_nudges` times per step (2 by default),
+  and not again if it hands in the same answer unchanged. Challenges still open after that are
+  recorded as dissent.
+* **Reviews count.** A `request_review` whose verdict is `revise` opens a `clarification`
+  challenge from the reviewer against the reviewed member, carrying the review.
+* **Overseers reach the member.** An overseer annotation without a correction is delivered to the
+  member at its next turn as a `[Note from …]` line.
+
+**You oversee.** You watch the argument live in the [Debate view](../run-views.md#the-debate-view)
+and step in when you choose: a message to one member or the whole council, a hold, a correction
+([Stepping in](runs.md#stepping-in)). The council never waits for you. Your messages are standing
+guidance that members must take into account, not votes.
+
+### A collective conclusion
+
+After the work, the council concludes in four phases ([How a run works](runs.md#how-a-run-works)).
+Apart from compiling, which is one scribe's task, each phase runs one task per debater, all at the
+same time (within `max_parallel_agents`).
+
+1. **Deliberate.** Up to `debate.rounds` rounds (2 by default), fewer once no challenge is open or
+   waiting to be settled. In each round every debater challenges what is weak in the others' claims
+   and work (or says nothing needs it) and settles answers to its own challenges; then every
+   challenged member answers.
+2. **Converge.** Every debater writes a position: a conclusion, `endorse` or `object` on each claim
+   with a reason, and optionally an alternative conclusion. While claims stay contested, the
+   debaters then read each other's positions side by side and may revise their own, for up to
+   `debate.converge_rounds` more rounds (2 by default). The agreement on each claim is computed in
+   code, not by a model:
+    * `agreed`: at least `debate.consensus` of the debaters (0.67 by default) endorse it, and no
+      challenge on it is open;
+    * `rejected`: it was conceded, or more than half of the debaters object to it;
+    * `contested`: anything else.
+3. **Compile.** A scribe (the writer seat, or the chair when there is no writer) assembles the
+   agreed claims into the deliverable in the authors' own words, presents contested claims with
+   both sides and their evidence, leaves rejected claims out and records dissent by name. The scribe
+   has no authority over the content: it may not add what the council did not agree on, and a new
+   factual statement has to go on record as a claim. A *How the council reached this* section is
+   then added from the record: the authors, the positions, the agreement on each claim and the
+   dissent.
+4. **Co-sign.** Every author, at once, signs the text, amends it (a passage, its replacement and a
+   reason) or blocks it (naming the claim it misrepresents). The authors then weigh the proposed
+   amendments; those endorsed by a `debate.consensus` share go into the next compile, the others
+   are recorded. The text is signed when a majority of the authors sign it (the quorum), nobody
+   blocks it and no amendment is endorsed. Otherwise it goes back to compile, once by default; if
+   the last round still fails, the deliverable is delivered *unsigned*. Its byline lists every author and who signed.
+
+Co-signing replaces the vote. The timeline still shows it as a vote (Sign, Amend, Block). In report
+mode the report pipeline builds the report from what the council agreed, co-signing is the report's
+vote, and the report's author line and its *How the council reached this* appendix name the council
+([Reports](reports.md)).
+
+### The devil's advocate
+
+Right after the plan, one debater is appointed devil's advocate at random. The pick is made in code
+(`secrets.SystemRandom`), never by a model, from the debaters other than the chair. It needs at least
+two debaters; with fewer, or with `debate.devils_advocate: false`, it is skipped and the skip is
+recorded.
+
+**It is a secret only you know.** Nothing tells the council: no announcement, no A2A message, and the
+stance never appears in the roster, agent cards, the board, inboxes, digests, the scribe's input or
+the deliverable. Dissent is attributed by name only. The advocate's orders go into its own
+instructions only: argue the strongest case against the emerging view as its own doubts, challenge
+every major claim demanding proof or a counterexample, propose at least one alternative conclusion,
+endorse only when convinced, still do its own steps, and never reveal or hint at the role. In every
+deliberation round it must raise at least one challenge.
+
+A deterministic guard also redacts giveaways (phrases such as "devil's advocate" or "assigned to
+argue") from everything the advocate sends, writes or thinks into a shared surface: messages, board
+posts, claims, challenges, answers, positions, signatures, tool arguments (memory, files, the
+graph), its *Working now* tail, its answers and what the overseers see of its thoughts.
+
+You see the pick: the run emits `council.role_assigned` with `secret: true`, and run events are
+only shown to the run's owner. The run workspace marks the advocate with a *Devil's advocate*
+badge that says "only you can see this; the council does not know". A resumed run keeps the same
+advocate.
+
+## Helpers
+
+Any member can start helpers: light sub-agents that join the council while they work and run at the
+same time as everyone else. They are the fast path; [sub-councils](sub-councils.md) remain for big,
+self-contained work with their own plan and vote.
+
+| Tool | Who | What it does |
+| --- | --- | --- |
+| `spawn_agents(agents[], wait)` | every seat | Starts up to 8 helpers per call. Each entry is `{role, instructions, name?, model?, tools?}`. With `wait: true` (the default) it returns every result; with `wait: false` it returns task ids at once and the member keeps working |
+| `await_agents(task_ids, timeout_s)` | every seat | Waits (300 seconds by default, up to 3,600) for helpers started with `wait: false` and returns their results |
+| `add_step(title, instructions, assignee?, depends_on[])` | the chair | Adds a step to the plan while the council works; it starts as soon as the steps it depends on are done |
+
+**A helper is a council member while it lives.** It has its own A2A agent card and is in the roster,
+on the council bus and in the run's live members, so you can message, hold and correct it like any
+seat. It sees the board and *Working now*, can message, challenge and be challenged, and can spawn
+helpers of its own, up to `spawn.max_depth` deep. Its work is an A2A task (form `delegate`,
+`metadata.spawned: true`), recorded in the ledger and on the timeline. When it finishes, its result
+goes back to the member that spawned it and is posted to the board as *Helper result*. The run
+records `member.joined` and `member.left`. Helpers are not debaters: they do not take positions or
+co-sign.
+
+**Its model and tools.** A helper uses the `model` you give (`model` or `provider/model`); otherwise
+the model most competent for its role, weighed against cost under the run's model strategy and
+budget ([Automatic councils and models](#automatic-councils-and-models)), among the providers the
+council already uses. It gets the tools it asks for, or its role's defaults, but never a tool the
+member that spawned it may not use.
+
+**Limits.** Helpers share the run's budget and its parallelism (`max_parallel_agents`). A member that
+waits for its helpers gives its slot back meanwhile, so helpers never starve waiting for their
+parent. A run may spawn `spawn.max_agents` helpers in all (8 by default), at most `spawn.max_live`
+at once (6), nested `spawn.max_depth` deep (2); `spawn.enabled: false` turns them off. Stopping the
+run stops its helpers. A plan holds at most 24 steps, those added with `add_step` included.
+
+## The council knowledge graph
+
+Each council keeps a knowledge graph of what its runs found, and it is what members read instead of
+raw text. It is built from the run's events as they happen, with no model calls:
+
+| Node | Made from |
+| --- | --- |
+| `result` | Step, helper and delegated results, and board notes |
+| `evidence` | Citations (each numbered source) |
+| `claim` | Debate claims, with their status and confidence |
+| `question` | Challenges, and board notes whose title is a question |
+| `decision` | Reviews posted to the board |
+| `entity` | Names, products, acronyms and identifiers in claims, note titles and result headings |
+
+Edges are `supports`, `refutes`, `cites`, `derived_from`, `answers`, `mentions` and `about`. The graph
+belongs to the council, like its [memory](knowledge.md): your runs of the same council share it, and
+your runs without a council share one of their own.
+
+**Less to read, more to find.**
+
+* A step no longer gets the raw output of the steps it depends on. It gets a digest of each, up to
+  `graph.digest_chars` (1,500 by default): its summary, the claims made from it, its headings and
+  bullet points, and the node id to read the rest. An output that fits, with no claims, is sent
+  whole.
+* The board in every member's instructions shows each note as a short summary with its node id,
+  plus the open challenges.
+* At the start of a run, *What this council already knows* lists up to `graph.council_recall` nodes
+  (12) from the council's earlier runs that match the topic.
+* Members search and read the graph with `graph_query(query, types?, hops?, limit?)` (ranked
+  summaries with their neighbours), `graph_read(node_id)` (the full text and every edge) and
+  `graph_link(from, to, relation)` (add an edge between two nodes).
+
+Each step records how much context the digest saved as `context.saved`, and the run workspace sums
+it. `graph.enabled: false` goes back to the raw text.
+
+**Prompt caching.** Each member's system prompt is split into a stable prefix (persona, roster brief,
+topic, guardrails, skills, linked knowledge, *What this council already knows*, standing orders) and
+a part that changes from turn to turn (the council section: board, debate, *Working now*, your
+guidance). On Anthropic models the prefix and the tool definitions are marked for prompt caching, so
+re-sent turns read them from the cache. OpenAI and Gemini cache long stable prefixes on their own,
+and the same ordering helps them. `graph.prompt_cache: false` turns the split off.

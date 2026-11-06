@@ -166,11 +166,18 @@ sequenceDiagram
         end
     end
     U-)B: interventions at any time (message, correct, hold, release, halt)
-    C->>W: work so far
-    W->>V: draft deliverable
-    V-->>W: vote: approve or revise (ties approve)
-    opt vote fails
-        W->>W: one revision with the critiques
+    alt debate (the default)
+        M->>M: deliberate, converge (agreement in code)
+        M->>W: agreed claims and positions
+        W->>M: compiled text (the scribe)
+        M-->>W: co-sign: sign, amend or block (quorum)
+    else debate.enabled false, or a sub-council
+        C->>W: work so far
+        W->>V: draft deliverable
+        V-->>W: vote: approve or revise (ties approve)
+        opt vote fails
+            W->>W: one revision with the critiques
+        end
     end
     W-->>U: deliverable and exports
 ```
@@ -241,11 +248,98 @@ The user's messages during a run are A2A messages too (role `user`). They reach 
 members at their next turn and stay in their instructions until the run ends. Members answer with
 `reply_to_user`.
 
+The bus also keeps `CouncilBus.live`: each member's current task and the tail (300 characters) of
+its latest thought, updated from `AgentRunner._think` and emitted as ephemeral `member.live`
+events. `prompt_for` renders it as the *Working now* section. Within one turn, `AgentRunner` runs
+the tool calls concurrently (`asyncio.gather`) when there are at least two and every one is
+parallel-safe (`Tool.parallel_safe`, or any `source = "council"` tool), allowed for the seat and
+not approval-gated; otherwise in order. The results are appended in call order, so the history
+stays deterministic.
+
+### The debate
+
+`runtime/debate.py` (`Debate`) runs the conclusion; the claim ledger lives on the bus
+(`CouncilBus.claims`, `CouncilBus.challenges`), and the tools in `tools/council.py`
+(`make_claim`, `challenge`, `respond_to_challenge`, `resolve_challenge`) are registered only when
+the council debates: `debate.enabled` and depth 0. `Debate.active` also needs two debaters
+(`MemberSpec.debater`: not an overseer, not a helper).
+
+```mermaid
+flowchart LR
+    plan --> seat["seat_devils_advocate<br/>secrets.SystemRandom"] --> execute
+    execute --> deliberate["deliberate<br/>challenge tasks, then answer tasks"]
+    deliberate --> converge["converge<br/>positions, compute_agreement"]
+    converge --> compile["compile<br/>writer or chair"] --> cosign["cosign<br/>sign, amend, block"]
+    cosign -->|revise| compile
+    cosign --> done[deliverable + byline]
+```
+
+* Every move is an A2A message with a `data` part `{"type": "argus.<form>", ...}` (forms `claim`,
+  `challenge`, `response`, `resolution`, `position`, `signature`) and a `debate.*` event. A
+  challenge is also an A2A task: `input-required` on the target until answered, `completed` once
+  settled, `rejected` after a second rejection.
+* Claim and challenge ids are digests of their content, and an answer or resolution already applied
+  is ignored, so replaying a task does not record its moves twice.
+* Each phase's tasks run concurrently (`Debate._each`, bounded by `max_parallel_agents`), and each
+  answers in JSON that is applied through the ledger in code. `compute_agreement` turns the
+  positions into `agreed`, `contested` or `rejected` against `debate.consensus`.
+* The finish gate (`AgentRunner._finish_gate`) sends a step's final answer back while challenges
+  against its member are open, at most `debate.max_nudges` times.
+* `council_bus.conceal` replaces the giveaway phrases of a member with a secret `stance` in
+  everything it sends to a shared surface. The pick itself is a durable `council.role_assigned`
+  event marked `secret` and a `task.completed` record, so a resumed run seats the same advocate.
+* Co-signing emits `vote.opened`, `vote.cast` and `vote.closed` as the vote did, then
+  `debate.consensus` with the signatures, `quorum_met` and the outcome (`signed`, `revise` or
+  `unsigned`).
+
+### Helpers and the plan
+
+`tools/spawn.py` holds `spawn_agents`, `await_agents` and `add_step`, and the `HelperPool` of the
+run. A helper is a `MemberSpec` with `ephemeral=True` and `parent_id`, added to
+`orchestrator.members` (which `LiveRun.members` is, so interventions reach it) and to the bus
+(`CouncilBus.join`, which returns its agent card), and removed when it finishes. Its work is an A2A
+task (form `delegate`, `metadata.spawned: true`) run as an `AgentRunner` task in phase `spawn`.
+
+Steps and helpers share one semaphore of `max_parallel_agents` permits. Each task holds a slot
+(`run_slot`), and a member waiting on its helpers gives its slot back (`yield_slot`), so a parent
+can never starve its own helpers. The execute loop also waits on a `steps_changed` event, so a step
+added with `CouncilOrchestrator.add_step` starts as soon as its dependencies are done; the phase
+ends when no step and no helper is still running. `step.added` events carry the step's
+instructions, which `runtime/resume.py` reads back (`ResumeState.added_steps`).
+
+### The council knowledge graph
+
+`runtime/graph.py` (`CouncilGraph`, one per run in `ctx.extra["graph"]`) listens to the run's
+`EventSink` and folds its events into nodes and edges, with no model calls: `task.completed`
+(result nodes for steps, helpers, delegations, synthesis and compile), `citation.added` (evidence),
+board posts, and `debate.*` (claims, challenges, statuses). It writes them through to two tables,
+added by migration `0021`, scoped like `memory_items` (owner plus council, or owner plus null for
+ad-hoc runs):
+
+| Table | Columns |
+| --- | --- |
+| `graph_nodes` | `owner_id`, `council_id`, `run_id`, `key` (`clm_…`, `chl_…`, `res_…`, `evd_…`, `nte_…`, `ent_…`), `type`, `label`, `summary` (300 characters), `body`, `author`, `status`, `confidence`, BM25 `terms` and `length`, `meta` |
+| `graph_edges` | `owner_id`, `council_id`, `run_id`, `src`, `dst`, `relation`, `author` |
+
+Rows are deleted with their owner or council; deleting a run keeps them with `run_id` set to null.
+At the start of a run the graph loads the scope's newest 2,000 nodes and 8,000 edges from earlier
+runs. It then supplies the context: `upstream_digest` for a step's dependencies (instead of the
+last 24,000 characters of raw output), `board_text` for the board, and `recall_text` for *What this
+council already knows*, which is computed once so the prompt prefix stays stable. `_upstream`
+emits `context.saved` with the raw and sent characters, and new nodes and edges are announced with
+the ephemeral `graph.updated`. The graph tools (`tools/graph.py`) are registered with the graph.
+
+**Prompt caching.** `AgentRunner._system_prompt` returns a `SystemPrompt` (a `str` that knows the
+length of its stable prefix) when `graph.prompt_cache` is on. `CompletionRequest.system_blocks()`
+splits it into a cacheable prefix and a volatile tail; the Anthropic provider sends them as two
+system blocks, the first with `cache_control: {"type": "ephemeral"}`, and puts a breakpoint on the
+last tool definition too. Other providers get the joined string.
+
 ## Events and streaming
 
 Every durable event gets a strictly increasing per-run `seq` and is stored in `run_events`.
-High-frequency events (`thought.delta`, `tool.call.output`, `budget.update`, `subcouncil.event`)
-are ephemeral: fanned out live but not stored, because their content is recoverable from durable
+High-frequency events (`thought.delta`, `tool.call.output`, `budget.update`, `subcouncil.event`,
+`member.live`, `graph.updated`) are ephemeral: fanned out live but not stored, because their content is recoverable from durable
 events. Fan-out goes through Redis pub/sub when Redis is configured, so several API replicas can
 serve the same stream, and through an in-process broker otherwise.
 
@@ -269,10 +363,10 @@ an `EventSource`, so it first exchanges its bearer token for a short-lived ticke
 | --- | --- |
 | `backend/argus/main.py` | App factory, lifespan (cache, broker, runtime, webhooks, retention), middleware |
 | `backend/argus/api/v1/` | REST routers: auth, admin, councils, providers, runs, skills, connections, observability, webhooks, data, knowledge, templates, notifications |
-| `backend/argus/runtime/` | `manager` (run lifecycle), `orchestrator` (plan, execute, synthesise, vote), `agent`, `council_bus` (A2A between members), `resume` (replaying a stopped run), `oversight`, `guardrails`, `events`, `snapshot` |
+| `backend/argus/runtime/` | `manager` (run lifecycle), `orchestrator` (plan, execute, synthesise, vote), `debate` (deliberate, converge, compile, co-sign), `agent`, `council_bus` (A2A between members, the claim ledger), `graph` (the council knowledge graph), `resume` (replaying a stopped run), `oversight`, `guardrails`, `events`, `snapshot` |
 | `backend/argus/agents/roles.py` | The twelve roles, their prompts and default tools, and each mode's roster |
 | `backend/argus/providers/` | Anthropic SDK, OpenAI-compatible and Gemini clients, the mock provider, pricing and health checks |
-| `backend/argus/tools/` | Agent tools: notes and artifacts, web, code and shell, skills, knowledge and memory, council communication, remote agents, sub-councils |
+| `backend/argus/tools/` | Agent tools: notes and artifacts, web, code and shell, skills, knowledge and memory, council communication and debate, helpers (`spawn`), the knowledge graph, remote agents, sub-councils |
 | `backend/argus/protocols/` | MCP server and client, A2A server and client, ACP server and client, JSON-RPC helpers |
 | `backend/argus/skills/` | `SKILL.md` packages, the built-in skills and the marketplace catalogue |
 | `backend/argus/knowledge/` | Text extraction, chunking and BM25 ranking |

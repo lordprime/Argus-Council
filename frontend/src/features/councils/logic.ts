@@ -115,13 +115,16 @@ export const GUARDRAIL_DEFAULTS = {
   budget: { usd: 5, tokens: 2_000_000, buffer_usd: 0, buffer_tokens: 0 },
   max_steps: 80,
   max_runtime_minutes: 60,
-  max_parallel_agents: 4,
+  max_parallel_agents: 8,
   tools: { allow: ["*"], deny: [] as string[] },
   approval_required: ["shell", "package_install", "remote_agent", "network_write"],
   content_policy: { preset: "standard", blocked_topics: [] as string[] },
   oversight: { intercept_mode: "hold", monitor_sensitivity: "medium" },
   auto_mode: false,
   extensions: { auto_approve: false },
+  debate: { enabled: true, devils_advocate: true, rounds: 2, converge_rounds: 2, consensus: 0.67, max_challenges: 30, max_nudges: 2, light_model: "latest_cheapest", light_min_reasoning: 70 },
+  spawn: { enabled: true, max_agents: 8, max_depth: 2, max_live: 6 },
+  graph: { enabled: true, digest_chars: 1500, council_recall: 12, prompt_cache: true },
 };
 
 const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);

@@ -15,6 +15,7 @@ import {
   VoteCard,
 } from "@/components/run/parts";
 import { AutoModeControl } from "@/components/run/AutoModeControl";
+import { DebatePanel } from "@/components/run/debate";
 import { BudgetControl } from "@/components/run/BudgetControl";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
 import { ModeLabel } from "@/components/run/ModeLabel";
@@ -25,13 +26,13 @@ import { Drawer } from "@/components/ui/Drawer";
 import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { clock, duration, usd } from "@/lib/format";
+import { clock, compact, duration, usd } from "@/lib/format";
 import { RESUMABLE } from "@/features/runs/queries";
 import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type { OutputFormat, RunDetail } from "@/lib/types";
-import { awaitsUser, isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
+import { awaitsUser, contextCharsSaved, isTerminal, useRun, useRuns, type RunState, type TimelineItem } from "@/stores/run";
 import { toast } from "@/stores/toast";
 
 type Density = "decisions" | "working" | "everything";
@@ -46,9 +47,10 @@ const RunGantt = lazy(() => import("@/components/viz/gantt/RunGantt"));
 const CommsHeatmap = lazy(() => import("@/components/viz/heatmap/CommsHeatmap"));
 const RunRoute = lazy(() => import("@/components/viz/route/RunRoute"));
 
-type RunView = "timeline" | "map" | "gantt" | "heatmap" | "route";
+type RunView = "timeline" | "debate" | "map" | "gantt" | "heatmap" | "route";
 const VIEWS: { value: RunView; label: string; component?: ComponentType<VizProps> }[] = [
   { value: "timeline", label: "Timeline" },
+  { value: "debate", label: "Debate" },
   { value: "map", label: "Map", component: CouncilMap },
   { value: "gantt", label: "Gantt", component: RunGantt },
   { value: "heatmap", label: "Heatmap", component: CommsHeatmap },
@@ -121,6 +123,8 @@ function useRunStream(runId: string, detail: RunDetail | undefined) {
 function Header({ run, runId }: { run: RunDetail; runId: string }) {
   const status = useRun(runId, (s) => (s.lastSeq ? s.status : run.status));
   const budget = useRun(runId, (s) => s.budget);
+  const ctx = useRun(runId, (s) => s.contextSaved);
+  const saved = contextCharsSaved(ctx);
   const [busy, setBusy] = useState<string | null>(null);
   const act = async (action: "pause" | "resume" | "cancel") => {
     if (action === "cancel" && !window.confirm("Stop this run? Artifacts produced so far are kept.")) return;
@@ -150,7 +154,14 @@ function Header({ run, runId }: { run: RunDetail; runId: string }) {
         </div>
         <h1 className="text-xl mt-1 break-words line-clamp-2 sm:line-clamp-1" title={run.topic}>{run.topic}</h1>
       </div>
-      <BudgetMeter budget={budget} />
+      <div className="flex flex-col gap-0.5">
+        <BudgetMeter budget={budget} />
+        {saved > 0 && (
+          <p className="text-xs text-fg-muted tabular" title="Characters of context the knowledge graph digest kept out of prompts, compared with pasting the raw text">
+            <span className="text-fg-subtle">Context</span> {compact(saved)} chars saved ({Math.round((saved / Math.max(1, ctx.raw)) * 100)}%)
+          </p>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         {live && (status === "paused" ? (
           <Button icon={Play} loading={busy === "resume"} onClick={() => void act("resume")}>Resume</Button>
@@ -212,6 +223,7 @@ function Timeline({ runId, density, focus, onSelect, selected, reveal, onReveale
   const items = useRun(runId, (s) => s.items);
   const members = useRun(runId, (s) => s.members);
   const plan = useRun(runId, (s) => s.plan);
+  const debate = useRun(runId, (s) => s.debate);
   const status = useRun(runId, (s) => s.status);
   const live = !isTerminal(status);
   const ref = useRef<HTMLDivElement>(null);
@@ -272,7 +284,8 @@ function Timeline({ runId, density, focus, onSelect, selected, reveal, onReveale
               : it.kind === "tool" ? <ToolChip t={it} onSelect={() => onSelect(it.id)} />
               : it.kind === "approval" ? <ApprovalCard runId={runId} a={it} />
               : it.kind === "vote" ? <VoteCard v={it} members={members} />
-              : <SimpleRow item={it} onOpenArtifact={() => onSelect(`artifact:${(it.data as { path?: string }).path}`)} />}
+              : <SimpleRow item={it} members={members} debate={debate}
+                  onOpenArtifact={() => onSelect(`artifact:${(it.data as { path?: string }).path}`)} />}
           </article>
         ))}
       </div>
@@ -607,6 +620,8 @@ export default function RunWorkspace() {
                 {view === "timeline" ? (
                   <Timeline runId={viewId} density={density} focus={focus} onSelect={inspect} selected={selected}
                     reveal={reveal} onRevealed={() => setReveal(null)} />
+                ) : view === "debate" ? (
+                  <div className="flex-1 min-h-0 overflow-auto"><DebatePanel runId={runId} state={state} live={live && viewId === runId} /></div>
                 ) : (() => {
                   const View = VIEWS.find((v) => v.value === view)?.component;
                   return View ? (

@@ -19,7 +19,13 @@ correct any agent, or the whole council, at any moment.
     **0.1.3** lets a council's members
     [talk to each other over A2A](concepts/councils.md#how-members-talk-to-each-other): they
     ask, delegate, review, broadcast and share a board, and your messages during a run stay in
-    their instructions. A halted or stopped run
+    their instructions. The council now
+    [debates and co-signs its conclusion](concepts/councils.md#the-debate), with a
+    [secret devil's advocate](concepts/councils.md#the-devils-advocate) only you can see, works
+    truly in parallel (eight agents by default) with [helpers](concepts/councils.md#helpers) it
+    spawns as it goes, and reads a
+    [knowledge graph](concepts/councils.md#the-council-knowledge-graph) of what it already knows
+    instead of raw text. A halted or stopped run
     [resumes where it stopped](concepts/runs.md#resuming-a-stopped-run), reusing finished work,
     and a [budget reserve](concepts/guardrails.md#budget-reserve) keeps it from halting at its
     budget. **Auto mode** lets agents run without stopping to ask. `web_fetch`, `knowledge_read`
@@ -54,13 +60,14 @@ correct any agent, or the whole council, at any moment.
 
     [:octicons-arrow-right-24: Guardrails and approvals](concepts/guardrails.md)
 
--   :material-account-group-outline:{ .lg .middle } **Councils that vote**
+-   :material-account-group-outline:{ .lg .middle } **Councils that debate**
 
     ---
 
-    The chair plans steps with dependencies, members work in parallel, the writer
-    synthesises, and reviewers vote to approve or send the deliverable back for one
-    revision. Members can hand self-contained tasks to smaller sub-councils.
+    The chair plans steps, members work in parallel and spawn helpers, and every claim can
+    be challenged for proof. The members converge on what they agree, a scribe compiles it,
+    and every author co-signs it. Members can hand self-contained tasks to smaller
+    sub-councils.
 
     [:octicons-arrow-right-24: Runs and modes](concepts/runs.md)
 
@@ -78,9 +85,9 @@ correct any agent, or the whole council, at any moment.
 
     ---
 
-    Five live views of the same run: a timeline, an isometric map of agents and
-    peers, a Gantt chart, a who-talks-when heatmap and a route from plan to
-    deliverable.
+    Six live views of the same run: a timeline, the debate, an isometric map of
+    agents and peers, a Gantt chart, a who-talks-when heatmap and a route from plan
+    to deliverable.
 
     [:octicons-arrow-right-24: Run views](run-views.md)
 

@@ -113,6 +113,71 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
           hint="When the run hits its step, turn, runtime or token limit, raise it without asking (a few times at most). The dollar budget is never raised." />
       </Group>
 
+      <Group legend="Debate">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Toggle label="Debate" checked={get<boolean>(["debate", "enabled"])} onChange={(on) => set(["debate", "enabled"], on)}
+            hint="Members make claims, challenge each other and co-sign the conclusion. Off: one synthesis and a majority vote." />
+          <Toggle label="Devil's advocate" checked={get<boolean>(["debate", "devils_advocate"])} onChange={(on) => set(["debate", "devils_advocate"], on)}
+            hint="One debater, picked at random, argues the other side. Only you are told who; the council is not." />
+          <Toggle label="Light moves on the cheapest strong model" checked={get<string>(["debate", "light_model"]) !== "seat"}
+            onChange={(on) => set(["debate", "light_model"], on ? "latest_cheapest" : "seat")}
+            hint="Challenges, positions and signatures run as one call on the newest cheap model of each seat's provider. Answers and the conclusion keep the seat's model." />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <NumberField label="Deliberation rounds" unit="rounds" min={0} max={6} integer
+            value={get<number>(["debate", "rounds"])} onChange={(v) => set(["debate", "rounds"], v)}
+            hint="Challenge-and-answer rounds after the work." onValidityChange={validity("debate.rounds")} />
+          <NumberField label="Converge rounds" unit="rounds" min={0} max={6} integer
+            value={get<number>(["debate", "converge_rounds"])} onChange={(v) => set(["debate", "converge_rounds"], v)}
+            hint="Rounds of revising positions while claims are contested." onValidityChange={validity("debate.converge")} />
+          <NumberField label="Consensus share" min={0.51} max={1} step={0.01}
+            value={get<number>(["debate", "consensus"])} onChange={(v) => set(["debate", "consensus"], v)}
+            hint="Share of debaters that must endorse a claim for it to be agreed: more than half, up to 1." onValidityChange={validity("debate.consensus")} />
+          <NumberField label="Max challenges" unit="per run" min={0} max={500} integer
+            value={get<number>(["debate", "max_challenges"])} onChange={(v) => set(["debate", "max_challenges"], v)}
+            onValidityChange={validity("debate.challenges")} />
+          <NumberField label="Max nudges" unit="times" min={0} max={6} integer
+            value={get<number>(["debate", "max_nudges"])} onChange={(v) => set(["debate", "max_nudges"], v)}
+            hint="Times a member who tries to finish is sent back to answer open challenges." onValidityChange={validity("debate.nudges")} />
+          <NumberField label="Light model floor" unit="reasoning" min={0} max={100}
+            value={get<number>(["debate", "light_min_reasoning"])} onChange={(v) => set(["debate", "light_min_reasoning"], v)}
+            hint="The least reasoning score (0-100) a cheaper model needs to take a seat's light moves." onValidityChange={validity("debate.floor")} />
+        </div>
+      </Group>
+
+      <Group legend="Helpers">
+        <Toggle label="Members can spawn helpers" checked={get<boolean>(["spawn", "enabled"])} onChange={(on) => set(["spawn", "enabled"], on)}
+          hint="Light sub-agents that join the council while it works and share the run's budget." />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <NumberField label="Max helpers" unit="per run" min={0} max={64} integer
+            value={get<number>(["spawn", "max_agents"])} onChange={(v) => set(["spawn", "max_agents"], v)}
+            onValidityChange={validity("spawn.agents")} />
+          <NumberField label="Max depth" unit="levels" min={0} max={4} integer
+            value={get<number>(["spawn", "max_depth"])} onChange={(v) => set(["spawn", "max_depth"], v)}
+            hint="Helpers spawning helpers." onValidityChange={validity("spawn.depth")} />
+          <NumberField label="Max live helpers" unit="at once" min={1} max={64} integer
+            value={get<number>(["spawn", "max_live"])} onChange={(v) => set(["spawn", "max_live"], v)}
+            onValidityChange={validity("spawn.live")} />
+        </div>
+      </Group>
+
+      <Group legend="Context">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Toggle label="Knowledge graph context" checked={get<boolean>(["graph", "enabled"])} onChange={(on) => set(["graph", "enabled"], on)}
+            hint="Send members short digests from the council's knowledge graph instead of raw upstream text." />
+          <Toggle label="Prompt caching" checked={get<boolean>(["graph", "prompt_cache"])} onChange={(on) => set(["graph", "prompt_cache"], on)}
+            hint="Cache the stable part of each prompt where the provider supports it." />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <NumberField label="Digest size" unit="chars" min={200} max={20000} step={100} integer
+            value={get<number>(["graph", "digest_chars"])} onChange={(v) => set(["graph", "digest_chars"], v)}
+            hint="Per dependency." onValidityChange={validity("graph.digest")} />
+          <NumberField label="Council recall" unit="nodes" min={0} max={100} integer
+            value={get<number>(["graph", "council_recall"])} onChange={(v) => set(["graph", "council_recall"], v)}
+            hint="What the council learned in earlier runs, shown at the start." onValidityChange={validity("graph.recall")} />
+        </div>
+      </Group>
+
       <Group legend="Tools">
         <div className="grid gap-4 md:grid-cols-2">
           <TagInput label="Allow" value={get<string[]>(["tools", "allow"])} onChange={(v) => set(["tools", "allow"], v)}

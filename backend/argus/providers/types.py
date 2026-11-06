@@ -23,6 +23,21 @@ class ToolCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class SystemPrompt(str):
+    """A system prompt whose first ``stable_chars`` chars stay the same from turn to turn.
+
+    ``Message.system`` records the split, so a provider that supports prompt caching can mark the
+    stable prefix as cacheable; every other provider sees an ordinary string.
+    """
+
+    stable_chars: int
+
+    def __new__(cls, text: str, stable_chars: int) -> SystemPrompt:
+        obj = super().__new__(cls, text)
+        obj.stable_chars = max(0, min(int(stable_chars), len(text)))
+        return obj
+
+
 class Message(BaseModel):
     role: Role
     content: str = ""
@@ -33,10 +48,13 @@ class Message(BaseModel):
     # Provider-native content blocks for lossless replay to the same provider
     # (e.g. Anthropic thinking blocks must be passed back unchanged).
     raw: dict[str, Any] | None = None
+    # System messages: the length of the stable (cacheable) prefix of ``content`` (see SystemPrompt).
+    cache_prefix: int | None = None
 
     @classmethod
     def system(cls, text: str) -> Message:
-        return cls(role="system", content=text)
+        prefix = getattr(text, "stable_chars", None)
+        return cls(role="system", content=str(text), cache_prefix=prefix or None)
 
     @classmethod
     def user(cls, text: str) -> Message:
@@ -86,6 +104,23 @@ class CompletionRequest(BaseModel):
     @property
     def system_prompt(self) -> str:
         return "\n\n".join(m.content for m in self.messages if m.role == "system" and m.content)
+
+    def system_blocks(self) -> list[tuple[str, bool]]:
+        """The system prompt as ``(text, cacheable)`` parts: a message with a stable prefix is split
+        in two. Joined, the parts are ``system_prompt`` (providers without caching just use that)."""
+        out: list[tuple[str, bool]] = []
+        for m in self.messages:
+            if m.role != "system" or not m.content:
+                continue
+            cut = m.cache_prefix or 0
+            if 0 < cut <= len(m.content):
+                out.append((m.content[:cut], True))
+                tail = m.content[cut:].lstrip("\n")
+                if tail.strip():
+                    out.append((tail, False))
+            else:
+                out.append((m.content, False))
+        return out
 
     @property
     def conversation(self) -> list[Message]:

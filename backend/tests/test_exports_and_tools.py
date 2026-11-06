@@ -455,3 +455,37 @@ async def test_export_requires_deliverable(client, auth, app):
     assert r.status_code == 409
     gate.set()
     await wait_status(client, auth, rid)
+
+
+def test_pdf_survives_a_table_cell_taller_than_a_page():
+    # reportlab raised LayoutError on a row taller than the frame; rows now split across pages.
+    md = "# T\n\n| a | b |\n|---|---|\n| " + "word " * 6000 + " | x |\n"
+    data, _, _ = export(md, "pdf", title="T", metadata={})
+    assert data.startswith(b"%PDF")
+
+
+def test_pdf_keeps_in_page_and_relative_links_as_text():
+    # A report's table of contents links to "#anchors" the plain exporter has no destination for;
+    # reportlab raised "format not resolved" and failed the whole export.
+    md = "# T\n\nSee [the summary](#executive-summary), [a file](docs/x.md) and [a site](https://ex.com).\n"
+    data, _, _ = export(md, "pdf", title="T", metadata={})
+    assert data.startswith(b"%PDF")
+
+
+async def test_export_render_failure_is_a_422_not_a_500(client, auth, monkeypatch):
+    rid = (
+        await client.post("/api/v1/runs", headers=auth, json={"topic": "t", "mode": "chat", "size": 2})
+    ).json()["id"]
+    await wait_status(client, auth, rid)
+
+    import argus.services.exports as exports
+
+    def broken(*_a, **_k):
+        raise RuntimeError("renderer exploded")
+
+    monkeypatch.setattr(exports, "export", broken)
+    monkeypatch.setattr(exports, "render_verified", broken)
+    r = await client.post(f"/api/v1/runs/{rid}/exports", headers=auth, json={"format": "pdf"})
+    assert r.status_code == 422, r.text
+    body = r.json()["error"]
+    assert body["code"] == "export_failed" and "renderer exploded" in body["message"]

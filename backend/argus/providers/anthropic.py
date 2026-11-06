@@ -23,6 +23,7 @@ from argus.providers.types import (
 _FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 DEFAULT_BASE_URL = "https://api.anthropic.com"
+_EPHEMERAL = {"type": "ephemeral"}
 
 _STOP_MAP: dict[str, FinishReason] = {
     "end_turn": "stop",
@@ -109,13 +110,26 @@ class AnthropicProvider(Provider):
             "max_tokens": req.max_tokens,
             "messages": _to_anthropic_messages(req.messages),
         }
-        if req.system_prompt:
+        blocks = req.system_blocks()
+        cached = any(cacheable for _, cacheable in blocks)
+        if cached:
+            # Prompt caching: the stable prefix (persona, brief, guardrails, skills, standing orders)
+            # carries a cache breakpoint; the volatile tail (board, guidance) comes after it.
+            params["system"] = [
+                {"type": "text", "text": text, **({"cache_control": _EPHEMERAL} if cacheable else {})}
+                for text, cacheable in blocks
+            ]
+        elif req.system_prompt:
             params["system"] = req.system_prompt
         if req.tools:
             params["tools"] = [
                 {"name": t.name, "description": t.description, "input_schema": t.input_schema}
                 for t in req.tools
             ]
+            if cached:
+                # Tools come first in the cached prefix: a breakpoint on the last one keeps them
+                # cached even when the system prefix changes (a new standing order).
+                params["tools"][-1]["cache_control"] = _EPHEMERAL
         if req.stop:
             params["stop_sequences"] = req.stop
         if req.effort:

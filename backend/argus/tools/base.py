@@ -79,6 +79,21 @@ class Tool(abc.ABC):
     Args: type[BaseModel]
     risk: frozenset[str] = frozenset()
     source: str = "builtin"  # builtin | mcp | skill | a2a | acp
+    # Read-only: may run at the same time as the other parallel-safe calls of one turn (see
+    # ``runs_in_parallel``). Every council (A2A) tool is parallel-safe whatever this says.
+    parallel_safe: bool = False
+
+    # Reads and changes nothing the council shares (a debate's answer may use only these). Unset,
+    # the built-in read tools (parallel-safe, not council tools) count; council tools opt in.
+    read_only: bool | None = None
+
+    def runs_in_parallel(self) -> bool:
+        return self.parallel_safe or self.source == "council"
+
+    def is_read_only(self) -> bool:
+        if self.read_only is not None:
+            return self.read_only
+        return self.parallel_safe and self.source != "council"
 
     def spec(self) -> ToolSpec:
         schema = self.Args.model_json_schema()
