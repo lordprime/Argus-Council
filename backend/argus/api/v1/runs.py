@@ -20,9 +20,11 @@ from argus.api.idempotency import idempotent
 from argus.api.schemas import (
     ApprovalDecisionIn,
     AutoModeIn,
+    BudgetIn,
     ExportIn,
     InterventionIn,
     PlanIn,
+    ResumeIn,
     RunDetail,
     RunIn,
     RunOut,
@@ -36,7 +38,7 @@ from argus.runtime.manager import RunManager
 from argus.runtime.snapshot import SnapshotReducer
 from argus.services import autocouncil
 from argus.services.llm import Route
-from argus.services.runs import MAX_LINKED_KBS, create_and_start_run, owned_kb_ids
+from argus.services.runs import MAX_LINKED_KBS, create_and_start_run, owned_kb_ids, resume_run
 
 # stream-ticket only grants read access to a run's own event stream.
 router = APIRouter(
@@ -282,6 +284,28 @@ async def unlink_knowledge(
     return {"linked": linked}
 
 
+@router.post("/{run_id}/continue", response_model=RunOut, status_code=status.HTTP_201_CREATED)
+async def continue_run(
+    run_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    db: DbDep,
+    request: Request,
+    cache: CacheDep,
+    data: ResumeIn | None = None,
+):
+    """Resume a halted, failed or cancelled run where it stopped, as a new run.
+
+    The new run replays every task the old one finished (no model calls) and does only the rest.
+    """
+    principal.require_scope("runs:write")
+
+    async def run() -> RunOut:
+        new = await resume_run(db, _manager(request), principal.id, run_id, (data or ResumeIn()).guardrails)
+        return RunOut.model_validate(new)
+
+    return await idempotent(request, cache, str(principal.id), 201, run)
+
+
 @router.post("/{run_id}/pause", status_code=status.HTTP_202_ACCEPTED)
 async def pause(run_id: uuid.UUID, principal: CurrentPrincipal, db: DbDep, request: Request) -> dict:
     await _own_run(db, principal.id, run_id)
@@ -338,6 +362,16 @@ async def auto_mode(
 ) -> dict:
     await _own_run(db, principal.id, run_id)
     return await _manager(request).set_auto_mode(run_id, tools=data.tools, extensions=data.extensions)
+
+
+@router.post("/{run_id}/budget", status_code=status.HTTP_202_ACCEPTED)
+async def adjust_budget(
+    run_id: uuid.UUID, data: BudgetIn, principal: CurrentPrincipal, db: DbDep, request: Request
+) -> dict:
+    """Raise a live run's budget now and/or set the reserve it draws on instead of halting."""
+    principal.require_scope("runs:write")
+    await _own_run(db, principal.id, run_id)
+    return await _manager(request).adjust_budget(run_id, **data.model_dump(exclude_none=True))
 
 
 @router.get("/{run_id}/events")

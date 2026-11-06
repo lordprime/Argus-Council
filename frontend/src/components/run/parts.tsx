@@ -18,6 +18,7 @@ import {
   Play,
   Plug,
   Plus,
+  RotateCcw,
   Send,
   ShieldAlert,
   ShieldX,
@@ -33,6 +34,8 @@ import { Link } from "react-router";
 import { Badge, Button, IconButton, touchTarget } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
+import { ResumeRunButton } from "@/components/run/ResumeRunButton";
+import { RESUMABLE } from "@/features/runs/queries";
 import { api, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, compact, usd } from "@/lib/format";
@@ -518,7 +521,31 @@ export function SimpleRow({ item, onOpenArtifact }: { item: SimpleItem; onOpenAr
         return <Row icon={Zap}>{item.actor.name ?? "You"} set auto mode: approvals {d.tools ? "on" : "off"}, limit raises {d.extensions ? "on" : "off"}</Row>;
       }
       if (item.type === "guardrail.extended") {
-        return <Row icon={Check}>{d.auto ? "Auto-raised" : "Raised"} the <span className="font-mono">{d.rule}</span> limit from {compact(d.from)} to {compact(d.to)} ({d.extensions} of {d.max_extensions})</Row>;
+        const money = d.rule === "budget.usd";
+        const fmt = (n: number) => (money ? usd(n) : compact(n));
+        if (d.buffer) {
+          return <Row icon={Check}>Reached its {money ? "budget" : "token cap"} and drew the reserve: {fmt(d.from)} → {fmt(d.to)}</Row>;
+        }
+        return <Row icon={Check}>{d.auto ? "Auto-raised" : "Raised"} the <span className="font-mono">{d.rule}</span> limit from {fmt(d.from)} to {fmt(d.to)} ({d.extensions} of {d.max_extensions})</Row>;
+      }
+      if (item.type === "budget.adjusted") {
+        const parts = [
+          d["budget.usd"] && `budget ${usd(d["budget.usd"].from)} → ${usd(d["budget.usd"].to)}`,
+          d["budget.tokens"] && `token cap ${compact(d["budget.tokens"].from)} → ${compact(d["budget.tokens"].to)}`,
+          d.buffer_usd != null && `reserve ${usd(d.buffer_usd)}`,
+          d.buffer_tokens != null && `token reserve ${compact(d.buffer_tokens)}`,
+        ].filter(Boolean);
+        return <Row icon={Check}>{item.actor.name ?? "You"} changed the {parts.join(", ")}</Row>;
+      }
+      if (item.type === "run.resumed") {
+        const carried = [d.sources && `${d.sources} sources`, d.notes && `${d.notes} notes`, d.files && `${d.files} files`].filter(Boolean).join(", ");
+        return (
+          <Row icon={RotateCcw}>
+            Resumed from <Link to={`/runs/${d.from_run_id}`} className="text-accent underline">the earlier run</Link>:{" "}
+            {d.tasks} finished task{d.tasks === 1 ? "" : "s"} reused{carried ? `, ${carried} carried over` : ""}.
+            {d.legacy && <span className="text-fg-subtle"> That run is older than task records, so its plan and finished steps are reused and the report is built again.</span>}
+          </Row>
+        );
       }
       if (item.type === "skill.loaded") return <Row icon={Sparkles}>Loaded skill <span className="font-mono">{d.name}</span></Row>;
       if (item.type === "knowledge.linked") {
@@ -564,6 +591,12 @@ export function InterventionBar({ runId, members, disabled, status, followUp }: 
         <span className="inline-flex items-center gap-1.5 text-fg-muted">
           <CircleStop className="size-4 shrink-0" aria-hidden />{FINISHED[status ?? ""] ?? "Run finished"}
         </span>
+        {status && RESUMABLE.has(status) && (
+          <>
+            <span aria-hidden className="text-fg-subtle">·</span>
+            <ResumeRunButton runId={runId} variant="ghost" size="sm" />
+          </>
+        )}
         <span aria-hidden className="text-fg-subtle">·</span>
         <Link to="/" state={followUp ? { prefill: followUp } : undefined}
           className={cn("inline-flex items-center gap-1 min-h-6 font-medium text-accent underline underline-offset-2", touchTarget)}>

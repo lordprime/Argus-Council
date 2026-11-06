@@ -146,14 +146,17 @@ class ReportPipeline:
         engine, rails = self.ctx.engine, self.ctx.engine.rails
         tin, tout = STAGE_TOKENS.get(stage, (10_000, 2_000))
         used = engine.total_usage
+        # An unused budget reserve is money the run may spend, so it counts here.
         if rails.budget.usd is not None and member is not None:
             price = price_for(member.model, auth="account" if member.provider.endswith("-cli") else "api_key")
             # Agents may take a few turns (tools): count each call twice, and keep 10% headroom.
-            if used.cost_usd + 2 * calls * price.call_usd(tin, tout) > rails.budget.usd * 0.9:
+            usd = rails.budget.usd + engine.buffer("budget.usd")
+            if used.cost_usd + 2 * calls * price.call_usd(tin, tout) > usd * 0.9:
                 return False
         if (
             rails.budget.tokens is not None
-            and used.total_tokens + 2 * calls * (tin + tout) > rails.budget.tokens * 0.9
+            and used.total_tokens + 2 * calls * (tin + tout)
+            > (rails.budget.tokens + engine.buffer("budget.tokens")) * 0.9
         ):
             return False
         # Leave room for the vote and a revision after the report.

@@ -75,6 +75,8 @@ export interface Run {
   usage: { usd?: number; tokens_in?: number; tokens_out?: number; steps?: number; llm_calls?: number; runtime_s?: number };
   error: string | null;
   last_seq: number;
+  /** The halted, failed or cancelled run this one resumes. */
+  resumed_from_id?: string | null;
   /** Approval requests on a live run waiting for the user (runs list only). */
   pending_approvals?: number;
   created_at: string;
@@ -92,7 +94,7 @@ export interface RunDetail extends Run {
 }
 
 export interface Guardrails {
-  budget: { usd: number | null; tokens: number | null };
+  budget: { usd: number | null; tokens: number | null; buffer_usd?: number; buffer_tokens?: number };
   max_steps: number;
   max_runtime_minutes: number;
   max_parallel_agents: number;

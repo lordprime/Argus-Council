@@ -23,7 +23,30 @@ The [lifecycle](../architecture.md#run-lifecycle) is `queued`, `running` (with `
 between), and then one of `completed`, `failed`, `cancelled` or `halted`. Control a run with
 `POST /runs/{id}/pause`, `/resume` and `/cancel`; delete a finished run with
 `DELETE /runs/{id}`. `GET /runs` lists top-level runs, newest first (sub-council runs are reached
-through their parent).
+through their parent). For a live run it includes `pending_approvals`, the approval requests
+waiting for you.
+
+## Resuming a stopped run
+
+A run that is `halted`, `failed` or `cancelled` can be resumed where it stopped: **Resume where it
+stopped** in the run workspace, or `POST /runs/{id}/continue`. That starts a new run with the same
+topic, council, outputs and linked knowledge, and `resumed_from_id` pointing back. Its guardrails
+are the old run's, with any `{"guardrails": {...}}` you send merged over them, for example a bigger
+budget.
+
+The new run goes through the same sequence: plan, steps, report stages, votes. Every agent task the
+old run finished is **replayed**: its recorded answer comes back at once, with no model call and no
+step counted. Only work that never finished calls a model. A run halted while writing its report
+therefore goes straight back to the report, with its research intact. Citations keep their
+numbers. Notes and workspace files carry over, but exports are made again. The timeline opens with
+a *Resumed from the earlier run* row saying how much was reused.
+
+Each finished task is recorded as a `task.completed` event, which is what a resume replays. Runs
+from before resuming existed have no such records. For those, the plan and every finished step are recovered
+from the run's other events, and the report is built again.
+
+*Start a follow-up run* is different: it only copies the topic into Home, for a fresh run on the
+same subject.
 
 ## Modes and tools
 

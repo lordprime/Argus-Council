@@ -389,11 +389,24 @@ class RunContext:
         re-check (``still_exceeded``) before asking again. A rejection, an expired request or the
         last allowed extension stops further asks for that limit; the run then halts as before.
         """
-        if not self.engine.can_extend(rule) or self.depth > 0:
+        if self.depth > 0:
             return False
         async with self._extend_lock:
             if not still_exceeded():
                 return True  # raised while this agent waited for the lock
+            # A budget reserve is drawn first, without asking (Budget.buffer_usd / buffer_tokens).
+            drawn = self.engine.draw_buffer(rule)
+            if drawn is not None:
+                await self.sink.emit(
+                    "guardrail.extended",
+                    {"rule": rule, "from": drawn[0], "to": drawn[1], "buffer": True},
+                    actor=Actor.system(),
+                )
+                await self.budget_update()
+                if not still_exceeded():
+                    return True
+            if not self.engine.can_extend(rule):
+                return False
             policy = self.engine.rails.extensions
             if rule in self.extension_declined or self.extensions[rule] >= policy.max_extensions:
                 return False
@@ -507,6 +520,33 @@ class RunContext:
         by = Actor.system() if decision.get("by") == "auto" else Actor.user()
         await self.sink.emit("approval.resolved", {"approval_id": aid, **decision}, actor=by)
         return decision
+
+    async def adjust_budget(
+        self,
+        *,
+        add_usd: float | None = None,
+        add_tokens: int | None = None,
+        buffer_usd: float | None = None,
+        buffer_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """The user raises the budget now (``add_*``) or sets its reserve (``buffer_*``) on a live run."""
+        rails = self.engine.rails
+        changes: dict[str, Any] = {}
+        for rule, add in (("budget.usd", add_usd), ("budget.tokens", add_tokens)):
+            current = self.engine.limit(rule)
+            if add and current is not None:
+                self.engine.set_limit(rule, float(current) + add)
+                changes[rule] = {"from": current, "to": self.engine.limit(rule)}
+        if buffer_usd is not None:
+            rails.budget.buffer_usd = round(float(buffer_usd), 4)
+            changes["buffer_usd"] = rails.budget.buffer_usd
+        if buffer_tokens is not None:
+            rails.budget.buffer_tokens = int(buffer_tokens)
+            changes["buffer_tokens"] = rails.budget.buffer_tokens
+        if changes:
+            await self.sink.emit("budget.adjusted", changes, actor=Actor.user())
+            await self.budget_update()
+        return self.engine.budget_snapshot()
 
     def auto_approves(self, risk: list[str]) -> bool:
         """Whether auto mode answers a request with these risk tags right now."""

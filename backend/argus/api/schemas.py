@@ -345,9 +345,25 @@ class RunOut(ORM):
     archived_at: datetime | None = None
     trashed_at: datetime | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
+    resumed_from_id: uuid.UUID | None = None
     # Approval requests waiting for the user on a live run (in this API process), so lists can
     # say which runs need an answer. Not a column: filled in by the runs list.
     pending_approvals: int = 0
+
+
+class BudgetIn(BaseModel):
+    """Change a live run's budget: raise it now (``add_*``) and/or set its reserve (``buffer_*``)."""
+
+    add_usd: float | None = Field(default=None, gt=0, le=10_000)
+    add_tokens: int | None = Field(default=None, gt=0, le=1_000_000_000)
+    buffer_usd: float | None = Field(default=None, ge=0, le=10_000)
+    buffer_tokens: int | None = Field(default=None, ge=0, le=1_000_000_000)
+
+
+class ResumeIn(BaseModel):
+    """Options for resuming a run; ``guardrails`` are merged over the old run's (e.g. a higher limit)."""
+
+    guardrails: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunDetail(RunOut):

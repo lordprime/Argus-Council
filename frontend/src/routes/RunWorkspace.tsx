@@ -15,6 +15,8 @@ import {
   VoteCard,
 } from "@/components/run/parts";
 import { AutoModeControl } from "@/components/run/AutoModeControl";
+import { BudgetControl } from "@/components/run/BudgetControl";
+import { ResumeRunButton } from "@/components/run/ResumeRunButton";
 import { ModeLabel } from "@/components/run/ModeLabel";
 import { RunKnowledgeButton } from "@/components/knowledge/RunKnowledge";
 import { ReplayBar, useReplayView } from "@/components/run/ReplayBar";
@@ -24,6 +26,7 @@ import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, duration, usd } from "@/lib/format";
+import { RESUMABLE } from "@/features/runs/queries";
 import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
@@ -82,9 +85,12 @@ class VizBoundary extends Component<{ children: ReactNode }, { error: unknown }>
   }
 }
 
+/** System rows that change what the run can do or where it started, shown at every density. */
+const NOTABLE = new Set(["run.resumed", "guardrail.extended", "budget.adjusted"]);
+
 function visible(item: TimelineItem, density: Density): boolean {
   if (density === "everything") return true;
-  if (item.kind === "system") return item.type === "run.status" && density === "working";
+  if (item.kind === "system") return NOTABLE.has(item.type) || (item.type === "run.status" && density === "working");
   if (density === "decisions") return !["tool", "citation"].includes(item.kind);
   return true;
 }
@@ -153,6 +159,8 @@ function Header({ run, runId }: { run: RunDetail; runId: string }) {
         ))}
         {live && <Button variant="danger-ghost" icon={Square} loading={busy === "cancel"} onClick={() => void act("cancel")}>Stop</Button>}
         {live && <AutoModeControl runId={runId} guardrails={run.guardrails} />}
+        {live && <BudgetControl runId={runId} />}
+        {RESUMABLE.has(status) && <ResumeRunButton runId={runId} />}
         <RunKnowledgeButton runId={runId} topic={run.topic} live={live} />
         {/* Page-level switch, named apart from the Timeline/Map/… tabs inside the workspace (audit C-16). */}
         <nav aria-label="Run pages" className="inline-flex gap-1 rounded-lg bg-surface-2 p-1">

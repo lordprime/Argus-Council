@@ -93,6 +93,9 @@ export function GuardrailsEditor({ value, onChange, onValidChange }: {
           <NumberField label="Budget" prefix="$" unit="USD" min={0} step={0.5} nullable placeholder="No limit"
             value={get<number | null>(["budget", "usd"])} onChange={(v) => set(["budget", "usd"], v)}
             hint="Empty means no dollar cap." onValidityChange={validity("usd")} />
+          <NumberField label="Budget buffer" prefix="$" unit="USD" min={0} step={0.5}
+            value={get<number>(["budget", "buffer_usd"])} onChange={(v) => set(["budget", "buffer_usd"], v ?? 0)}
+            hint="Extra spend the run draws on, without asking, instead of halting at its budget." onValidityChange={validity("buffer")} />
           <NumberField label="Token cap" unit="tokens" min={0} step={100000} integer nullable placeholder="No limit"
             value={get<number | null>(["budget", "tokens"])} onChange={(v) => set(["budget", "tokens"], v)}
             hint="Input plus output tokens." onValidityChange={validity("tokens")} />

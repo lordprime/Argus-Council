@@ -118,6 +118,8 @@ export interface PlanStep {
 export interface Budget {
   used: { usd: number; tokens_in: number; tokens_out: number; steps: number; runtime_s: number };
   limits: { usd: number | null; tokens: number | null; steps: number; runtime_s: number };
+  /** The reserve still available, drawn instead of halting at the budget. */
+  buffer?: { usd: number; tokens: number };
   by_member?: Record<string, { usd: number; tokens: number }>;
 }
 
@@ -432,6 +434,8 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     case "error":
       push(s, { kind: "error", id: ev.id, ...base, type: ev.type, data: d });
       break;
+    case "task.completed":
+      break; // bookkeeping for resuming a run, not something to show
     default:
       if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
   }

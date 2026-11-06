@@ -186,6 +186,10 @@ class Run(IdMixin, TimestampMixin, Base):
     # Knowledge bases the user linked to this run (before it started or while it runs); agents are
     # told about them and knowledge_search may always read them. Ids as strings.
     knowledge_base_ids: Mapped[list[Any]] = mapped_column(default=list)
+    # A resumed run: the halted, failed or cancelled run it continues (argus.runtime.resume).
+    resumed_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class RunEvent(Base):

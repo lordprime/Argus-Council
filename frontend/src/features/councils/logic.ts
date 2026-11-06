@@ -112,7 +112,7 @@ export type Dict = Record<string, unknown>;
 
 /** Backend defaults (runtime/guardrails.py `Guardrails`). The editor shows these when no override is set. */
 export const GUARDRAIL_DEFAULTS = {
-  budget: { usd: 5, tokens: 2_000_000 },
+  budget: { usd: 5, tokens: 2_000_000, buffer_usd: 0, buffer_tokens: 0 },
   max_steps: 80,
   max_runtime_minutes: 60,
   max_parallel_agents: 4,

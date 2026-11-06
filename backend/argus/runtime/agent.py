@@ -38,6 +38,7 @@ from argus.runtime.history import (
     render_for_summary,
 )
 from argus.runtime.oversight import Thought, ThoughtBus
+from argus.runtime.resume import TASK_EVENT, task_key
 from argus.services.llm import Route
 from argus.tools.base import Tool, ToolCallContext, ToolRegistry, ToolResult
 
@@ -114,6 +115,8 @@ class AgentOutcome:
     iterations: int = 0
     tool_calls: int = 0
     reason: str = "done"
+    # The thought.completed event whose text is ``text`` (what a resumed run replays).
+    thought_event_id: str | None = None
 
 
 # Tools with these risks change something: a call that timed out may have done its work, so it is
@@ -719,6 +722,42 @@ class AgentRunner:
         context: str = "",
         phase: str = "execute",
     ) -> AgentOutcome:
+        """Do one task, or, in a resumed run, replay the answer the old run already gave it.
+
+        Every finished task is recorded as ``task.completed`` (see ``argus.runtime.resume``).
+        """
+        key = task_key(phase, step_id, step_title, self.member.id)
+        record = {"key": key, "phase": phase, "step_title": step_title[:200], "member_id": self.member.id}
+        resume = self.ctx.extra.get("resume")
+        answer = resume.take(key) if resume is not None else None
+        if answer is not None:
+            # The answer travels inline, so a resumed run can itself be resumed.
+            await self.ctx.sink.emit(
+                TASK_EVENT,
+                {**record, "ok": True, "reason": "replayed", "replayed": True, "text": answer},
+                actor=self.member.actor,
+                step_id=step_id,
+            )
+            return AgentOutcome(answer, ok=True, reason="replayed")
+        outcome = await self._run_task(
+            task, step_id=step_id, step_title=step_title, context=context, phase=phase
+        )
+        await self.ctx.sink.emit(
+            TASK_EVENT,
+            {
+                **record,
+                "ok": outcome.ok,
+                "reason": outcome.reason,
+                "thought_event_id": outcome.thought_event_id,
+            },
+            actor=self.member.actor,
+            step_id=step_id,
+        )
+        return outcome
+
+    async def _run_task(
+        self, task: str, *, step_id: str | None, step_title: str, context: str, phase: str
+    ) -> AgentOutcome:
         rails = self.ctx.engine.rails
         task_message = (f"Context from the council so far:\n{context}\n\n" if context else "") + (
             f"Your task:\n{task}"
@@ -726,6 +765,7 @@ class AgentRunner:
         messages: list[Message] = [Message.system(self._system_prompt()), Message.user(task_message)]
         self._summary = ""
         last_text = ""
+        last_event: str | None = None
         tool_calls = 0
         corrections_this_thought = 0
         iteration = 0
@@ -749,7 +789,8 @@ class AgentRunner:
                 )
             await self._fit_context(messages, task_message, step_id)  # see runtime/history.py
             thought_id, event_id, resp = await self._think(messages, step_id, phase)
-            last_text = resp.content or last_text
+            if resp.content:
+                last_text, last_event = resp.content, event_id
             thought = Thought(
                 thought_id,
                 self.member.actor,
@@ -777,7 +818,12 @@ class AgentRunner:
                 if verdict.action == "block":
                     # Out of correction attempts and still unsafe/wrong: fail the task rather than act.
                     return AgentOutcome(
-                        last_text, ok=False, iterations=iteration, tool_calls=tool_calls, reason="blocked"
+                        last_text,
+                        ok=False,
+                        iterations=iteration,
+                        tool_calls=tool_calls,
+                        reason="blocked",
+                        thought_event_id=last_event,
                     )
                 # A hold that keeps recurring is downgraded to an annotation so the run can progress.
             elif verdict.action == "annotate" and verdict.correction:
@@ -793,13 +839,24 @@ class AgentRunner:
             messages.append(resp.as_message())
             if resp.finish_reason == "refusal":
                 return AgentOutcome(
-                    last_text, ok=False, iterations=iteration, tool_calls=tool_calls, reason="refusal"
+                    last_text,
+                    ok=False,
+                    iterations=iteration,
+                    tool_calls=tool_calls,
+                    reason="refusal",
+                    thought_event_id=last_event,
                 )
             if not resp.tool_calls:
                 await self.ctx.sink.emit(
                     "member.status", {"member_id": self.member.id, "status": "idle"}, actor=self.member.actor
                 )
-                return AgentOutcome(resp.content, ok=True, iterations=iteration, tool_calls=tool_calls)
+                return AgentOutcome(
+                    resp.content,
+                    ok=True,
+                    iterations=iteration,
+                    tool_calls=tool_calls,
+                    thought_event_id=event_id,
+                )
             for call in resp.tool_calls:
                 await self.ctx.checkpoint(self.member.id)
                 result = await self._run_tool(call, step_id, event_id)
@@ -821,4 +878,5 @@ class AgentRunner:
             iterations=iteration - 1,
             tool_calls=tool_calls,
             reason="iteration_limit",
+            thought_event_id=last_event,
         )

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, V1 } from "@/lib/api";
-import type { AutoMode, RunStatus } from "@/lib/types";
+import type { AutoMode, Run, RunStatus } from "@/lib/types";
 
 /** Mirrors backend TERMINAL_STATUSES: only these runs can be trashed or deleted. */
 export const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "failed", "cancelled", "halted"]);
@@ -56,5 +56,20 @@ export function useEmptyTrash() {
 export function useSetAutoMode(runId: string) {
   return useMutation({
     mutationFn: (flags: Partial<AutoMode>) => api.post<AutoMode>(`${V1}/runs/${runId}/auto-mode`, flags),
+  });
+}
+
+/** Runs that can be resumed where they stopped (POST /runs/{id}/continue). */
+export const RESUMABLE: ReadonlySet<string> = new Set(["halted", "failed", "cancelled"]);
+
+/**
+ * Resume a halted, failed or cancelled run as a new run that replays the work already finished and
+ * does only the rest. `guardrails` are merged over the old run's (for example a bigger budget).
+ */
+export function useResumeRun(runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (guardrails: Record<string, unknown> = {}) => api.post<Run>(`${V1}/runs/${runId}/continue`, { guardrails }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["runs"] }),
   });
 }

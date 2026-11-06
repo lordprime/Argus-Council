@@ -33,6 +33,7 @@ rejected with `422` instead of failing when the run starts. The only mode defaul
 | `skills.allow`, `skills.deny` | `["*"]`, `[]` | Which skills the council may load |
 | `network.allow_domains` | `["*"]` | Domains `web_fetch` may reach |
 | `network.block_private_ips` | `true` | Refuse private, loopback, link-local and metadata addresses |
+| `budget.buffer_usd`, `budget.buffer_tokens` | `0`, `0` | A reserve drawn without asking when the run reaches its budget, instead of halting ([below](#budget-reserve)) |
 | `approval_required` | `shell`, `package_install`, `remote_agent`, `network_write` | Risk tags that need a human decision |
 | `auto_mode` | `false` | Approve every request without asking, except limit raises ([Auto mode](#auto-mode)) |
 | `content_policy.preset` | `standard` | `off`, `standard` or `strict` (strict also flags prompt-injection phrases) |
@@ -128,6 +129,27 @@ curl -X POST localhost:8000/api/v1/runs/$RUN/auto-mode -H "Authorization: Bearer
 Turning a switch on also approves the requests already waiting that it now covers. The change is
 recorded as a `run.auto_mode` event and passed on to running sub-councils. Sub-councils inherit
 `auto_mode` from their parent.
+
+### Budget reserve
+
+`budget.buffer_usd` (and `budget.buffer_tokens`) is spending you approve in advance. When the run
+reaches its dollar budget (or token cap), it adds the whole reserve to the limit and carries on,
+without asking and without halting. A `guardrail.extended` event marked `buffer: true` records
+this. The reserve works even with `extensions` off. It is drawn once, and the run halts if it runs
+out again. The report pipeline counts an unused reserve as money it may spend, so it does not drop
+report stages to stay under the base budget.
+
+On a live run, the **Budget** control in the run workspace, or `POST /runs/{id}/budget`, raises
+the budget at once (`add_usd`, `add_tokens`) or sets or refills the reserve (`buffer_usd`,
+`buffer_tokens`):
+
+```bash
+curl -X POST localhost:8000/api/v1/runs/$RUN/budget -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"add_usd": 2.5, "buffer_usd": 5}'
+```
+
+The change is recorded as a `budget.adjusted` event. A run that already halted can be
+[resumed](runs.md#resuming-a-stopped-run) with a bigger budget instead.
 
 ## Limits and halting
 

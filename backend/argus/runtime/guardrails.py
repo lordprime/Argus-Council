@@ -29,6 +29,10 @@ class _Strict(BaseModel):
 class Budget(_Strict):
     usd: float | None = Field(default=5.0, ge=0)
     tokens: int | None = Field(default=2_000_000, ge=0)
+    # A reserve the run draws on, without asking, when it reaches ``usd`` or ``tokens``, instead of
+    # halting. Drawn whole, once; it can be refilled while the run is live.
+    buffer_usd: float = Field(default=0, ge=0, le=10_000)
+    buffer_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
 
 
 class ToolPolicy(_Strict):
@@ -341,6 +345,22 @@ class GuardrailEngine:
         else:
             setattr(self.rails, rule, int(value))
 
+    _BUFFERS = {"budget.usd": "buffer_usd", "budget.tokens": "buffer_tokens"}
+
+    def buffer(self, rule: str) -> float:
+        """The reserve still available for a budget rule (0 for any other rule)."""
+        field = self._BUFFERS.get(rule)
+        return float(getattr(self.rails.budget, field)) if field else 0.0
+
+    def draw_buffer(self, rule: str) -> tuple[float, float] | None:
+        """Add the whole reserve to ``rule``'s limit; returns (before, after), or None when empty."""
+        reserve, current = self.buffer(rule), self.limit(rule)
+        if reserve <= 0 or current is None:
+            return None
+        self.set_limit(rule, float(current) + reserve)
+        setattr(self.rails.budget, self._BUFFERS[rule], 0)
+        return float(current), float(self.limit(rule) or 0)
+
     def can_extend(self, rule: str) -> bool:
         """Whether the user may be asked to raise ``rule`` (never in a sub-council)."""
         policy = self.rails.extensions
@@ -439,6 +459,7 @@ class GuardrailEngine:
                 "steps": self.rails.max_steps,
                 "runtime_s": self.rails.max_runtime_minutes * 60,
             },
+            "buffer": {"usd": self.rails.budget.buffer_usd, "tokens": self.rails.budget.buffer_tokens},
         }
 
     # -------------------------------------------------- tools

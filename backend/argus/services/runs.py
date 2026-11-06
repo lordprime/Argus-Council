@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.agents.roles import ROLES, roster_for
 from argus.api.schemas import RunIn
-from argus.core.errors import ArgusError, NotFound
+from argus.core.errors import ArgusError, Conflict, NotFound
 from argus.core.logging import get_logger
 from argus.core.metrics import PROTOCOL_BLOCKING_WAITS, PROTOCOL_WAITS_SHED
 from argus.db.models import KnowledgeBase, Run
@@ -207,6 +207,49 @@ async def create_and_start_run(
     await db.refresh(run)
     # refresh() opened a transaction; end it so the pooled connection goes back to the pool. Callers
     # (blocking MCP/A2A/ACP calls) may now wait minutes for the run without pinning a connection.
+    await db.commit()
+    return run
+
+
+async def resume_run(
+    db: AsyncSession, manager: RunManager, owner_id: uuid.UUID, run_id: uuid.UUID, guardrails: dict[str, Any]
+) -> Run:
+    """Start a new run that continues a halted, failed or cancelled one (``argus.runtime.resume``).
+
+    Same topic, council, outputs and knowledge; the old guardrails with ``guardrails`` merged over
+    them. Limits and budget start fresh: the work it replays costs nothing again.
+    """
+    from argus.runtime.resume import RESUMABLE_STATUSES
+
+    old = await db.get(Run, run_id)
+    if old is None or old.owner_id != owner_id:
+        raise NotFound("Run not found")
+    if old.parent_run_id is not None:
+        raise ArgusError("Resume the top-level run; sub-councils resume with it")
+    if old.status not in RESUMABLE_STATUSES:
+        raise Conflict(f"Only halted, failed or cancelled runs can be resumed (this one is {old.status})")
+    try:
+        rails = Guardrails.resolve(old.guardrails, guardrails)
+    except ValidationError as exc:
+        raise ArgusError(
+            "Invalid guardrails", details={"errors": exc.errors(include_url=False)[:10]}
+        ) from exc
+    run = Run(
+        owner_id=owner_id,
+        council_id=old.council_id,
+        topic=old.topic,
+        description=old.description,
+        mode=old.mode,
+        outputs=list(old.outputs or []),
+        guardrails=rails.model_dump(),
+        council_snapshot=old.council_snapshot,
+        knowledge_base_ids=await owned_kb_ids(db, owner_id, old.knowledge_base_ids or []),
+        resumed_from_id=old.id,
+    )
+    db.add(run)
+    await db.commit()
+    await manager.start(run.id)
+    await db.refresh(run)
     await db.commit()
     return run
 

@@ -25,6 +25,7 @@ from argus.runtime.context import Correction, RunCancelled, RunContext
 from argus.runtime.events import TERMINAL_STATUSES, Actor, Broker, EventSink
 from argus.runtime.guardrails import GuardrailBreach, GuardrailEngine, Guardrails
 from argus.runtime.orchestrator import CouncilOrchestrator
+from argus.runtime.resume import ResumeState, copy_workspace, load_resume_state
 from argus.sandbox.client import build_sandbox
 from argus.services.connections import attach_connections
 from argus.services.llm import LLMRouter
@@ -233,6 +234,8 @@ class RunManager:
         )
         ctx.notify = self._notifier(run.owner_id, depth)
         ctx.extra["closers"] = closers
+        if run.resumed_from_id is not None:
+            ctx.extra["resume"] = await load_resume_state(self.sessionmaker, run.resumed_from_id)
         if run.knowledge_base_ids:
             async with self.sessionmaker() as s:
                 ctx.extra["linked_knowledge"] = await linked_summary(s, run.owner_id, run.knowledge_base_ids)
@@ -292,6 +295,32 @@ class RunManager:
         except Exception:
             log.exception("run.start_failed_unrecorded", run_id=str(run.id))
 
+    async def _carry_over(self, ctx: RunContext) -> None:
+        """A resumed run takes the old run's citations (same numbers), notes and workspace files."""
+        state: ResumeState | None = ctx.extra.get("resume")
+        if state is None:
+            return
+        for src in state.sources:
+            entry = {k: src[k] for k in ("source_id", "n", "url", "title", "retrieved_at") if k in src}
+            ctx.sources[src["url"]] = entry
+            await ctx.sink.emit(
+                "citation.added",
+                {**entry, "snippet": src.get("snippet", ""), "claim_refs": src.get("claim_refs", [])},
+            )
+        ctx.notes.extend(state.notes)
+        files = await copy_workspace(self.sessionmaker, state.from_run_id, ctx.workspace)
+        await ctx.sink.emit(
+            "run.resumed",
+            {
+                "from_run_id": str(state.from_run_id),
+                "tasks": state.tasks,
+                "sources": len(state.sources),
+                "notes": len(state.notes),
+                "files": files,
+                "legacy": state.legacy,
+            },
+        )
+
     async def _set(self, run_id: uuid.UUID, *, where: Any = None, **values: Any) -> bool:
         """Update a run row; with ``where`` only when it matches. Returns whether a row changed."""
         q = update(Run).where(Run.id == run_id)
@@ -316,6 +345,7 @@ class RunManager:
                     raise RunCancelled()
                 ctx.notify("run.started", {"run_id": str(ctx.run_id), "topic": ctx.topic, "mode": ctx.mode})
                 await ctx.sink.emit("run.status", {"status": "running"})
+                await self._carry_over(ctx)
                 result = await live.orchestrator.run()
                 await self._auto_export(ctx, result)
             except RunCancelled:
@@ -520,6 +550,10 @@ class RunManager:
             with contextlib.suppress(Conflict):  # the child is finishing: nothing left to answer
                 await self.set_auto_mode(child_id, tools=tools)
         return flags
+
+    async def adjust_budget(self, run_id: uuid.UUID, **changes: Any) -> dict[str, Any]:
+        """Raise a live run's budget or set its reserve; returns the new budget snapshot."""
+        return await self._live(run_id).ctx.adjust_budget(**changes)
 
     async def resolve_approval(self, run_id: uuid.UUID, approval_id: str, decision: dict[str, Any]) -> None:
         if not self._live(run_id).ctx.resolve_approval(approval_id, decision):

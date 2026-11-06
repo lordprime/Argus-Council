@@ -57,6 +57,21 @@ const EXAMPLES = [
 
 const AUTO_MODE_KEY = "argus.autoMode";
 const AUTO_EXTEND_KEY = "argus.autoExtend";
+const BUFFER_KEY = "argus.bufferUsd";
+const readValue = (key: string) => {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+};
+const writeValue = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+};
 const readFlag = (key: string) => {
   try {
     return localStorage.getItem(key) === "on";
@@ -120,6 +135,8 @@ function Composer() {
   const [autoExtend, setAutoExtend] = useState(() => readFlag(AUTO_EXTEND_KEY));
   useEffect(() => writeFlag(AUTO_MODE_KEY, autoMode), [autoMode]);
   useEffect(() => writeFlag(AUTO_EXTEND_KEY, autoExtend), [autoExtend]);
+  const [bufferUsd, setBufferUsd] = useState(() => readValue(BUFFER_KEY));
+  useEffect(() => writeValue(BUFFER_KEY, bufferUsd), [bufferUsd]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const planner = usePlanCouncil();
   const [plan, setPlan] = useState<{ key: string; plan: CouncilPlan } | null>(null);
@@ -200,6 +217,9 @@ function Composer() {
     if (reports) guardrails.report = { depth, human_checkins: checkins };
     if (autoMode) guardrails.auto_mode = true;
     if (autoExtend) guardrails.extensions = { auto_approve: true };
+    if (Number(bufferUsd) > 0) {
+      guardrails.budget = { ...(guardrails.budget as Record<string, unknown> | undefined), buffer_usd: Number(bufferUsd) };
+    }
     const council = !adHoc
       ? { council_id: councilId }
       : {
@@ -234,6 +254,7 @@ function Composer() {
     councilName, modelName, outputs.map((o) => FORMATS.find((f) => f.value === o)?.label).join(", ") || "No files",
     `${preset[0]!.toUpperCase()}${preset.slice(1)} guardrails`, kbIds.length ? `${kbIds.length} knowledge` : null,
     autoMode ? "Auto mode" : null,
+    Number(bufferUsd) > 0 ? `$${Number(bufferUsd)} reserve` : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -379,6 +400,9 @@ function Composer() {
                   <option value="permissive">Permissive</option>
                 </SelectField>
               </div>
+              <TextField label="Budget buffer (USD)" type="number" min="0" step="0.5" inputMode="decimal" placeholder="0"
+                value={bufferUsd} onChange={(e) => setBufferUsd(e.target.value)} className="sm:max-w-[calc(50%-0.5rem)]"
+                hint="Extra spend the run draws on, without asking, when it reaches its budget, instead of halting." />
               <div className="grid gap-3 sm:grid-cols-2">
                 <Toggle label="Auto mode" checked={autoMode} onChange={setAutoMode}
                   hint="Agents never stop to ask. Every approval is granted and logged; blocked actions stay blocked." />

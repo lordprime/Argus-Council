@@ -2593,6 +2593,72 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/continue": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Continue Run",
+        "description": "Resume a halted, failed or cancelled run where it stopped, as a new run.\n\nThe new run replays every task the old one finished (no model calls) and does only the rest.",
+        "operationId": "continue_run_api_v1_runs__run_id__continue_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ResumeIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/pause": {
       "post": {
         "tags": [
@@ -2915,6 +2981,67 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Auto Mode Api V1 Runs  Run Id  Auto Mode Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/budget": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Adjust Budget",
+        "description": "Raise a live run's budget now and/or set the reserve it draws on instead of halting.",
+        "operationId": "adjust_budget_api_v1_runs__run_id__budget_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Adjust Budget Api V1 Runs  Run Id  Budget Post"
                 }
               }
             }
@@ -7625,6 +7752,65 @@
         ],
         "title": "Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post"
       },
+      "BudgetIn": {
+        "properties": {
+          "add_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Add Usd"
+          },
+          "add_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Add Tokens"
+          },
+          "buffer_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Buffer Usd"
+          },
+          "buffer_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Buffer Tokens"
+          }
+        },
+        "type": "object",
+        "title": "BudgetIn",
+        "description": "Change a live run's budget: raise it now (``add_*``) and/or set its reserve (``buffer_*``)."
+      },
       "ChatMessageIn": {
         "properties": {
           "role": {
@@ -9731,6 +9917,18 @@
         ],
         "title": "ResizeIn"
       },
+      "ResumeIn": {
+        "properties": {
+          "guardrails": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Guardrails"
+          }
+        },
+        "type": "object",
+        "title": "ResumeIn",
+        "description": "Options for resuming a run; ``guardrails`` are merged over the old run's (e.g. a higher limit)."
+      },
       "RetentionOut": {
         "properties": {
           "policy": {
@@ -9957,6 +10155,18 @@
             },
             "type": "array",
             "title": "Knowledge Base Ids"
+          },
+          "resumed_from_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumed From Id"
           },
           "pending_approvals": {
             "type": "integer",
@@ -10273,6 +10483,18 @@
             },
             "type": "array",
             "title": "Knowledge Base Ids"
+          },
+          "resumed_from_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumed From Id"
           },
           "pending_approvals": {
             "type": "integer",

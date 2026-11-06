@@ -8,6 +8,35 @@ All notable changes to this project are documented here. The format follows
 (`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
 `mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
+## [Unreleased]
+
+### Added
+
+- **Resume a stopped run where it stopped.**
+  - *Resume where it stopped* on a halted, failed or cancelled run, or `POST /runs/{id}/continue`,
+    starts a new run (`resumed_from_id`) with the same council, outputs and knowledge, optionally
+    with changed guardrails.
+  - Every agent task the old run finished (plan, steps, report stages, votes) is replayed from its
+    recorded answer, with no model call and no step counted. Only unfinished work calls a model.
+  - Citations keep their numbers. Notes and workspace files carry over.
+  - Each finished task is now recorded as `task.completed`. For older runs, the plan and finished
+    steps are recovered from their events, and the report is built again.
+  - Before this, the only way on was *Start a follow-up run*, which began again from planning.
+- **Budget reserve.**
+  - `budget.buffer_usd` / `budget.buffer_tokens` is spending approved in advance. The run draws it,
+    without asking, when it reaches its budget, instead of halting. This works even with limit
+    extensions off.
+  - The report pipeline counts the reserve, so it no longer drops stages to fit the base budget.
+  - Set it in the guardrails editor or Home's run settings (remembered per browser).
+  - On a live run, the **Budget** control or `POST /runs/{id}/budget` raises the budget now
+    (`add_usd`, `add_tokens`) or sets the reserve (`buffer_usd`, `buffer_tokens`).
+- The run timeline shows a resumed run's origin, a drawn reserve and budget changes at every
+  density.
+
+### Changed
+
+- The schema gains `runs.resumed_from_id` (migration 0020).
+
 ## [0.1.3] - 2026-11-06
 
 ### Added
@@ -272,6 +301,7 @@ All notable changes to this project are documented here. The format follows
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
   models often send, instead of failing with "Input should be a valid list".
 
+[Unreleased]: https://github.com/lordprime/Argus-Council/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/lordprime/Argus-Council/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lordprime/Argus-Council/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/lordprime/Argus-Council/releases/tag/v0.1.0
