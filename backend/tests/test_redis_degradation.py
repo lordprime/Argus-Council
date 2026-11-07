@@ -15,8 +15,16 @@ import fakeredis
 import fakeredis.aioredis
 import pytest
 
+import argus.cache.store as store
 from argus.cache.store import Cache, CacheUnavailable, RedisBackend, build_cache
 from argus.core.metrics import REGISTRY
+
+
+@pytest.fixture
+def one_window(monkeypatch):
+    # The limiter uses fixed one-minute windows: pin the clock so the attempts of a test cannot
+    # be split across two windows (each under the limit) when it runs over a minute boundary.
+    monkeypatch.setattr(store.time, "time", lambda: 1_700_000_000.0)
 
 
 def _degraded(op: str) -> float:
@@ -39,7 +47,7 @@ class _HungBackend(RedisBackend):
 
 
 # ------------------------------------------------------------ cache unit behaviour
-async def test_rate_limit_falls_back_to_local_counter():
+async def test_rate_limit_falls_back_to_local_counter(one_window):
     cache = Cache(_broken_backend())
     before = _degraded("rate_limit")
     hits = [await cache.hit_rate_limit("p", 3) for _ in range(5)]
@@ -96,7 +104,7 @@ async def test_authenticated_requests_still_work(client, auth, redis_down):
     assert r.status_code == 201, r.text
 
 
-async def test_login_still_throttled_per_process(client, auth, redis_down):
+async def test_login_still_throttled_per_process(client, auth, redis_down, one_window):
     codes = []
     for _ in range(12):
         r = await client.post(
