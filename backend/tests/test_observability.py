@@ -39,18 +39,22 @@ async def test_audit_log_records_actions_and_failures(client, auth):
     )
     import asyncio
 
-    for _ in range(100):  # audit rows are written asynchronously
-        events = (await client.get("/api/v1/audit", headers=auth)).json()["events"]
-        if len(events) >= 2:
-            break
-        await asyncio.sleep(0.05)
+    async def wait_for(params: dict[str, str], wanted: set[str]) -> list[dict]:
+        # Audit rows are written asynchronously: wait for the ones under test, not for a count
+        # (the setup's own login is a row too, so "two rows" can arrive before these do).
+        for _ in range(100):
+            events = (await client.get("/api/v1/audit", headers=auth, params=params)).json()["events"]
+            if wanted <= {e["action"] for e in events}:
+                return events
+            await asyncio.sleep(0.05)
+        return events
+
+    events = await wait_for({}, {"POST /councils", "POST /providers"})
     actions = [e["action"] for e in events]
     assert "POST /councils" in actions and "POST /providers" in actions
     assert "sk-hide-me" not in str(events)
     # failed logins are recorded even without an actor (visible to admins)
-    every = (
-        await client.get("/api/v1/audit", headers=auth, params={"all": "true", "success": "false"})
-    ).json()["events"]
+    every = await wait_for({"all": "true", "success": "false"}, {"POST /auth/login"})
     login = next(e for e in every if e["action"] == "POST /auth/login")
     assert (
         login["detail"]["email"] == "admin@example.com"
