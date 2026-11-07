@@ -186,6 +186,19 @@ All notable changes to this project are documented here. The format follows
   anyone without MCP servers or remote agents.
 - `web_fetch` reads PDFs (up to 15 MB). It can render JavaScript-only pages in headless Chromium
   when `ARGUS_WEB_FETCH_RENDER_JS=true` and the optional `browser` extra (Playwright) is installed.
+- **Released images on the GitHub Container Registry.**
+  - Every release publishes `ghcr.io/lordprime/argus-council/{api,web,runner}` as `<version>`,
+    `<major>.<minor>` and `latest`. They are scanned with Trivy before they are pushed.
+  - `deploy/docker-compose.yml` runs those images by default, so a server needs only that file and
+    an `.env`: no checkout and no build. Each GitHub release attaches the compose file with its
+    version pinned, and the `.env` example.
+  - A release starts from a pushed `v*` tag, or from *Actions → Release → Run workflow* with a
+    version (it creates the tag at `ref`, or with *move_tag* moves an existing one for a
+    re-release). The version must match `backend/pyproject.toml` and `frontend/package.json`.
+  - `deploy.sh --release <version>` and `update.sh --release <version>` pull a release instead of
+    building, with the usual backup, migration step and automatic rollback.
+  - Building from source still works: the scripts build local `argus-council/*` images as before,
+    and `deploy/docker-compose.build.yml` adds the build sections back for plain Compose.
 
 ### Changed
 

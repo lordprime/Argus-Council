@@ -43,8 +43,8 @@ flowchart TB
 
 | Container | Image | Networks | Notes |
 | --- | --- | --- | --- |
-| `web` | `argus-council/web` | frontend | Serves the UI and proxies the API and agent protocols on one origin; the only service published on all interfaces by default (port 8080) |
-| `api` | `argus-council/api` | backend, frontend, sandbox | Runs migrations on start, the council runtime, the periodic retention task; bound to `127.0.0.1:8000` by default |
+| `web` | `argus-council/web` (released: `ghcr.io/lordprime/argus-council/web`) | frontend | Serves the UI and proxies the API and agent protocols on one origin; the only service published on all interfaces by default (port 8080) |
+| `api` | `argus-council/api` (released: `ghcr.io/lordprime/argus-council/api`) | backend, frontend, sandbox | Runs migrations on start, the council runtime, the periodic retention task; bound to `127.0.0.1:8000` by default |
 | `sandbox` | `argus-council/api` | sandbox (internal) | `uvicorn argus.sandbox.server:app`; tmpfs work area, CPU, memory and pid limits |
 | `postgres` | `postgres:17-alpine` | backend (internal) | Database volume `pgdata` |
 | `redis` | `redis:7-alpine` | backend (internal) | Password, LRU eviction, append-only file, `FLUSHALL` and `CONFIG` disabled |

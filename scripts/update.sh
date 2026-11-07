@@ -5,6 +5,7 @@
 #   ./scripts/update.sh --no-pull               # deploy the code already checked out
 #   ./scripts/update.sh --no-backup             # skip the backup (rollback then uses alembic downgrade)
 #   ./scripts/update.sh --images TAG            # deploy existing images TAG instead of building
+#   ./scripts/update.sh --release 0.1.4         # deploy a published release (no build, no git pull)
 #   ./scripts/update.sh --rollback              # go back to the version that ran before the last update
 #   ./scripts/update.sh --rollback --restore-db # ...and load the pre-update backup instead of downgrading
 #
@@ -27,7 +28,9 @@ while [ $# -gt 0 ]; do
     --restore-db) restore_mode=restore; shift ;;
     --ca) build_args+=(--ca "${2:?--ca needs a file}"); shift 2 ;;
     --images) build_args+=(--from-images "${2:?--images needs a tag}"); shift 2 ;;
-    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # The checkout's compose file and scripts are used as they are: no git pull.
+    --release) build_args+=(--release "${2:?--release needs a version}"); pull=0; shift 2 ;;
+    -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done

@@ -9,7 +9,8 @@
 #              cannot locate the revision), otherwise it migrates to the image's head.
 #
 # Knobs (environment): STUB_BUILD_HEAD, STUB_BUILD_HEALTHY, STUB_BUILD_FAIL, STUB_PGDUMP_FAIL,
-# STUB_TAR_FAIL, STUB_FORCE_UNHEALTHY, STUB_DOWNGRADE_FAIL, STUB_MIGRATE_FAIL.
+# STUB_TAR_FAIL, STUB_FORCE_UNHEALTHY, STUB_DOWNGRADE_FAIL, STUB_MIGRATE_FAIL, STUB_PULL_FAIL,
+# STUB_PULL_VERSION (the version label of pulled images; default: the tag pulled).
 set -euo pipefail
 S="${STUB_STATE:?STUB_STATE is not set}"
 mkdir -p "$S/tags" "$S/ids" "$S/db" "$S/ct"
@@ -163,9 +164,26 @@ case "${1:-}" in
     id="sha256:built$n-${ctx##*/}"
     printf 'head=%s\nhealthy=%s\n' "${STUB_BUILD_HEAD:-1}" "${STUB_BUILD_HEALTHY:-1}" >"$S/ids/$id"
     for t in "${tags[@]}"; do echo "$id" >"$(tagfile "$t")"; done ;;
+  pull)
+    # docker pull [-q] REF: a registry image, with the same head/healthy knobs as a build.
+    ref="${*: -1}"
+    [ "${STUB_PULL_FAIL:-0}" = 1 ] && fail "pull failed: manifest unknown"
+    n=$(($(cat "$S/pull_counter" 2>/dev/null || echo 0) + 1)); echo "$n" >"$S/pull_counter"
+    svc="${ref##*/}"; svc="${svc%%:*}"
+    id="sha256:pulled$n-$svc"
+    printf 'head=%s\nhealthy=%s\nversion=%s\n' "${STUB_BUILD_HEAD:-1}" "${STUB_BUILD_HEALTHY:-1}" \
+      "${STUB_PULL_VERSION-${ref##*:}}" >"$S/ids/$id"
+    echo "$id" >"$(tagfile "$ref")" ;;
   image)
     case "$2" in
-      inspect) [ -n "$(resolve "$3")" ] ;;
+      inspect)
+        if [ "$3" = --format ]; then
+          id="$(resolve "$5")" || true
+          [ -n "$id" ] || fail "no such image: $5"
+          case "$4" in *image.version*) v="$(idprop "$id" version || true)"; printf '%s\n' "${v:-<no value>}" ;; esac
+        else
+          [ -n "$(resolve "$3")" ]
+        fi ;;
       ls)
         repo="$(printf '%s' "$3" | tr '/:' '__')"
         for f in "$S/tags/${repo}_"*; do [ -e "$f" ] && printf '%s\n' "${f##*/"${repo}"_}"; done

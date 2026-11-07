@@ -1,6 +1,11 @@
-# Argus Council: production-style stack.
-#   cp deploy/.env.example deploy/.env   # then fill in secrets
-#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+# Argus Council: production-style stack. It runs the released images from the GitHub Container
+# Registry, so this file and an .env are all a server needs (no checkout, no build):
+#   cp deploy/.env.example deploy/.env   # then fill in secrets; pin ARGUS_VERSION (e.g. 0.1.4)
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+# Each GitHub release also attaches this file with its version pinned (see release.yml).
+# From source instead: ./scripts/deploy.sh (builds argus-council/* images), or
+#   ARGUS_IMAGE_REPO=argus-council docker compose -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.build.yml --env-file deploy/.env up -d --build
 name: argus
 
 x-hardening: &hardening
@@ -54,9 +59,7 @@ services:
 
   api:
     <<: *hardening
-    build:
-      context: ../backend
-    image: argus-council/api:${ARGUS_VERSION:-latest}
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/api:${ARGUS_VERSION:-latest}
     # Room for uvicorn's graceful shutdown (10 s) plus recording the final status of live runs.
     stop_grace_period: 45s
     read_only: true
@@ -131,9 +134,7 @@ services:
 
   web:
     <<: *hardening
-    build:
-      context: ../frontend
-    image: argus-council/web:${ARGUS_VERSION:-latest}
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/web:${ARGUS_VERSION:-latest}
     read_only: true
     tmpfs: ["/tmp:size=16m"]
     depends_on:
@@ -146,7 +147,7 @@ services:
 
   sandbox:
     <<: *hardening
-    image: argus-council/api:${ARGUS_VERSION:-latest}
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/api:${ARGUS_VERSION:-latest}
     command: ["uvicorn", "argus.sandbox.server:app", "--uds", "/run/argus-sandbox/sandbox.sock", "--no-server-header"]
     # Per-execution isolation (argus/sandbox/isolation.py): the server starts as root holding only
     # the capabilities to switch uid and hand files over; every command runs as its own uid from
@@ -185,10 +186,7 @@ services:
   runner:
     <<: *hardening
     profiles: ["cli-agents"]
-    build:
-      context: ../backend
-      dockerfile: docker/runner.Dockerfile
-    image: argus-council/runner:${ARGUS_VERSION:-latest}
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/runner:${ARGUS_VERSION:-latest}
     # Control API on a Unix socket in the shared runnersock volume (token-authenticated).
     command: ["uvicorn", "argus.runner.server:app", "--uds", "/run/argus-runner/runner.sock", "--no-server-header"]
     read_only: true

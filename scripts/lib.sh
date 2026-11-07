@@ -82,6 +82,13 @@ envval() {
   printf '%s' "${v:-$2}"
 }
 
+# The scripts start local images, argus-council/<svc>:<version>: built from this checkout, or
+# pulled from a release and tagged so (build.sh --release). The compose file defaults to the
+# registry's names (ghcr.io/...), so point it at the local ones; the environment beats deploy/.env.
+export ARGUS_IMAGE_REPO=argus-council
+# Where build.sh --release pulls from (the images release.yml publishes).
+RELEASE_REPO="${ARGUS_RELEASE_REPO:-$(envval ARGUS_RELEASE_REPO ghcr.io/lordprime/argus-council)}"
+
 # stateval KEY: a value from $STATE_FILE, empty when unset.
 stateval() {
   [ -f "$STATE_FILE" ] || return 0

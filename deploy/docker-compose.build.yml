@@ -1,0 +1,15 @@
+# Build the images from this checkout instead of pulling the released ones. Use with the main file:
+#   ARGUS_IMAGE_REPO=argus-council docker compose -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.build.yml --env-file deploy/.env up -d --build
+# The scripts (build.sh, deploy.sh, update.sh) build with `docker build` and do not need this file.
+services:
+  api:
+    build:
+      context: ../backend
+  web:
+    build:
+      context: ../frontend
+  runner:
+    build:
+      context: ../backend
+      dockerfile: docker/runner.Dockerfile

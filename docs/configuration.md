@@ -134,7 +134,9 @@ These are read by Docker Compose and the scripts in `scripts/`, not by the API.
 | --- | --- | --- |
 | `ARGUS_API_BIND`, `ARGUS_API_PORT` | `127.0.0.1`, `8000` | Where the API port is published on the host |
 | `ARGUS_WEB_BIND`, `ARGUS_WEB_PORT` | `0.0.0.0`, `8080` | Where the web port is published on the host |
-| `ARGUS_VERSION` | the last built version | Image tag to start |
+| `ARGUS_VERSION` | `latest` with plain Compose; the scripts pass the deployed version | Image tag to start |
+| `ARGUS_IMAGE_REPO` | `ghcr.io/lordprime/argus-council` | Image repository the compose file runs; the scripts set `argus-council` (their local images) |
+| `ARGUS_RELEASE_REPO` | `ghcr.io/lordprime/argus-council` | Where `--release` pulls published images from |
 | `ARGUS_BACKUP_DIR` | `./backups` | Where `update.sh` writes backups and `restore.sh` reads them |
 | `ARGUS_BACKUP_KEEP` | `14` | Backups kept (database and artifact pairs); `0` keeps all |
 | `ARGUS_EXTRA_CA` | unset | Extra CA certificate for image builds (same as `--ca`) |

@@ -27,6 +27,7 @@ flowchart TB
 ./scripts/deploy.sh --pull      # git pull first: a full update in one command
 ./scripts/deploy.sh --smoke     # also run the end-to-end smoke test afterwards
 ./scripts/deploy.sh --no-build  # start the images already built (see build.sh)
+./scripts/deploy.sh --release 0.1.4  # pull a published release instead of building (or latest)
 ./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
 ./scripts/deploy.sh --ca FILE   # trust an extra CA while building
 ```
@@ -52,6 +53,44 @@ To build images only:
 
 Builds retry up to three times, because base-image pulls fail transiently.
 
+### Released images
+
+Every release publishes `ghcr.io/lordprime/argus-council/api`, `.../web` and `.../runner`, tagged
+`<version>`, `<major>.<minor>` and, for the highest stable version, `latest`.
+`deploy/docker-compose.yml` runs those images by default (`ARGUS_IMAGE_REPO`, `ARGUS_VERSION`), so
+plain `docker compose up -d` with an `.env` needs no checkout and no build; see
+[Getting started](getting-started.md#deploy-a-release-no-build). Pin `ARGUS_VERSION` rather than
+relying on `latest`.
+
+The scripts keep working on local images named `argus-council/<service>:<version>`.
+`build.sh --release 0.1.4` (and `deploy.sh` / `update.sh --release`) pulls the release from
+`ARGUS_RELEASE_REPO` (default `ghcr.io/lordprime/argus-council`) and tags it so, instead of
+building; `--release latest` records the version the image carries, so a rollback finds the same
+images again. To build with plain Compose instead, add the build sections:
+
+```bash
+ARGUS_IMAGE_REPO=argus-council docker compose -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.build.yml --env-file deploy/.env up -d --build
+```
+
+### Cutting a release
+
+`.github/workflows/release.yml` builds the three images from the release commit, scans `api` and
+`web` with Trivy, pushes them, and creates the GitHub release with notes from `CHANGELOG.md` and two
+assets: `docker-compose.yml` pinned to the version, and `env.example`. Bump the version files first
+(see the top of `CHANGELOG.md`); the workflow refuses a version that `backend/pyproject.toml` and
+`frontend/package.json` do not carry. Then either:
+
+* push a tag: `git tag v0.1.4 && git push origin v0.1.4`; or
+* run it by hand: *Actions → Release → Run workflow*, with the version and the `ref` to release
+  (default `main`). A new tag is created at `ref`. If the tag exists, its commit is released again,
+  or, with *move_tag* ticked, the tag is moved to `ref` and the notes are refreshed (a re-release).
+
+`<major>.<minor>` and `latest` only move forward: releasing an older version again leaves them on
+the newer one. Pre-releases (`0.2.0-rc.1`) get only their own tag. Servers pull without logging
+in only if the packages are public: after the first release, check each one (*Package settings →
+Change visibility*); a new package can start out private.
+
 ### Exposing it
 
 By default the web container listens on all interfaces at port 8080 and the API only on
@@ -66,6 +105,7 @@ trusted network, set `ARGUS_CORS_ORIGINS` to your public origin, and close regis
 ./scripts/update.sh --no-pull                # deploy the code already checked out
 ./scripts/update.sh --no-backup              # skip the backup (a rollback then uses alembic downgrade)
 ./scripts/update.sh --images TAG             # deploy images already built as TAG instead of building
+./scripts/update.sh --release 0.1.4          # deploy a published release (no build, no git pull)
 ./scripts/update.sh --rollback               # go back to the version that ran before the last update
 ./scripts/update.sh --rollback --restore-db  # ...and load the pre-update backup instead of downgrading
 ```

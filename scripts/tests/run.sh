@@ -46,7 +46,8 @@ setup() {
   echo a1 >"$STUB_STATE/artifacts"
   echo v1 >"$R/deploy/.version"
   unset STUB_BUILD_HEAD STUB_BUILD_HEALTHY STUB_BUILD_FAIL STUB_PGDUMP_FAIL STUB_TAR_FAIL \
-    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL STUB_MIGRATE_FAIL ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
+    STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL STUB_MIGRATE_FAIL STUB_PULL_FAIL STUB_PULL_VERSION \
+    ARGUS_RELEASE_REPO ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
   export ARGUS_READY_TIMEOUT=20 # a broken version is given up on after 20 polls, not 240
 }
 
@@ -60,6 +61,7 @@ st() { cat "$STUB_STATE/$1" 2>/dev/null; }          # stub state value
 running_api() { st ct/api; }
 tag_id() { st "tags/$(printf '%s' "$1" | tr '/:' '__')"; }
 count() { [ -f "$STUB_STATE/$1" ] && wc -l <"$STUB_STATE/$1" | tr -d ' ' || echo 0; }
+stateval_in_test() { grep -E "^$1=" "$R/deploy/.rollback-state" 2>/dev/null | tail -n1 | cut -d= -f2-; }
 dumps() { find "$R/backups" -name 'argus-db-*.dump' 2>/dev/null | sort; }
 
 # ---------------------------------------------------------------- assertions
@@ -572,6 +574,52 @@ if begin deploy_fresh_install_stops_when_migrations_fail; then
   check "deploy.sh fails" fails run deploy.sh
   check "it says nothing was started" contains "$T/out" "nothing was started"
   check "no version is recorded" fails test -f "$R/deploy/.version"
+  end
+fi
+
+if begin release_update_pulls_the_published_images_instead_of_building; then
+  export STUB_BUILD_HEAD=2
+  check "update.sh --release succeeds" ok run update.sh --release v0.1.4
+  check "the api was pulled from the registry" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/api:0.1.4"
+  check "the web image was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/web:0.1.4"
+  check "nothing was built" lacks "$STUB_STATE/calls.log" "docker build"
+  check "the code was not pulled" lacks "$T/out" "pulling the latest code"
+  check "the release version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
+  check "the pulled image runs" eq "$(running_api)" "$(tag_id ghcr.io/lordprime/argus-council/api:0.1.4)"
+  check "under the local name" eq "$(tag_id argus-council/api:0.1.4)" "$(running_api)"
+  check "the database migrated" eq "$(st db/rev)" 2
+  check "a rollback target was kept" ok test -n "$(stateval_in_test version)"
+  check "--rollback returns to v1" ok run update.sh --rollback
+  check "the old image runs again" eq "$(running_api)" sha256:v1-api
+  end
+fi
+
+if begin release_latest_records_the_version_it_carries; then
+  export STUB_PULL_VERSION=0.1.5 ARGUS_RELEASE_REPO=registry.example/acme/argus
+  check "update.sh --release latest succeeds" ok run update.sh --release latest
+  check "it pulled from ARGUS_RELEASE_REPO" contains "$STUB_STATE/calls.log" "pull -q registry.example/acme/argus/api:latest"
+  check "the label's version is recorded, not latest" eq "$(cat "$R/deploy/.version")" 0.1.5
+  end
+fi
+
+if begin release_pull_failure_changes_nothing; then
+  export STUB_PULL_FAIL=1
+  check "update.sh --release fails" fails run update.sh --release 9.9.9
+  check "with a clear error" contains "$T/out" "pulling ghcr.io/lordprime/argus-council/api:9.9.9 failed 3 times"
+  check "the old image still runs" eq "$(running_api)" sha256:v1-api
+  check "the version is unchanged" eq "$(cat "$R/deploy/.version")" v1
+  end
+fi
+
+if begin deploy_fresh_install_from_a_release; then
+  rm -f "$R/deploy/.version" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
+  echo 0 >"$STUB_STATE/db/rev"
+  export STUB_BUILD_HEAD=3
+  check "deploy.sh --release succeeds" ok run deploy.sh --release 0.1.4
+  check "nothing was built" lacks "$STUB_STATE/calls.log" "docker build"
+  check "the database is at the release's head" eq "$(st db/rev)" 3
+  check "the release version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
+  check "--release with --no-build is refused" fails run deploy.sh --release 0.1.4 --no-build
   end
 fi
 

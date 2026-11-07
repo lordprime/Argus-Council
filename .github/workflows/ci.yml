@@ -148,6 +148,8 @@ jobs:
           REDIS_PASSWORD=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")
           ARGUS_SANDBOX_TOKEN=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")
           ARGUS_VERSION=ci
+          # The images this job just built, not the published ones the compose file defaults to.
+          ARGUS_IMAGE_REPO=argus-council
           # The smoke, UI and backup tests register several accounts.
           ARGUS_ALLOW_REGISTRATION=true
           ENV

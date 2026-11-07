@@ -10,6 +10,26 @@ without Docker, see [Local development](#local-development).
 * Git, and `openssl` or Python 3 (used to generate secrets).
 * About 4 GB of free memory for the default resource limits.
 
+## Deploy a release (no build)
+
+Each release is published as images on the GitHub Container Registry, so a server needs only the
+compose file and an `.env`:
+
+```bash
+mkdir argus && cd argus
+curl -fsSLO https://github.com/lordprime/Argus-Council/releases/latest/download/docker-compose.yml
+curl -fsSL -o .env https://github.com/lordprime/Argus-Council/releases/latest/download/env.example
+# fill in ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD and ARGUS_SANDBOX_TOKEN, e.g. with
+#   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+docker compose --env-file .env up -d --wait
+```
+
+The release's compose file is pinned to its version; set `ARGUS_VERSION` in `.env` to run another.
+The API applies database migrations when it starts. To update, download the newer release's
+compose file (or change `ARGUS_VERSION`) and run `docker compose --env-file .env up -d` again; back
+up first. For backups, updates with automatic rollback and the other scripts, deploy from a clone
+instead (below) and use `./scripts/deploy.sh --release <version>`.
+
 ## Deploy with Docker
 
 ```bash
@@ -22,13 +42,15 @@ cd Argus-Council
 
 1. copies `deploy/.env.example` to `deploy/.env` (mode `600`) and generates every empty secret:
    `ARGUS_SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` and `ARGUS_SANDBOX_TOKEN`;
-2. builds the `argus-council/api` and `argus-council/web` images, tagged with the current commit;
+2. builds the `argus-council/api` and `argus-council/web` images, tagged with the current commit
+   (or, with `--release`, pulls a published release instead);
 3. starts the stack and waits until every service is healthy;
 4. with `--smoke`, runs `scripts/smoke.sh`, which registers a throwaway account and creates a
    council through the API.
 
-Other options: `--no-build` starts images you already built with `scripts/build.sh`, and
-`--ca FILE` trusts an extra CA certificate during the build (for egress proxies).
+Other options: `--release 0.1.4` pulls that published release instead of building, `--no-build`
+starts images you already built with `scripts/build.sh`, and `--ca FILE` trusts an extra CA
+certificate during the build (for egress proxies).
 
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and the agent
 protocols (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin.

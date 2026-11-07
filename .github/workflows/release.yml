@@ -1,0 +1,267 @@
+name: Release
+
+# Publishes the api, web and runner images to the GitHub Container Registry and creates the GitHub
+# release, with a docker-compose.yml pinned to that version and the .env example attached.
+#
+#   git tag v0.1.4 && git push origin v0.1.4        # release the tagged commit
+#   Actions > Release > Run workflow, version 0.1.4  # same, from the UI (tags `ref` if v0.1.4 is new)
+#   ... with "move_tag" ticked                       # re-release: move an existing tag to `ref`
+#
+# Images: ghcr.io/<owner>/argus-council/{api,web,runner}:<version>, :<major>.<minor>, and :latest
+# when this is the highest stable version. Pre-releases (0.2.0-rc.1) get only their own tag.
+# The version must match backend/pyproject.toml and frontend/package.json at the released commit.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.1.4 (a leading v is fine)"
+        required: true
+        type: string
+      ref:
+        description: "Branch, tag or commit to release when the tag v<version> does not exist yet"
+        required: false
+        default: main
+        type: string
+      move_tag:
+        description: "Re-release: if v<version> already exists, move it to `ref` and rebuild from there"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
+      move_tag: ${{ steps.meta.outputs.move_tag }}
+      image: ${{ steps.meta.outputs.image }}
+      tags: ${{ steps.meta.outputs.tags }}
+      latest: ${{ steps.meta.outputs.latest }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve version and commit
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_MOVE_TAG: ${{ inputs.move_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ]; then raw="$INPUT_VERSION"; else raw="$REF_NAME"; fi
+          version="${raw#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::'$raw' is not a version like 0.1.4 or 0.2.0-rc.1"; exit 1; }
+          tag="v$version"
+
+          resolve_ref() {
+            local ref="${INPUT_REF:-main}"
+            case "$ref" in -*) echo "::error::invalid ref '$ref'" >&2; return 1 ;; esac
+            git rev-parse --verify --quiet "origin/$ref^{commit}" || git rev-parse --verify --quiet "$ref^{commit}" \
+              || { echo "::error::cannot resolve ref '$ref'" >&2; return 1; }
+          }
+          move_tag=false
+          if git rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null; then
+            sha="$(git rev-parse "refs/tags/$tag^{commit}")"
+            if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_MOVE_TAG" = true ]; then
+              new="$(resolve_ref)"
+              if [ "$new" != "$sha" ]; then
+                echo "::notice::re-release: $tag moves from ${sha:0:12} to ${new:0:12} (${INPUT_REF:-main})"
+                sha="$new" move_tag=true
+              fi
+            elif [ "$EVENT" = workflow_dispatch ]; then
+              echo "::notice::$tag already exists: releasing its commit ${sha:0:12} (tick move_tag to release '${INPUT_REF:-main}' instead)"
+            fi
+          else
+            [ "$EVENT" = workflow_dispatch ] || { echo "::error::tag $tag not found"; exit 1; }
+            sha="$(resolve_ref)"
+            echo "::notice::$tag is new: it will be created at ${sha:0:12} (${INPUT_REF:-main})"
+          fi
+
+          # The version files at that commit must say the same version (see CHANGELOG.md).
+          py="$(git show "$sha:backend/pyproject.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1)"
+          js="$(git show "$sha:frontend/package.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          [ "$py" = "$version" ] && [ "$js" = "$version" ] \
+            || { echo "::error::version mismatch at ${sha:0:12}: backend/pyproject.toml=$py frontend/package.json=$js, releasing $version"; exit 1; }
+
+          image="ghcr.io/${OWNER,,}/argus-council"
+          prerelease=false latest=false tags="$version"
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          else
+            # :<major>.<minor> and :latest only move forward: re-releasing an older version
+            # leaves them on the newer one.
+            stable="$( { git tag -l 'v*.*.*' | grep -v -- - || true; echo "$tag"; } | sed 's/^v//' | sort -uV)"
+            minor="${version%.*}"
+            if [ "$(grep -F "$minor." <<<"$stable" | grep -E "^${minor//./\\.}\.[0-9]+$" | tail -n1)" = "$version" ]; then
+              tags="$tags $minor"
+            fi
+            if [ "$(tail -n1 <<<"$stable")" = "$version" ]; then latest=true; tags="$tags latest"; fi
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "move_tag=$move_tag"
+            echo "image=$image"
+            echo "tags=$tags"
+            echo "latest=$latest"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
+          echo "Releasing $tag from $sha as $image/{api,web,runner}: $tags" >>"$GITHUB_STEP_SUMMARY"
+
+  images:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: api
+            context: backend
+            file: backend/Dockerfile
+            cache: buildkit
+            scan: true
+          - service: web
+            context: frontend
+            file: frontend/Dockerfile
+            cache: web
+            scan: true
+          - service: runner
+            context: backend
+            file: backend/docker/runner.Dockerfile
+            cache: runner
+            scan: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          tags: release/${{ matrix.service }}:candidate
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
+          cache-from: type=gha,scope=${{ matrix.cache }}
+          # The web runtime stage runs `apk upgrade`: never replay it from the cache (see ci.yml).
+          no-cache-filters: ${{ matrix.service == 'web' && 'runtime' || '' }}
+      - name: Trivy image vulnerability scan
+        if: matrix.scan
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.0 \
+            image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --no-progress \
+            release/${{ matrix.service }}:candidate
+      - name: Push to the GitHub Container Registry
+        # The exact image that was scanned is pushed, under every tag of this release.
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}/${{ matrix.service }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          for t in $TAGS; do
+            docker tag "release/${{ matrix.service }}:candidate" "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+            echo "- \`$IMAGE:$t\`" >>"$GITHUB_STEP_SUMMARY"
+          done
+          docker logout ghcr.io
+
+  release:
+    needs: [prepare, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Release assets and notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # A compose file that runs exactly this release from the registry: only an .env is needed.
+          sed -e "s|\${ARGUS_IMAGE_REPO:-[^}]*}|\${ARGUS_IMAGE_REPO:-$IMAGE}|g" \
+              -e "s|\${ARGUS_VERSION:-latest}|\${ARGUS_VERSION:-$VERSION}|g" \
+              deploy/docker-compose.yml >dist/docker-compose.yml
+          [ "$(grep -cF "{ARGUS_IMAGE_REPO:-$IMAGE}/" dist/docker-compose.yml)" -eq 4 ] \
+            && [ "$(grep -cF "{ARGUS_VERSION:-$VERSION}" dist/docker-compose.yml)" -eq 4 ] \
+            || { echo "::error::could not pin the image versions in docker-compose.yml"; exit 1; }
+          cp deploy/.env.example dist/env.example
+
+          awk -v h="## [$VERSION]" 'index($0, h) == 1 {f = 1; next} f && /^## \[/ {exit} f' CHANGELOG.md >dist/notes.md
+          if [ -z "$(tr -d '[:space:]' <dist/notes.md)" ]; then
+            echo "No CHANGELOG.md entry for $VERSION." >dist/notes.md
+          fi
+          cat >>dist/notes.md <<EOF
+
+          ### Run it
+
+          \`\`\`bash
+          curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/v$VERSION/docker-compose.yml
+          curl -fsSL -o .env https://github.com/${GITHUB_REPOSITORY}/releases/download/v$VERSION/env.example
+          # fill in the secrets in .env, then:
+          docker compose --env-file .env up -d
+          \`\`\`
+
+          Images: \`$IMAGE/api:$VERSION\`, \`$IMAGE/web:$VERSION\`, \`$IMAGE/runner:$VERSION\`.
+          EOF
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          MOVE_TAG: ${{ needs.prepare.outputs.move_tag }}
+        run: |
+          set -euo pipefail
+          assets=(dist/docker-compose.yml dist/env.example)
+          if [ "$MOVE_TAG" = true ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null
+            echo "moved $TAG to $SHA"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Existing release: refresh the assets. Keep the notes as edited on GitHub, unless the
+            # tag moved (a re-release), when they come from CHANGELOG.md again.
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            if [ "$MOVE_TAG" = true ]; then gh release edit "$TAG" --notes-file dist/notes.md; fi
+          else
+            flags=(--title "Argus Council $VERSION" --notes-file dist/notes.md --target "$SHA" "--latest=$LATEST")
+            if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" "${assets[@]}" "${flags[@]}"
+          fi
+          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >>"$GITHUB_STEP_SUMMARY"

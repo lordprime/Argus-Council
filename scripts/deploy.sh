@@ -5,6 +5,7 @@
 #   ./scripts/deploy.sh --pull      # git pull the latest code first (an update in one command)
 #   ./scripts/deploy.sh --smoke     # also run the end-to-end smoke test afterwards
 #   ./scripts/deploy.sh --no-build  # start the images already built (see build.sh)
+#   ./scripts/deploy.sh --release 0.1.4  # pull a published release instead of building (or `latest`)
 #   ./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
 #   ./scripts/deploy.sh --ca FILE   # trust an extra CA while building
 #
@@ -24,10 +25,14 @@ while [ $# -gt 0 ]; do
     --pull) pull=1; shift ;;
     --no-backup) backup_flag=(--no-backup); shift ;;
     --ca) build_args+=(--ca "${2:?--ca needs a file}"); shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --release) build_args+=(--release "${2:?--release needs a version}"); shift 2 ;;
+    -h | --help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
+if [ "$build" = 0 ] && [ ${#build_args[@]} -gt 0 ] && [[ " ${build_args[*]} " == *" --release "* ]]; then
+  die "--release pulls the images instead of building them: drop --no-build"
+fi
 require_docker
 
 secret() {
