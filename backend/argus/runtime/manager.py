@@ -80,8 +80,11 @@ class RunManager:
         llm: LLMRouter,
         tool_factory: Any = None,
         webhooks: Any = None,
+        features: Any = None,
     ) -> None:
         self.webhooks = webhooks
+        # argus.services.features.FeatureSwitches (None: every installed feature is on).
+        self.features = features
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.broker = broker
@@ -94,7 +97,7 @@ class RunManager:
                     *skill_tools(),
                     *knowledge_tools(),
                     *web_tools(settings),
-                    *browser_tools(settings),
+                    *(browser_tools(settings, enabled=self._browser_on) if self._browser_on() else []),
                     *code_tools(self.sandbox),
                     SubCouncilTool(self),
                 ]
@@ -106,6 +109,9 @@ class RunManager:
             weakref.WeakValueDictionary()
         )
         self.blob_root = Path(settings.data_dir) / "artifacts"
+
+    def _browser_on(self) -> bool:
+        return self.features is None or self.features.is_on("browser")
 
     def _notifier(self, owner: uuid.UUID, depth: int) -> Callable[[str, dict[str, Any]], None]:
         # In-app notifications share the webhook dispatcher's task set so one drain covers both.
@@ -254,6 +260,9 @@ class RunManager:
             for m in run.council_snapshot.get("members", [])
             if m.get("enabled", True)
         ]
+        if self.features is not None:
+            # An admin may have switched a feature since the last run; failures keep the last state.
+            await self.features.refresh()
         registry = self.tool_factory(run)
         closers.extend(
             await attach_connections(registry, self.sessionmaker, run.owner_id, self.settings, sink.emit)

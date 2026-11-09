@@ -1,19 +1,28 @@
-"""Admin-only user management (RBAC). Mutations are recorded by the audit middleware."""
+"""Admin-only user management (RBAC) and feature switches. Mutations are recorded by the audit middleware."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool
 from sqlalchemy import func, select
 
 from argus.api.deps import AdminPrincipal, AdminWriter, DbDep
 from argus.core.errors import Conflict, NotFound
-from argus.db.models import Run, User
+from argus.db.models import FeatureSwitch, Run, User
 from argus.services.connections import disable_stdio_servers
+from argus.services.features import (
+    FEATURE_KEYS,
+    FEATURE_LABELS,
+    INSTALL_COMMANDS,
+    FeatureKey,
+    FeatureStatus,
+    FeatureSwitches,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -108,3 +117,81 @@ async def update_user(
     request.state.audit_detail = {"email": user.email, "changes": changes}
     await db.flush()
     return _out(user, await _run_count(db, user.id))
+
+
+# ---------------------------------------------------------------------------- feature switches
+class FeatureOut(BaseModel):
+    key: FeatureKey
+    label: str
+    installed: bool
+    status: FeatureStatus
+    # The admin's stored switch (on when never set); ``active`` is what agents actually get.
+    enabled: bool
+    active: bool
+    install_command: str
+    updated_at: datetime | None
+    updated_by: str | None
+
+
+class FeaturePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
+
+
+def _features(request: Request) -> FeatureSwitches:
+    return request.app.state.features
+
+
+async def _feature_outs(db: DbDep, features: FeatureSwitches, keys: tuple[str, ...]) -> list[FeatureOut]:
+    rows = {
+        row.key: (row, email)
+        for row, email in (
+            await db.execute(
+                select(FeatureSwitch, User.email)
+                .outerjoin(User, User.id == FeatureSwitch.updated_by_id)
+                .where(FeatureSwitch.key.in_(keys))
+            )
+        ).all()
+    }
+    statuses = await asyncio.gather(*(features.probe(key) for key in keys))
+    out = []
+    for key, status in zip(keys, statuses, strict=True):
+        row, email = rows.get(key, (None, None))
+        enabled = True if row is None else bool(row.enabled)
+        installed = features.installed(key)
+        out.append(
+            FeatureOut(
+                key=key,  # type: ignore[arg-type]
+                label=FEATURE_LABELS[key],
+                installed=installed,
+                status=status,
+                enabled=enabled,
+                active=installed and enabled,
+                install_command=INSTALL_COMMANDS[key],
+                updated_at=row.updated_at if row is not None else None,
+                updated_by=email,
+            )
+        )
+    return out
+
+
+@router.get("/features", response_model=list[FeatureOut])
+async def list_features(_: AdminPrincipal, db: DbDep, request: Request) -> list[FeatureOut]:
+    """The optional features (live browser, CLI agents): installed on the server, reachable, on or off."""
+    return await _feature_outs(db, _features(request), FEATURE_KEYS)
+
+
+@router.patch("/features/{key}", response_model=FeatureOut)
+async def update_feature(
+    key: str, data: FeaturePatch, request: Request, principal: AdminWriter, db: DbDep
+) -> FeatureOut:
+    """Turn an installed feature on or off for everyone, from its next use (runs in progress included)."""
+    if key not in FEATURE_KEYS:
+        raise NotFound("Feature not found")
+    features = _features(request)
+    if data.enabled and not features.installed(key):
+        raise Conflict(f"{FEATURE_LABELS[key]} is not installed on this server: run {INSTALL_COMMANDS[key]}")
+    previous = await features.set(key, data.enabled, principal.id, db=db)
+    request.state.audit_detail = {"feature": key, "enabled": {"from": previous, "to": data.enabled}}
+    return (await _feature_outs(db, features, (key,)))[0]

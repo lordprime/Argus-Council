@@ -1,4 +1,4 @@
-import { Database, KeyRound, UserRound, Users, Webhook } from "lucide-react";
+import { Database, KeyRound, ToggleRight, UserRound, Users, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Page, PageHeader, SectionNav, type SectionLink } from "@/components/ui";
@@ -11,6 +11,7 @@ const LINKS: (SectionLink & { adminOnly?: boolean })[] = [
   { to: "/settings/webhooks", label: "Webhooks", icon: Webhook },
   { to: "/settings/data", label: "Data & privacy", icon: Database },
   { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
+  { to: "/settings/features", label: "Features", icon: ToggleRight, adminOnly: true },
 ];
 
 /** Sub-navigation shared by the settings pages. NavLink sets aria-current="page" on the active link. */

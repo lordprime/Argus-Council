@@ -72,7 +72,7 @@ See [Runs and Modes](concepts/runs.md) for the tools each mode uses.
 | Templates | `/templates` | Saved run set-ups with variables |
 | Connections | `/connections/providers`, `/mcp`, `/agents`, `/ledger` | Providers with key hint, health and a connection test; MCP servers; remote agents; ledger browser with verification |
 | Insights | `/insights`, `/insights/audit` | KPIs, spend by model, health, tool reliability, oversight, failures; the audit log with CSV export |
-| Settings | `/settings/profile`, `/api-keys`, `/webhooks`, `/data`, `/users` | Profile and appearance, API keys, webhooks, data and privacy, user management (admins) |
+| Settings | `/settings/profile`, `/api-keys`, `/webhooks`, `/data`, `/users`, `/features` | Profile and appearance, API keys, webhooks, data and privacy, user management and optional features (admins) |
 
 ## Roles
 

@@ -89,6 +89,7 @@ async def overview(principal: CurrentPrincipal, db: DbDep, request: Request, pro
 @router.put("/cli-agents/{cli}/key", response_model=CliKeyOut)
 async def set_key(cli: CliName, data: CliKeyIn, principal: CurrentPrincipal, db: DbDep, request: Request):
     svc = _svc(request)
+    svc.require_enabled()
     if not svc.allowed(cli):
         raise CLIAgentsDisabled(f"The {cli} CLI agent is disabled on this instance")
     row = await svc.set_key(db, principal.id, cli, data.api_key, data.provider)

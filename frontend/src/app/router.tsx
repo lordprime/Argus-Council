@@ -113,6 +113,7 @@ export const appRoutes: RouteObject[] = [
   { path: "settings/webhooks", element: page(() => import("@/routes/settings/Webhooks")), handle: trail(SETTINGS, { label: "Webhooks" }) },
   { path: "settings/data", element: page(() => import("@/routes/settings/Data")), handle: trail(SETTINGS, { label: "Data & privacy" }) },
   { path: "settings/users", element: page(() => import("@/routes/settings/Users")), handle: trail(SETTINGS, { label: "Users" }) },
+  { path: "settings/features", element: page(() => import("@/routes/settings/Features")), handle: trail(SETTINGS, { label: "Features" }) },
   { path: "*", element: page(() => import("@/routes/NotFound")), handle: trail({ label: "Page not found" }) },
 ];
 

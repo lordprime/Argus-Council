@@ -54,6 +54,7 @@ _SPECIAL = {
     "artifacts",
     "audit_events",
     "council_members",
+    "feature_switches",  # instance-wide admin settings, not a user's data
 }
 # cli_credentials is exported like provider_configs: which CLI has a key and its masked hint, never
 # the encrypted key (``_secret`` drops ``*_enc``). Vendor CLI logins live only in the runner volume

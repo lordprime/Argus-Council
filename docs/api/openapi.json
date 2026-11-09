@@ -743,6 +743,95 @@
         }
       }
     },
+    "/api/v1/admin/features": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Features",
+        "description": "The optional features (live browser, CLI agents): installed on the server, reachable, on or off.",
+        "operationId": "list_features_api_v1_admin_features_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeatureOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Features Api V1 Admin Features Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/features/{key}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Update Feature",
+        "description": "Turn an installed feature on or off for everyone, from its next use (runs in progress included).",
+        "operationId": "update_feature_api_v1_admin_features__key__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeaturePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/roles": {
       "get": {
         "tags": [
@@ -8700,6 +8789,97 @@
           "format"
         ],
         "title": "ExportIn"
+      },
+      "FeatureOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "browser",
+              "cli_agents"
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "installed": {
+            "type": "boolean",
+            "title": "Installed"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "reachable",
+              "unreachable",
+              "not_installed"
+            ],
+            "title": "Status"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "install_command": {
+            "type": "string",
+            "title": "Install Command"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "installed",
+          "status",
+          "enabled",
+          "active",
+          "install_command",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "FeatureOut"
+      },
+      "FeaturePatch": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "FeaturePatch"
       },
       "HTTPValidationError": {
         "properties": {

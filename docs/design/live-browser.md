@@ -327,9 +327,12 @@ the getting-started guide.
 
 The live browser shipped in 0.1.4 as designed, with these differences:
 
-- **Opt-in is two settings plus the profile.** `COMPOSE_PROFILES=browser`, `ARGUS_BROWSER_URL`
-  (`unix:/run/argus-browser/browser.sock`) and `ARGUS_BROWSER_TOKEN` (`deploy.sh` generates it).
-  Without `ARGUS_BROWSER_URL` the API has no `browse` tool.
+- **Opt-in is one command.** `./scripts/deploy.sh --with browser` adds `browser` to
+  `COMPOSE_PROFILES`, and the scripts fill `ARGUS_BROWSER_URL`
+  (`unix:/run/argus-browser/browser.sock`) and generate `ARGUS_BROWSER_TOKEN` from the profile.
+  Without `ARGUS_BROWSER_URL` the API has no `browse` tool. Once installed, an admin turns it off
+  and on in **Settings → Features**, without a restart (see
+  [Configuration](../configuration.md#optional-features)).
 - **agent-browser's `--allowed-domains` is not used.** The API checks the run's allowed domains on
   navigations (before `open`, and on the page after every action, with a corrective `back`).
 - **The action policy is default deny by agent-browser's wire names**, not a list of denied

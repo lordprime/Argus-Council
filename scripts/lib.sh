@@ -82,6 +82,39 @@ envval() {
   printf '%s' "${v:-$2}"
 }
 
+# set_envval KEY VALUE: set KEY to VALUE in deploy/.env, replacing its line(s), else appending one.
+# awk with the values from the environment: VALUE may hold any of / | & \ : that would break sed.
+set_envval() {
+  local tmp
+  [ -f "$ENV_FILE" ] || : >"$ENV_FILE"
+  tmp="$(mktemp "$ENV_FILE.XXXXXX")" || return 1
+  if K="$1" V="$2" awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"]; n = length(k) + 1 }
+    substr($0, 1, n) == (k "=") { print k "=" v; done = 1; next }
+    { print }
+    END { if (!done) print k "=" v }' "$ENV_FILE" >"$tmp"; then
+    mv -f "$tmp" "$ENV_FILE" # mktemp's mode is 0600, as deploy/.env should be
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# secret: 32 random bytes as hex, for passwords and tokens.
+secret() {
+  if command -v openssl >/dev/null; then openssl rand -hex 32
+  else python3 -c 'import secrets; print(secrets.token_hex(32))'; fi
+}
+
+# ensure_secret KEY: generate KEY in deploy/.env when it is empty or missing; never replaces one.
+ensure_secret() {
+  [ -z "$(envval "$1" '')" ] || return 0
+  local s
+  s="$(secret)" || s=""
+  [ -n "$s" ] || die "cannot generate $1 (needs openssl or python3)"
+  log "generating $1"
+  set_envval "$1" "$s"
+}
+
 # The scripts start local images, argus-council/<svc>:<version>: built from this checkout, or
 # pulled from a release and tagged so (build.sh --release). The compose file defaults to the
 # registry's names (ghcr.io/...), so point it at the local ones; the environment beats deploy/.env.
@@ -161,6 +194,61 @@ cli_agents_on() { profile_on cli-agents; }
 
 # browser_on: the opt-in live browser (browser and egress services) is part of this deployment.
 browser_on() { profile_on browser; }
+
+BROWSER_SOCKET_URL=unix:/run/argus-browser/browser.sock
+
+# sync_feature_env: derive the settings of the opt-in features from COMPOSE_PROFILES, so the
+# profile is the only server-side switch (deploy.sh --with/--without edits it; a hand edit counts
+# too). An installed feature gets what it needs, a URL or token already set is kept; a removed one
+# is turned off and its token left alone. Logs each change; running it again changes nothing.
+sync_feature_env() {
+  if browser_on; then
+    if [ -z "$(envval ARGUS_BROWSER_URL '')" ]; then
+      log "browser installed: setting ARGUS_BROWSER_URL=$BROWSER_SOCKET_URL"
+      set_envval ARGUS_BROWSER_URL "$BROWSER_SOCKET_URL"
+    fi
+    ensure_secret ARGUS_BROWSER_TOKEN
+  elif [ -n "$(envval ARGUS_BROWSER_URL '')" ]; then
+    log "browser not installed: clearing ARGUS_BROWSER_URL"
+    set_envval ARGUS_BROWSER_URL ""
+  fi
+  if cli_agents_on; then
+    if [ "$(envval ARGUS_CLI_AGENTS_ENABLED '')" != true ]; then
+      log "cli-agents installed: setting ARGUS_CLI_AGENTS_ENABLED=true"
+      set_envval ARGUS_CLI_AGENTS_ENABLED true
+    fi
+    ensure_secret ARGUS_RUNNER_TOKEN
+  elif [ "$(envval ARGUS_CLI_AGENTS_ENABLED false)" != false ]; then
+    # A missing line is already off: the compose file defaults it to false.
+    log "cli-agents not installed: setting ARGUS_CLI_AGENTS_ENABLED=false"
+    set_envval ARGUS_CLI_AGENTS_ENABLED false
+  fi
+}
+
+# remove_disabled_features: stop and remove the containers of an opt-in feature that is no longer
+# in COMPOSE_PROFILES. `up --remove-orphans` leaves them running (they are still services of the
+# compose file, only in an inactive profile), so they are named here with their profile enabled
+# for this one command. Volumes are kept (the runner's holds the users' CLI sign-ins), so
+# installing the feature again brings it back as it was. Best effort: never fails a deployment.
+remove_disabled_features() {
+  local profile svc svcs=() present=()
+  for profile in browser cli-agents; do
+    if profile_on "$profile"; then continue; fi
+    case "$profile" in
+      browser) svcs=(browser egress) ;;
+      cli-agents) svcs=(runner) ;;
+    esac
+    present=()
+    for svc in "${svcs[@]}"; do
+      if [ -n "$(dc --profile "$profile" ps -a -q "$svc" 2>/dev/null || true)" ]; then present+=("$svc"); fi
+    done
+    [ ${#present[@]} -gt 0 ] || continue
+    log "$profile is not installed: removing its containers (${present[*]}), keeping their volumes"
+    dc --profile "$profile" rm -s -f "${present[@]}" \
+      || warn "could not remove ${present[*]}; try: docker compose --profile $profile rm -s -f ${present[*]}"
+  done
+  return 0
+}
 
 # image_services: the services built from this repository: api (also runs the sandbox and the
 # browser's egress proxy), web, runner when CLI agents are enabled, and browser when the live

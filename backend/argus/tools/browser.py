@@ -14,6 +14,7 @@ import binascii
 import hashlib
 import re
 import time
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -24,6 +25,7 @@ from argus.browser.engine import MAX_PAGE_CHARS, cap_boundaries, unwrap_boundari
 from argus.browser.limits import DEFAULT_ACTION_TIMEOUT_S, client_timeouts
 from argus.core.logging import get_logger
 from argus.runtime.events import Actor
+from argus.services.features import BROWSER_OFF_MESSAGE
 from argus.tools.base import Tool, ToolCallContext, ToolResult
 from argus.tools.remote import record_call
 from argus.tools.web import (
@@ -89,8 +91,11 @@ class Browse(Tool):
         *,
         capture: bool = False,
         screenshots_per_member: int = 50,
+        enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.browser = browser
+        # The admin's in-app switch, asked on every call (None: always on).
+        self.enabled = enabled
         self.resolver = resolver or default_resolver
         self.capture = capture
         self.screenshots_per_member = screenshots_per_member
@@ -341,6 +346,8 @@ class Browse(Tool):
 
     # ------------------------------------------------------------------ the call
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
+        if self.enabled is not None and not self.enabled():
+            return ToolResult(BROWSER_OFF_MESSAGE, is_error=True, data={"refused": "feature_off"})
         action = args.action
         service_args: dict[str, Any] = {}
         target: str | None = None
@@ -430,7 +437,8 @@ class Browse(Tool):
         return ToolResult(text, data={"source": source["source_id"], "url": url, "peer": host})
 
 
-def browser_tools(settings: Any) -> list[Tool]:
+def browser_tools(settings: Any, *, enabled: Callable[[], bool] | None = None) -> list[Tool]:
+    """The browse tool when a browser service is configured; ``enabled`` is checked on every call."""
     url = getattr(settings, "browser_url", None)
     if not url:
         return []
@@ -443,5 +451,6 @@ def browser_tools(settings: Any) -> list[Tool]:
             RemoteBrowser(url, token, timeout_s=action_s, open_timeout_s=open_s),
             capture=bool(getattr(settings, "knowledge_capture_enabled", True)),
             screenshots_per_member=int(getattr(settings, "browser_screenshots_per_member", 50)),
+            enabled=enabled,
         )
     ]

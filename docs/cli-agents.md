@@ -130,12 +130,18 @@ counts toward the budget.
 
 Operators:
 
-1. In `deploy/.env` set `COMPOSE_PROFILES=cli-agents` and `ARGUS_CLI_AGENTS_ENABLED=true`
-   (`./scripts/deploy.sh` generates `ARGUS_RUNNER_TOKEN`). Optional:
-   `ARGUS_CLI_AGENTS_ALLOWED=claude,codex,gemini`, `ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false` for
-   API keys only, `ARGUS_CLI_AGENTS_TIMEOUT_S`, `ARGUS_RUNNER_HTTPS_PROXY`.
-2. Run `./scripts/deploy.sh` (or `./scripts/update.sh`). With the profile on, the `runner` image is
-   pulled with the release (or built, with `--local`), and update snapshots keep it for rollbacks.
+1. Optional, in `deploy/.env`: `ARGUS_CLI_AGENTS_ALLOWED=claude,codex,gemini`,
+   `ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false` for API keys only, `ARGUS_CLI_AGENTS_TIMEOUT_S`,
+   `ARGUS_RUNNER_HTTPS_PROXY`.
+2. Install it with `./scripts/deploy.sh --with cli-agents`. This adds `cli-agents` to
+   `COMPOSE_PROFILES`, sets `ARGUS_CLI_AGENTS_ENABLED=true` and generates `ARGUS_RUNNER_TOKEN`;
+   `update.sh` keeps them in step with the profile. The `runner` image is pulled with the release
+   (or built, with `--local`), and update snapshots keep it for rollbacks. An admin can then turn
+   CLI agents off and on in **Settings → Features**, without a restart: while off, a CLI seat's
+   turn is refused and its fallback route takes over, and sign-ins and keys are kept.
+   `./scripts/deploy.sh --without cli-agents` removes the runner container and keeps its volume
+   with users' sign-ins. See [Deployment](deployment.md#optional-features) and
+   [Configuration](configuration.md#optional-features).
 3. Users sign their own CLIs in from **Connections > CLI agents** (below). An operator can still
    sign a user's CLI in from the server, inside the runner, in that user's HOME:
 

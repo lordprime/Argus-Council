@@ -31,6 +31,7 @@ from argus.providers.cli.provider import CLI_PROVIDERS, SUGGESTED_MODELS, CLIPro
 from argus.providers.health import key_hint
 from argus.runner.clis import login_spec_for, plugin
 from argus.runner.specs import CLI_NAMES, LOGIN_COMMANDS, PLUGIN_CLIS
+from argus.services.features import CLI_OFF_MESSAGE
 
 log = get_logger(__name__)
 
@@ -104,8 +105,11 @@ class CLIAgents:
         settings: Settings,
         sessionmaker: async_sessionmaker | None,
         transport: RunnerTransport | None = None,
+        features: Any = None,
     ) -> None:
         self.settings = settings
+        # argus.services.features.FeatureSwitches: the admin's in-app switch (None: always on).
+        self.features = features
         self.sessionmaker = sessionmaker
         self.box = SecretBox(settings)
         self.transport: RunnerTransport | None = (
@@ -120,12 +124,23 @@ class CLIAgents:
     # ------------------------------------------------------------------ gate
     @property
     def enabled(self) -> bool:
-        return bool(self.settings.cli_agents_enabled and self.transport is not None)
+        return bool(self.settings.cli_agents_enabled and self.transport is not None and self._switched_on())
+
+    def _switched_on(self) -> bool:
+        return self.features is None or self.features.switch("cli_agents")
+
+    def _switched_off(self) -> bool:
+        """The server allows CLI agents but an admin turned them off in the app."""
+        return (
+            bool(self.settings.cli_agents_enabled and self.transport is not None) and not self._switched_on()
+        )
 
     def allowed(self, cli: str) -> bool:
         return self.enabled and cli in self.settings.cli_agents_allowed
 
     def require_enabled(self) -> None:
+        if self._switched_off():
+            raise CLIAgentsDisabled(CLI_OFF_MESSAGE)
         if not self.enabled:
             raise CLIAgentsDisabled("CLI agents are disabled on this instance (ARGUS_CLI_AGENTS_ENABLED)")
 
@@ -136,7 +151,8 @@ class CLIAgents:
             raise ValueError(f"not a CLI provider: {name}")
         if not self.allowed(cli):
             # Reported as "unavailable" so a seat's fallback route (e.g. the API-key provider) takes over.
-            raise CLIError(f"{name} is disabled on this instance", provider=name, category="unavailable")
+            message = CLI_OFF_MESSAGE if self._switched_off() else f"{name} is disabled on this instance"
+            raise CLIError(message, provider=name, category="unavailable")
         if owner_id is None:
             raise CLIError(f"{name} needs a signed-in user", provider=name, category="auth")
         key = (owner_id, cli)
@@ -157,6 +173,11 @@ class CLIAgents:
 
     async def credential(self, owner_id: uuid.UUID, cli: str) -> tuple[str | None, str | None]:
         """The user's API key for this CLI and, for harness CLIs, the provider it belongs to."""
+        # Asked on every CLI turn, before the runner is invoked: switching CLI agents off in the app
+        # reaches seats of runs already in progress (their providers are cached), and "unavailable"
+        # lets a seat's fallback route take over.
+        if not self._switched_on():
+            raise CLIError(CLI_OFF_MESSAGE, provider=f"{cli}-cli", category="unavailable")
         if self.sessionmaker is None:
             return None, None
         async with self.sessionmaker() as s:
@@ -310,6 +331,8 @@ class CLIAgents:
             )
         return {
             "enabled": self.enabled,
+            # The server allows CLI agents but an admin switched them off (Settings → Features).
+            "turned_off": self._switched_off(),
             "allow_subscription": self.allow_subscription,
             "runner_error": runner_error,
             "notice": POLICY_NOTICE,

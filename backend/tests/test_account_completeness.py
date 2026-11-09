@@ -46,6 +46,8 @@ NOW = datetime.now(UTC)
 
 # Tables exported with their own layout rather than as <table>.json.
 SPECIAL_LAYOUT = {"users", "runs", "run_events", "artifacts", "council_members"}
+# Instance-wide tables that belong to no user.
+NOT_USER_DATA = {"feature_switches"}
 
 
 async def _uid(client, headers) -> uuid.UUID:
@@ -189,7 +191,7 @@ async def test_export_covers_every_table_and_files_on_disk(app, client, auth):
 
     # Every table in the schema is either exported as <table>.json or has its own layout.
     for table in Base.metadata.tables:
-        if table in SPECIAL_LAYOUT:
+        if table in SPECIAL_LAYOUT or table in NOT_USER_DATA:
             continue
         assert f"{table}.json" in names, f"{table} missing from the export"
         assert orjson.loads(zf.read(f"{table}.json")), f"{table}.json is empty"

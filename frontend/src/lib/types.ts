@@ -244,6 +244,8 @@ export interface CliLoginState {
 
 export interface CliAgentsOverview {
   enabled: boolean;
+  /** The server allows CLI agents but an admin switched them off (Settings → Features). */
+  turned_off?: boolean;
   allow_subscription: boolean;
   runner_error: string | null;
   notice: string;
@@ -385,4 +387,27 @@ export interface LedgerEntry {
   hash: string;
   prev_hash: string;
   detail: Record<string, unknown>;
+}
+
+// ------------------------------------------------------------------ Feature switches (admin)
+// GET /api/v1/admin/features, PATCH /api/v1/admin/features/{key} (docs/superpowers/specs/2026-11-10-feature-switches-design.md).
+export type FeatureKey = "browser" | "cli_agents";
+/** Installed (server side, once) and reachable over its health check, installed but not answering, or not installed. */
+export type FeatureStatus = "reachable" | "unreachable" | "not_installed";
+
+export interface FeatureOut {
+  key: FeatureKey;
+  /** "Live browser" / "CLI agents". */
+  label: string;
+  installed: boolean;
+  status: FeatureStatus;
+  /** The stored in-app switch (on when never set). */
+  enabled: boolean;
+  /** Installed and enabled. */
+  active: boolean;
+  /** The command an operator runs on the server to install it, e.g. ./scripts/deploy.sh --with browser. */
+  install_command: string;
+  updated_at: string | null;
+  /** Email of the admin who last changed the switch. */
+  updated_by: string | null;
 }

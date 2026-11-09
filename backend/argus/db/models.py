@@ -587,3 +587,21 @@ class GraphEdge(IdMixin, TimestampMixin, Base):
     # supports | refutes | cites | derived_from | answers | mentions | about
     relation: Mapped[str] = mapped_column(String(24))
     author: Mapped[str] = mapped_column(String(120), default="")
+
+
+class FeatureSwitch(Base):
+    """An admin's in-app on/off switch for an optional feature (argus.services.features).
+
+    Instance-wide, not owned by anyone: no row means on (installing the feature is the opt-in).
+    """
+
+    __tablename__ = "feature_switches"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)  # "browser" | "cli_agents"
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

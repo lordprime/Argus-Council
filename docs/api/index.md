@@ -17,7 +17,7 @@ and the document at `/openapi.json`. In production both are switched off.
 | --- | --- | --- |
 | health | `/health` | Liveness and readiness |
 | auth | `/api/v1/auth` | Register, login, refresh, profile, API keys |
-| admin | `/api/v1/admin/users` | User management (admins) |
+| admin | `/api/v1/admin/users`, `/api/v1/admin/features` | User management; optional features: `GET` lists them, `PATCH /{key}` turns one on or off (admins) |
 | councils | `/api/v1/councils`, `/api/v1/roles` | Councils, seats, resizing, the role catalogue |
 | providers | `/api/v1/providers`, `/api/v1/llm/complete` | Provider connections, models, connection tests, a direct completion |
 | runs | `/api/v1/runs` | Runs, controls, interventions, approvals, events, snapshots, streaming, artifacts, exports |

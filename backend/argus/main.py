@@ -61,6 +61,7 @@ from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.audit import audit
 from argus.services.cli_agents import CLIAgents
+from argus.services.features import FeatureSwitches
 from argus.services.llm import LLMRouter
 from argus.services.retention import RetentionService
 from argus.services.runs import BlockingWaits
@@ -139,12 +140,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not hasattr(app.state, "llm"):
             app.state.llm = LLMRouter(settings, app.state.cache, sessionmaker=app.state.db.sessionmaker)
+        # Admin on/off switches for the optional features (live browser, CLI agents).
+        app.state.features = FeatureSwitches(settings, app.state.db.sessionmaker)
         if getattr(app.state.llm, "cli", None) is None:
-            app.state.llm.cli = CLIAgents(settings, app.state.db.sessionmaker)
+            app.state.llm.cli = CLIAgents(settings, app.state.db.sessionmaker, features=app.state.features)
         app.state.cli_agents = app.state.llm.cli
         if not settings.is_production:
             # Production schemas are managed by Alembic migrations.
             await app.state.db.create_all()
+        await app.state.features.refresh()
         await _bootstrap_admin(app, settings)
         # Pub/sub gets its own client: subscribers block on reads for minutes, which the cache
         # client's read timeout would cut off.
@@ -164,7 +168,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
         app.state.webhooks.start()  # resumes deliveries left in the outbox by a previous process
         app.state.runs = RunManager(
-            settings, app.state.db.sessionmaker, app.state.broker, app.state.llm, webhooks=app.state.webhooks
+            settings,
+            app.state.db.sessionmaker,
+            app.state.broker,
+            app.state.llm,
+            webhooks=app.state.webhooks,
+            features=app.state.features,
         )
         await app.state.runs.recover()
         APPROVALS_PENDING.set_function(functools.partial(_pending_approvals, app.state.runs))

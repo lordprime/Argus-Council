@@ -46,8 +46,7 @@ All notable changes to this project are documented here. The format follows
   - No sign-in when `ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false`.
   - `./scripts/agent-login.sh` remains for operators.
 - **Live browser.** Agents can browse the web read-only in a real browser, and you can watch each
-  agent's browser live in the run view. Opt in with the browser compose profile
-  (`COMPOSE_PROFILES=browser`, `ARGUS_BROWSER_URL`; `deploy.sh` generates `ARGUS_BROWSER_TOKEN`).
+  agent's browser live in the run view. Install it with `./scripts/deploy.sh --with browser`.
   The browser runs in its own container on an internal network, and its only way out is a new
   `egress` proxy that refuses private, loopback and link-local addresses. A new **Browser** view
   keeps a screenshot of each page opened (up to 50 per agent), and browser use is recorded in the
@@ -60,6 +59,16 @@ All notable changes to this project are documented here. The format follows
   the pages agents open. `ARGUS_BROWSER_LOG_LEVEL=DEBUG` logs the browser's per-page CDP trace.
 - **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
   tool calls made with it. Skill use is recorded in the ledger.
+- **Feature switches.** Install the live browser and CLI agents with one command,
+  `./scripts/deploy.sh --with browser,cli-agents`, and remove them with `--without` (containers
+  stopped and removed, volumes such as users' CLI sign-ins kept). Admins then turn each one on or
+  off in **Settings → Features**, at any time and without a restart; the switch is stored in the
+  database, on by default, and recorded in the audit log. The server settings stay the ceiling.
+  Switching a feature off applies from its next use, in running runs too: `browse` is refused, and
+  a CLI seat's turn is refused so its fallback route takes over. Each card shows whether the
+  feature is installed and its service answers, and the command to install it when it is not. New
+  admin endpoints `GET /api/v1/admin/features` and `PATCH /api/v1/admin/features/{key}`; a
+  migration adds the `feature_switches` table.
 
 ### Security
 
@@ -73,6 +82,10 @@ All notable changes to this project are documented here. The format follows
 - `scripts/deploy.sh` now deploys the published release by default (`ARGUS_VERSION` in
   `deploy/.env`, `latest` unless pinned) instead of building the checkout. Add `--local` to build
   and run the code you have checked out, as plain `deploy.sh` did before.
+- `deploy.sh` and `update.sh` now set `ARGUS_BROWSER_URL`, `ARGUS_BROWSER_TOKEN`,
+  `ARGUS_CLI_AGENTS_ENABLED` and `ARGUS_RUNNER_TOKEN` in `deploy/.env` from `COMPOSE_PROFILES`
+  and log each change: the compose profile is the only server-side switch. With
+  `COMPOSE_PROFILES` set in the environment, `--with` and `--without` refuse to run.
 
 ### Removed
 

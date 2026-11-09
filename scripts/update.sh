@@ -15,6 +15,9 @@
 # (alembic downgrade when there is no backup), and the previous images are started again.
 # --rollback downgrades the schema with the newer image; --restore-db loses data written since.
 # ARGUS_READY_TIMEOUT (default 240) is how many seconds the new version gets to become ready.
+# The opt-in features follow COMPOSE_PROFILES in deploy/.env, hand edits included: their settings
+# are filled or turned off first, and after a successful update the containers of a feature no
+# longer listed are removed (their volumes are kept).
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -30,7 +33,7 @@ while [ $# -gt 0 ]; do
     --images) build_args+=(--from-images "${2:?--images needs a tag}"); shift 2 ;;
     # The checkout's compose file and scripts are used as they are: no git pull.
     --release) build_args+=(--release "${2:?--release needs a version}"); pull=0; shift 2 ;;
-    -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -39,6 +42,7 @@ require_docker
 require_env
 lock_deploy
 current="$(current_version)"
+sync_feature_env
 
 # start VERSION SECONDS: start VERSION; fails if Compose has not finished within SECONDS.
 start() {
@@ -156,6 +160,7 @@ if dc stop api && migrate_db "$next" && start "$next" "$ready_timeout" && wait_h
   echo "$prev" >"$PREV_FILE"
   echo "$next" >"$VERSION_FILE"
   prune_snapshots
+  remove_disabled_features
   log "updated $current -> $next at $(web_url)"
   exit 0
 fi

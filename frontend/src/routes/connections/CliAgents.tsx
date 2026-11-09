@@ -154,8 +154,13 @@ export default function CliAgents() {
           <Card><ErrorState error={q.error} onRetry={() => void q.refetch()} /></Card>
         ) : !data?.enabled ? (
           <Card>
-            <EmptyState icon={UserCheck} title="CLI agents are off on this instance"
-              body="An operator turns them on with ARGUS_CLI_AGENTS_ENABLED=true and the cli-agents compose profile (see docs/cli-agents.md)." />
+            {data?.turned_off ? (
+              <EmptyState icon={UserCheck} title="CLI agents are turned off"
+                body="An admin turned CLI agents off in Settings → Features. Your sign-ins and API keys are kept for when they are turned back on." />
+            ) : (
+              <EmptyState icon={UserCheck} title="CLI agents are off on this instance"
+                body="An operator installs them on the server with ./scripts/deploy.sh --with cli-agents (see docs/cli-agents.md)." />
+            )}
           </Card>
         ) : (
           <>

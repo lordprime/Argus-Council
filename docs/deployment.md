@@ -31,6 +31,8 @@ flowchart TB
 ./scripts/deploy.sh --no-build  # start the images already on this host (see build.sh)
 ./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
 ./scripts/deploy.sh --ca FILE   # with --local: trust an extra CA while building
+./scripts/deploy.sh --with browser,cli-agents  # install optional features (see below)
+./scripts/deploy.sh --without browser          # remove one; its volumes are kept
 ```
 
 By default `deploy.sh` runs a published release: it pulls the images for `ARGUS_VERSION` in
@@ -48,14 +50,52 @@ secret (`ARGUS_SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `ARGUS_SANDBO
 until the web container answers and the API reports ready through it, then records the running
 version in `deploy/.version`.
 
+### Optional features
+
+The live browser (`browser`) and [CLI agents](cli-agents.md) (`cli-agents`) are not installed by
+default. Install them with `--with` and remove them with `--without`. Both take a comma-separated
+list and can be repeated:
+
+```bash
+./scripts/deploy.sh --with browser,cli-agents   # install both
+./scripts/deploy.sh --with browser              # install the live browser only
+./scripts/deploy.sh --without cli-agents        # remove CLI agents
+```
+
+`--with` and `--without` add or remove the names in `COMPOSE_PROFILES` in `deploy/.env`, keeping
+any other profiles, then deploy as usual. Any other name is refused.
+
+The compose profile is the only server-side switch. On every run, `deploy.sh` and `update.sh` fill
+in the matching settings from `COMPOSE_PROFILES` and log each change they make, so a hand edit of
+`COMPOSE_PROFILES` works too:
+
+| Profile | On | Off |
+| --- | --- | --- |
+| `browser` | `ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock` if empty; `ARGUS_BROWSER_TOKEN` generated if empty | `ARGUS_BROWSER_URL=` (empty) |
+| `cli-agents` | `ARGUS_CLI_AGENTS_ENABLED=true`; `ARGUS_RUNNER_TOKEN` generated if empty | `ARGUS_CLI_AGENTS_ENABLED=false` |
+
+The tokens of a feature that is off are left alone. You no longer set these settings by hand.
+
+Removing a feature stops and removes its containers (`browser` and `egress`, or `runner`) once the
+rest of the stack is up. Their volumes are kept, including users' CLI sign-ins in the runner, so
+`--with` brings the feature back as it was.
+
+`COMPOSE_PROFILES` set in the environment overrides `deploy/.env`, so `--with` and `--without`
+would have no effect: the script refuses to run and says so. Unset it in the environment, or change
+it there instead.
+
+Installing is a server step: the web app has no Docker access. Once a feature is installed, an
+admin turns it on or off in **Settings → Features**, at any time and without a restart; see
+[Configuration](configuration.md#optional-features). For a feature that is not installed, that
+page shows the command to run on the server.
+
 ### The live browser
 
-The live browser (the `browse` tool and the run's Browser view) is opt-in. In `deploy/.env` add
-`browser` to `COMPOSE_PROFILES` (alongside any others, e.g. `COMPOSE_PROFILES=cli-agents,browser`),
-set `ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock`, and run `deploy.sh` again; it fills
-`ARGUS_BROWSER_TOKEN`. Without `ARGUS_BROWSER_URL` the API has no `browse` tool and agents keep
-using `web_fetch`, even if the containers run. See [Configuration](configuration.md#live-browser)
-for the settings and [Security](security-overview.md#the-live-browser) for what it can and cannot do.
+The live browser (the `browse` tool and the run's Browser view) is installed with
+`./scripts/deploy.sh --with browser` ([above](#optional-features)). Without `ARGUS_BROWSER_URL` the
+API has no `browse` tool and agents keep using `web_fetch`, even if the containers run. See
+[Configuration](configuration.md#live-browser) for the settings and
+[Security](security-overview.md#the-live-browser) for what it can and cannot do.
 
 * **Two containers.** `browser` (Chrome and agent-browser, behind a token) and `egress` (the proxy
   that is its only way out). The default `docker compose up` does not start them.

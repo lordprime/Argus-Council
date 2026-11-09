@@ -5,6 +5,7 @@
 #   images     $STUB_STATE/tags/<repo:tag> holds an image id; $STUB_STATE/ids/<id> its properties
 #              (head = the newest migration the image knows, healthy = 1 or 0).
 #   database   $STUB_STATE/db/{rev,data}; rev is a number, 0 shown as "base".
+#   containers $STUB_STATE/ct/<service> holds the image id a service's container runs.
 #   api        starting it runs the entrypoint: a database ahead of the image crash-loops (Alembic
 #              cannot locate the revision), otherwise it migrates to the image's head.
 #
@@ -52,7 +53,7 @@ start_api() { # run the entrypoint of the image ARGUS_VERSION names
 
 compose() {
   while [ $# -gt 0 ]; do
-    case "$1" in -f | --env-file) shift 2 ;; *) break ;; esac
+    case "$1" in -f | --env-file | --profile) shift 2 ;; *) break ;; esac
   done
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -77,6 +78,10 @@ compose() {
       if [ ${#svcs[@]} -eq 0 ] || printf '%s\n' "${svcs[@]}" | grep -qx api; then start_api; fi ;;
     stop)
       if printf '%s\n' "$@" | grep -qx api; then echo stopped >"$S/ct/api.status"; fi ;;
+    rm)
+      # rm [-s] [-f] SERVICE...: the containers go, volumes (not modelled) stay.
+      local a
+      for a in "$@"; do case "$a" in -*) ;; *) rm -f "$S/ct/$a" "$S/ct/$a.status" ;; esac; done ;;
     exec)
       [ "${1:-}" = -T ] && shift
       [ "$1" = postgres ] || fail "exec only supports postgres"

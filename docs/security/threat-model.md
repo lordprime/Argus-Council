@@ -222,6 +222,8 @@ A page an agent opens in the live browser (`browse`, opt-in) steers the agent wi
 - On Docker engines older than 26, the embedded DNS resolver can forward queries from internal networks, a DNS exfiltration channel for a compromised renderer. Use Docker 26 or newer.
 - Page text reaches models and can steer them.
 
+Admins can switch the browser off at runtime in **Settings → Features** (no restart; the next `browse` call in a running run is refused), and the Features page shows the `--no-sandbox` residual risk above next to the switch.
+
 **Evidence:**
 
 - [code] `backend/argus/egress/proxy.py` — resolve once, refuse non-public addresses, pin, ports 80/443

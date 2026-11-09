@@ -100,8 +100,9 @@ services:
       ARGUS_SEARCH_PROVIDER: ${ARGUS_SEARCH_PROVIDER:-}
       ARGUS_SEARCH_API_KEY: ${ARGUS_SEARCH_API_KEY:-}
       ARGUS_SEARXNG_URL: ${ARGUS_SEARXNG_URL:-}
-      # CLI agents (vendor CLIs in the runner service). Off by default; to opt in set
-      # ARGUS_CLI_AGENTS_ENABLED=true, ARGUS_RUNNER_TOKEN and COMPOSE_PROFILES=cli-agents.
+      # CLI agents (vendor CLIs in the runner service). Off by default; install with
+      # ./scripts/deploy.sh --with cli-agents, which adds the profile to COMPOSE_PROFILES and fills
+      # ARGUS_CLI_AGENTS_ENABLED and ARGUS_RUNNER_TOKEN from it. On/off: Settings -> Features.
       ARGUS_CLI_AGENTS_ENABLED: ${ARGUS_CLI_AGENTS_ENABLED:-false}
       ARGUS_CLI_AGENTS_ALLOWED: ${ARGUS_CLI_AGENTS_ALLOWED:-claude,codex,gemini}
       ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION: ${ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION:-true}
@@ -109,8 +110,9 @@ services:
       # Unix socket on a shared volume, like the sandbox: the API needs no network route to the runner.
       ARGUS_RUNNER_URL: unix:/run/argus-runner/runner.sock
       ARGUS_RUNNER_TOKEN: ${ARGUS_RUNNER_TOKEN:-}
-      # Live browser (the browse tool). Off unless set; to opt in set COMPOSE_PROFILES=browser and
-      # ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock (deploy.sh fills ARGUS_BROWSER_TOKEN).
+      # Live browser (the browse tool). Off unless set; install with ./scripts/deploy.sh --with
+      # browser, which adds the profile to COMPOSE_PROFILES and fills ARGUS_BROWSER_URL
+      # (unix:/run/argus-browser/browser.sock) and ARGUS_BROWSER_TOKEN. On/off: Settings -> Features.
       # A Unix socket on a shared volume again: the browser has no network route to the API.
       ARGUS_BROWSER_URL: ${ARGUS_BROWSER_URL:-}
       ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
@@ -192,7 +194,8 @@ services:
         limits: { cpus: "2", memory: 2g, pids: 256 }
 
   # Agent runner: the vendors' official CLIs (claude, codex, gemini) as council agents. Opt-in:
-  # COMPOSE_PROFILES=cli-agents plus ARGUS_CLI_AGENTS_ENABLED=true and ARGUS_RUNNER_TOKEN.
+  # ./scripts/deploy.sh --with cli-agents (the cli-agents profile; the scripts fill
+  # ARGUS_CLI_AGENTS_ENABLED and ARGUS_RUNNER_TOKEN). --without removes it and keeps runnerhomes.
   # Sign a user's CLI in with ./scripts/agent-login.sh <email> <claude|codex|gemini>.
   runner:
     <<: *hardening
@@ -225,7 +228,8 @@ services:
         limits: { cpus: "2", memory: 4g, pids: 512 }
 
   # Live browser: read-only browsing sessions for council agents (agent-browser and Chrome for
-  # Testing). Opt-in: COMPOSE_PROFILES=browser plus ARGUS_BROWSER_URL (see the api service).
+  # Testing). Opt-in: ./scripts/deploy.sh --with browser (the browser profile, with egress below;
+  # the scripts fill ARGUS_BROWSER_URL and ARGUS_BROWSER_TOKEN, see the api service).
   browser:
     <<: *hardening
     profiles: ["browser"]

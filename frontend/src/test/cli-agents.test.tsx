@@ -60,6 +60,16 @@ describe("Connections > CLI agents", () => {
     expect(screen.getByRole("link", { name: "CLI agents" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("says an admin turned CLI agents off when the switch is off", async () => {
+    mockFetch((url) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, enabled: false, turned_off: true, clis: ENABLED.clis.map((c) => ({ ...c, enabled: false })) });
+      return undefined;
+    });
+    renderAt("/connections/cli-agents", <CliAgents />);
+    expect(await screen.findByText("CLI agents are turned off")).toBeInTheDocument();
+    expect(screen.getByText(/An admin turned CLI agents off in Settings → Features/)).toBeInTheDocument();
+  });
+
   it("shows status, login steps and write-only keys per CLI, and saves a key to the user's own endpoint", async () => {
     const fetchMock = mockFetch((url, init) => {
       if (url === "/api/v1/cli-agents") return json(ENABLED);

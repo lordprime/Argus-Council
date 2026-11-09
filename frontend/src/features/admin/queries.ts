@@ -1,9 +1,9 @@
-// Admin-only user management (backend/argus/api/v1/admin.py).
+// Admin-only user management and feature switches (backend/argus/api/v1/admin.py).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, V1 } from "@/lib/api";
-import type { User } from "@/lib/types";
+import type { FeatureKey, FeatureOut, User } from "@/lib/types";
 import { useSession } from "@/stores/session";
 
 export type Role = "admin" | "member" | "viewer";
@@ -40,7 +40,7 @@ export function useIsAdmin() {
   return isAdminUser(useSession((s) => s.user) as SessionUser | null);
 }
 
-export const adminKeys = { users: ["admin", "users"] as const };
+export const adminKeys = { users: ["admin", "users"] as const, features: ["admin", "features"] as const };
 
 export const useAdminUsers = (enabled = true) =>
   useQuery({
@@ -56,5 +56,19 @@ export function useUpdateAdminUser() {
     mutationFn: ({ id, patch }: { id: string; patch: AdminUserPatch }) =>
       api.patch<AdminUser>(`${V1}/admin/users/${encodeURIComponent(id)}`, patch),
     onSuccess: (u) => qc.setQueryData<AdminUser[]>(adminKeys.users, (list) => list?.map((x) => (x.id === u.id ? { ...x, ...u } : x))),
+  });
+}
+
+/** Installed features and their in-app switches (always both keys, browser first). */
+export const useAdminFeatures = (enabled = true) =>
+  useQuery({ queryKey: adminKeys.features, queryFn: () => api.get<FeatureOut[]>(`${V1}/admin/features`), enabled });
+
+/** Turn a feature on or off. 409 when enabling a feature that is not installed on the server. */
+export function useSetFeature() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, enabled }: { key: FeatureKey; enabled: boolean }) =>
+      api.patch<FeatureOut>(`${V1}/admin/features/${encodeURIComponent(key)}`, { enabled }),
+    onSuccess: (f) => qc.setQueryData<FeatureOut[]>(adminKeys.features, (list) => list?.map((x) => (x.key === f.key ? f : x))),
   });
 }

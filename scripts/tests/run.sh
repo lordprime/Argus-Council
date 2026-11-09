@@ -728,6 +728,153 @@ if begin deploy_refuses_conflicting_options; then
   end
 fi
 
+# ---------------------------------------------------------------- feature switches (--with/--without)
+
+env_of() { grep -E "^$1=" "$R/deploy/.env" | tail -n1 | cut -d= -f2-; } # a value in deploy/.env
+env_lines() { grep -cE "^$1=" "$R/deploy/.env"; }
+in_lib() { (cd "$R" && PATH="$HERE/stubs:$PATH" bash -c "source scripts/lib.sh; $1"); }
+# features_running: the browser, egress and runner containers exist, with their settings filled.
+features_running() {
+  printf '%s\n' COMPOSE_PROFILES=custom,browser,cli-agents ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock \
+    ARGUS_BROWSER_TOKEN=browser-token ARGUS_CLI_AGENTS_ENABLED=true ARGUS_RUNNER_TOKEN=runner-token >>"$R/deploy/.env"
+  local svc
+  for svc in browser egress runner; do echo "sha256:v1-$svc" >"$STUB_STATE/ct/$svc"; done
+}
+
+if begin deploy_with_installs_features_and_fills_their_settings; then
+  export STUB_BUILD_HEAD=2
+  echo COMPOSE_PROFILES=custom >>"$R/deploy/.env"
+  check "deploy.sh --with succeeds" ok run deploy.sh --release 0.1.4 --with browser --with cli-agents,browser
+  check "the profiles are added after the others, once each" eq "$(env_of COMPOSE_PROFILES)" custom,browser,cli-agents
+  check "one COMPOSE_PROFILES line" eq "$(env_lines COMPOSE_PROFILES)" 1
+  check "the browser URL is filled" eq "$(env_of ARGUS_BROWSER_URL)" unix:/run/argus-browser/browser.sock
+  token="$(env_of ARGUS_BROWSER_TOKEN)"; check "a browser token" eq "${#token}" 64
+  check "CLI agents are enabled" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" true
+  token="$(env_of ARGUS_RUNNER_TOKEN)"; check "a runner token" eq "${#token}" 64
+  check "the browser image was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/browser:0.1.4"
+  check "the runner image was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/runner:0.1.4"
+  check "nothing was removed" lacks "$STUB_STATE/calls.log" "rm -s -f"
+  check "the change is logged" contains "$T/out" "COMPOSE_PROFILES=custom,browser,cli-agents (was custom)"
+  check "deploy/.env stays private" eq "$(stat -c %a "$R/deploy/.env")" 600
+  end
+fi
+
+if begin deploy_without_removes_features_and_their_containers; then
+  export STUB_BUILD_HEAD=2
+  features_running
+  check "deploy.sh --without browser succeeds" ok run deploy.sh --release 0.1.4 --without browser
+  check "browser is dropped, the rest kept in order" eq "$(env_of COMPOSE_PROFILES)" custom,cli-agents
+  check "the browser URL is cleared" eq "$(env_of ARGUS_BROWSER_URL)" ""
+  check "its token is kept" eq "$(env_of ARGUS_BROWSER_TOKEN)" browser-token
+  check "browser and egress were removed together" contains "$STUB_STATE/calls.log" "--profile browser rm -s -f browser egress"
+  check "the browser container is gone" fails test -e "$STUB_STATE/ct/browser"
+  check "the egress container is gone" fails test -e "$STUB_STATE/ct/egress"
+  check "the runner still runs" test -e "$STUB_STATE/ct/runner"
+  check "CLI agents stay enabled" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" true
+  check "the update itself went through" eq "$(cat "$R/deploy/.version")" 0.1.4
+  check "deploy.sh --without cli-agents succeeds" ok run deploy.sh --release 0.1.4 --without cli-agents
+  check "only the other profile is left" eq "$(env_of COMPOSE_PROFILES)" custom
+  check "CLI agents are disabled" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" false
+  check "the runner token (and sign-ins) are kept" eq "$(env_of ARGUS_RUNNER_TOKEN)" runner-token
+  check "the runner was removed" contains "$STUB_STATE/calls.log" "--profile cli-agents rm -s -f runner"
+  check "its container is gone" fails test -e "$STUB_STATE/ct/runner"
+  check "no volume was removed" lacks "$STUB_STATE/calls.log" "volume rm"
+  check "nor with rm -v" lacks "$STUB_STATE/calls.log" "rm -s -f -v"
+  check "browser and egress were removed only once" eq "$(grep -c 'rm -s -f browser' "$STUB_STATE/calls.log")" 1
+  end
+fi
+
+if begin deploy_fresh_install_with_features; then
+  rm -f "$R/deploy/.version" "$R/deploy/.env" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
+  cp "$REPO/deploy/.env.example" "$R/deploy/"
+  echo 0 >"$STUB_STATE/db/rev"
+  export STUB_BUILD_HEAD=3
+  check "deploy.sh --with succeeds on a fresh host" ok run deploy.sh --release 0.1.4 --with cli-agents
+  check "the profile is set" eq "$(env_of COMPOSE_PROFILES)" cli-agents
+  check "CLI agents are enabled" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" true
+  check "the browser stays off" eq "$(env_of ARGUS_BROWSER_URL)" ""
+  check "one line per setting" eq "$(env_lines ARGUS_CLI_AGENTS_ENABLED):$(env_lines ARGUS_RUNNER_TOKEN)" 1:1
+  check "the version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
+  end
+fi
+
+if begin deploy_refuses_bad_feature_options; then
+  cp "$R/deploy/.env" "$T/env-before"
+  check "an unknown feature is refused" fails run deploy.sh --with browser,chrome
+  check "with a clear error" contains "$T/out" "unknown feature: chrome"
+  check "a missing list is refused" fails run deploy.sh --with
+  check "a feature in both lists is refused" fails run deploy.sh --with browser --without browser,cli-agents
+  check "with a clear error" contains "$T/out" "browser is in both --with and --without"
+  export COMPOSE_PROFILES=cli-agents
+  check "COMPOSE_PROFILES in the environment is refused with --with" fails run deploy.sh --with browser
+  check "with a clear error" contains "$T/out" "COMPOSE_PROFILES is set in the environment ('cli-agents')"
+  check "and with --without" fails run deploy.sh --without cli-agents
+  unset COMPOSE_PROFILES
+  check "deploy/.env is untouched" ok cmp -s "$T/env-before" "$R/deploy/.env"
+  check "docker was never called" fails test -e "$STUB_STATE/calls.log"
+  check "nothing changed" eq "$(cat "$R/deploy/.version")" v1
+  end
+fi
+
+if begin sync_feature_env_is_idempotent_and_keeps_tokens; then
+  printf '%s\n' COMPOSE_PROFILES=browser,cli-agents ARGUS_BROWSER_TOKEN=keep-me ARGUS_CLI_AGENTS_ENABLED=false \
+    ARGUS_BROWSER_URL= >>"$R/deploy/.env"
+  in_lib sync_feature_env >"$T/out" 2>&1
+  check "the browser URL is filled" eq "$(env_of ARGUS_BROWSER_URL)" unix:/run/argus-browser/browser.sock
+  check "one ARGUS_BROWSER_URL line" eq "$(env_lines ARGUS_BROWSER_URL)" 1
+  check "the existing browser token is kept" eq "$(env_of ARGUS_BROWSER_TOKEN)" keep-me
+  check "CLI agents flipped to true" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" true
+  token="$(env_of ARGUS_RUNNER_TOKEN)"; check "a runner token was appended" eq "${#token}" 64
+  check "each change is logged" contains "$T/out" "setting ARGUS_CLI_AGENTS_ENABLED=true"
+  cp "$R/deploy/.env" "$T/env-once"
+  in_lib sync_feature_env >"$T/out" 2>&1
+  check "a second run changes nothing" ok cmp -s "$T/env-once" "$R/deploy/.env"
+  check "and logs nothing" eq "$(wc -c <"$T/out" | tr -d ' ')" 0
+  sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=/' "$R/deploy/.env"
+  sed -i '/^ARGUS_RUNNER_TOKEN=/d' "$R/deploy/.env"
+  in_lib sync_feature_env >"$T/out" 2>&1
+  check "off: the browser URL is cleared" eq "$(env_of ARGUS_BROWSER_URL)" ""
+  check "off: CLI agents disabled" eq "$(env_of ARGUS_CLI_AGENTS_ENABLED)" false
+  check "off: the browser token is untouched" eq "$(env_of ARGUS_BROWSER_TOKEN)" keep-me
+  check "off: no runner token is generated" eq "$(env_lines ARGUS_RUNNER_TOKEN)" 0
+  in_lib 'set_envval ODD "a|b&c\\d/e:f=g"; set_envval NEW x'
+  check "set_envval keeps / | & \\ : = as they are" eq "$(env_of ODD)" 'a|b&c\d/e:f=g'
+  check "set_envval appends a missing key" eq "$(env_of NEW)" x
+  check "set_envval leaves other lines alone" eq "$(env_of ARGUS_SECRET_KEY)" x
+  check "and no temp file behind" eq "$(find "$R/deploy" -name '.env.*' | wc -l | tr -d ' ')" 0
+  end
+fi
+
+if begin update_honours_hand_edited_profiles; then
+  export STUB_BUILD_HEAD=2
+  echo COMPOSE_PROFILES=browser >>"$R/deploy/.env"
+  check "update.sh succeeds" ok run update.sh --no-pull
+  check "the browser URL is filled" eq "$(env_of ARGUS_BROWSER_URL)" unix:/run/argus-browser/browser.sock
+  token="$(env_of ARGUS_BROWSER_TOKEN)"; check "a browser token was generated" eq "${#token}" 64
+  check "the browser image was built" test -f "$STUB_STATE/tags/argus-council_browser_$(cat "$R/deploy/.built-version")"
+  check "no runner token for CLI agents that are off" eq "$(env_lines ARGUS_RUNNER_TOKEN)" 0
+  check "nothing to remove: no rm" lacks "$STUB_STATE/calls.log" "rm -s -f"
+  for svc in browser egress; do echo "sha256:v1-$svc" >"$STUB_STATE/ct/$svc"; done
+  sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=/' "$R/deploy/.env"
+  check "update.sh succeeds again" ok run update.sh --no-pull
+  check "the browser URL is cleared" eq "$(env_of ARGUS_BROWSER_URL)" ""
+  check "the token is kept" eq "$(env_of ARGUS_BROWSER_TOKEN)" "$token"
+  check "browser and egress were removed" contains "$STUB_STATE/calls.log" "rm -s -f browser egress"
+  check "the browser container is gone" fails test -e "$STUB_STATE/ct/browser"
+  check "the egress container is gone" fails test -e "$STUB_STATE/ct/egress"
+  end
+fi
+
+if begin failed_update_keeps_the_containers_of_a_removed_feature; then
+  export STUB_BUILD_HEAD=2 STUB_BUILD_HEALTHY=0
+  features_running
+  sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=custom/' "$R/deploy/.env"
+  check "update.sh fails and rolls back" fails run update.sh --no-pull
+  check "nothing was removed" lacks "$STUB_STATE/calls.log" "rm -s -f"
+  check "the browser container is still there" test -e "$STUB_STATE/ct/browser"
+  end
+fi
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then

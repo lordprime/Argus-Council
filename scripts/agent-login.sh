@@ -9,7 +9,7 @@
 # volume, so the login is stored there and only that user's council seats can use it. Argus never
 # sees, reads or copies the vendor token. Each vendor's terms govern its CLI: subscription logins
 # are for the account owner's own use; on a shared instance use API keys (Connections > CLI agents).
-# Needs CLI agents enabled (COMPOSE_PROFILES=cli-agents, ARGUS_CLI_AGENTS_ENABLED=true).
+# Needs CLI agents installed (./scripts/deploy.sh --with cli-agents).
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -39,7 +39,7 @@ esac
 
 require_docker
 require_env
-cli_agents_on || die "CLI agents are not enabled: set COMPOSE_PROFILES=cli-agents and ARGUS_CLI_AGENTS_ENABLED=true in deploy/.env, then ./scripts/deploy.sh"
+cli_agents_on || die "CLI agents are not enabled: install them with ./scripts/deploy.sh --with cli-agents"
 
 uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 if [[ "$who" =~ $uuid_re ]]; then
