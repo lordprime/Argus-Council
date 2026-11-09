@@ -24,15 +24,12 @@ import secrets
 import shlex
 import shutil
 import signal
-import socket
 import tempfile
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
-
-import httpx
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +51,17 @@ DOCUMENT_PATTERNS = [{"resourceType": "Document", "requestStage": "Request"}]
 SAFE_DOCUMENT_METHODS = frozenset({"GET", "HEAD"})
 _AUTO_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
 _GUARDED_TARGETS = frozenset({"page", "iframe"})
+# A service worker can answer a navigation itself (and pass a form POST through); pages bypass
+# service workers, and the workers' own document requests are held to GET/HEAD as well.
+_GUARDED_WORKERS = frozenset({"service_worker", "shared_worker"})
+# The only Chrome flags an operator may add (the container needs some of them). Anything else
+# could take Chrome off the proxy or loosen the debugging port, so it is refused at startup.
+ALLOWED_CHROME_EXTRA_ARGS = frozenset(
+    {"--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-software-rasterizer"}
+)
+# What Chrome and agent-browser inherit: never the service token or the rest of our environment.
+_CHILD_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+_CHILD_ENV_PREFIX = "AGENT_BROWSER_"
 
 _REF = re.compile(r"^@?(e\d{1,6})$")
 _TAB_ID = re.compile(r"^t(\d{1,6})$")
@@ -152,23 +160,45 @@ def action_policy_json() -> str:
     return json.dumps({"default": "allow", "deny": list(_POLICY_DENY)})
 
 
+def check_chrome_extra_args(extra: Sequence[str]) -> tuple[str, ...]:
+    """Operator Chrome flags, each one exactly from :data:`ALLOWED_CHROME_EXTRA_ARGS`."""
+    refused = [arg for arg in extra if arg not in ALLOWED_CHROME_EXTRA_ARGS]
+    if refused:
+        raise ValueError(
+            "ARGUS_BROWSER_CHROME_EXTRA_ARGS may only contain "
+            f"{', '.join(sorted(ALLOWED_CHROME_EXTRA_ARGS))}; refusing {', '.join(refused)}"
+        )
+    return tuple(extra)
+
+
+def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """A minimal environment for Chrome and agent-browser (no service token, no API settings)."""
+    environ = dict(os.environ if environ is None else environ)
+    env = {k: environ[k] for k in _CHILD_ENV_KEYS if k in environ}
+    env.update({k: v for k, v in environ.items() if k.startswith(_CHILD_ENV_PREFIX)})
+    return env
+
+
 def chrome_argv(
     chrome: str,
     *,
-    port: int,
     proxy: str,
     user_data_dir: str,
     viewport: tuple[int, int],
     extra: Sequence[str] = (),
 ) -> list[str]:
-    """Chrome launch flags. Operator ``extra`` flags come first so the confinement flags win."""
+    """Chrome launch flags. Only allowlisted operator flags are accepted.
+
+    The debugging port is ``0``: Chrome picks a free one and writes it to ``DevToolsActivePort``
+    in this session's own profile, so the service never attaches to another session's browser.
+    """
     width, height = viewport
     return [
         chrome,
-        *extra,
+        *check_chrome_extra_args(extra),
         "--headless=new",
         "--remote-debugging-address=127.0.0.1",
-        f"--remote-debugging-port={port}",
+        "--remote-debugging-port=0",
         f"--proxy-server={proxy}",
         # Chrome bypasses the proxy for loopback by default; this removes that implicit rule.
         "--proxy-bypass-list=<-loopback>",
@@ -257,16 +287,36 @@ def parse_cli_output(stdout: bytes, stderr: bytes = b"", returncode: int | None 
     return CliReply(ok=ok, data=payload.get("data"), error=error, boundary=boundary)
 
 
-def wrap_boundaries(text: str, boundary: dict[str, Any] | None, *, origin: str) -> str:
-    """Put page text inside agent-browser's content boundary markers, unless it already is.
-
-    In ``--json`` mode agent-browser reports the boundary as metadata rather than markers, so the
-    markers are added here with its nonce (or a fresh one) before the text leaves the service.
-    """
-    if not text or _BOUNDARY_START in text:
+def _strip_cli_markers(text: str, nonce: str | None) -> str:
+    """Remove agent-browser's own marker pair, only when it is exactly the first and last line
+    and carries the nonce the CLI reported (in its metadata, which the page cannot write)."""
+    if not nonce:
         return text
-    nonce = str((boundary or {}).get("nonce") or secrets.token_hex(8))
-    origin = str((boundary or {}).get("origin") or origin)
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return text
+    first, last = lines[0].strip(), lines[-1].strip()
+    if (
+        first.startswith(f"--- {_BOUNDARY_START} nonce={nonce} ")
+        and first.endswith(" ---")
+        and last == f"--- END_{_BOUNDARY_START} nonce={nonce} ---"
+    ):
+        return "\n".join(lines[1:-1])
+    return text
+
+
+def wrap_boundaries(text: str, boundary: dict[str, Any] | None, *, origin: str) -> str:
+    """Put page text inside content boundary markers carrying a fresh, service-owned nonce.
+
+    Always wraps, whatever the text contains: page text that imitates a marker (or forges an END
+    line) stays inside, because only the service knows the nonce of the real END line.
+    """
+    if not text:
+        return text
+    cli_nonce = (boundary or {}).get("nonce")
+    text = _strip_cli_markers(text, cli_nonce if isinstance(cli_nonce, str) else None)
+    nonce = secrets.token_hex(16)
+    origin = re.sub(r"\s+", "", origin or str((boundary or {}).get("origin") or ""))[:200]
     return (
         f"--- {_BOUNDARY_START} nonce={nonce} origin={origin} ---\n"
         f"{text}\n"
@@ -290,13 +340,32 @@ def parse_tab_ids(data: Any) -> list[str]:
     return [tab_id for _, tab_id in sorted(ids)]
 
 
+_DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[A-Za-z0-9-]{1,64}$")
+
+
+def parse_devtools_active_port(text: str) -> tuple[int, str] | None:
+    """``(port, browser websocket path)`` from Chrome's ``DevToolsActivePort`` file, if complete."""
+    lines = text.splitlines()
+    if len(lines) < 2 or not lines[0].strip().isdigit():
+        return None
+    port, path = int(lines[0].strip()), lines[1].strip()
+    if not 0 < port < 65536 or not _DEVTOOLS_PATH.match(path):
+        return None
+    return port, path
+
+
 def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], str | None]]:
     """CDP commands ``(method, params, session_id)`` the guard sends in answer to one event.
 
-    - A page (or out-of-process iframe) attaches paused: intercept its document requests, ask to
-      attach its own children the same way, then let it run. Other targets just run.
+    - A page (or out-of-process iframe) attaches paused: intercept its document requests, bypass
+      service workers (a worker answering a navigation would skip the page's interception), ask
+      to attach its own children the same way, then let it run.
+    - A service or shared worker attaches paused: intercept its document requests, then run.
+      Other targets just run.
     - A paused document request: ``GET``/``HEAD`` continue; any other method fails, so a form
       submission (or any POST navigation) never leaves the browser.
+
+    If any command fails the sequence stops and the target stays paused: fail closed.
     """
     method = message.get("method")
     params = message.get("params") or {}
@@ -308,7 +377,13 @@ def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], s
         if kind in _GUARDED_TARGETS:
             return [
                 ("Fetch.enable", {"patterns": DOCUMENT_PATTERNS}, sid),
+                ("Network.setBypassServiceWorker", {"bypass": True}, sid),
                 ("Target.setAutoAttach", dict(_AUTO_ATTACH), sid),
+                ("Runtime.runIfWaitingForDebugger", {}, sid),
+            ]
+        if kind in _GUARDED_WORKERS:
+            return [
+                ("Fetch.enable", {"patterns": DOCUMENT_PATTERNS}, sid),
                 ("Runtime.runIfWaitingForDebugger", {}, sid),
             ]
         return [("Runtime.runIfWaitingForDebugger", {}, sid)]
@@ -336,6 +411,16 @@ def parse_stream_message(raw: str | bytes) -> tuple[bytes, int | None] | None:
         return None
     seq = msg.get("seq")
     return frame, seq if isinstance(seq, int) and not isinstance(seq, bool) else None
+
+
+def stream_port_from(data: Any) -> int | None:
+    """The bound port from ``agent-browser stream status --json`` data, when streaming is on."""
+    if not isinstance(data, dict) or data.get("enabled") is not True:
+        return None
+    port = data.get("port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        return None
+    return port
 
 
 def stream_config(max_fps: int) -> dict[str, Any]:
@@ -370,10 +455,15 @@ async def relay_stream(url: str, max_fps: int) -> AsyncIterator[bytes]:
 
 
 class CdpGuard:
-    """A browser-level CDP connection that holds every page to GET/HEAD document requests."""
+    """A browser-level CDP connection that holds every page to GET/HEAD document requests.
 
-    def __init__(self, ws_url: str) -> None:
+    ``on_lost`` runs (once) the moment the connection drops without ``close()``: the engine
+    kills that Chrome then, so no page is ever left running unguarded.
+    """
+
+    def __init__(self, ws_url: str, on_lost: Callable[[], None] | None = None) -> None:
         self.ws_url = ws_url
+        self.on_lost = on_lost
         self._ws: Any = None
         self._reader: asyncio.Task | None = None
         self._next_id = 0
@@ -391,6 +481,7 @@ class CdpGuard:
         # CDP events (a paused POST carries its body) can be large; Chrome is on loopback.
         self._ws = await connect(self.ws_url, proxy=None, max_size=64 * 2**20, open_timeout=10)
         self._reader = asyncio.create_task(self._read())
+        await asyncio.wait_for(self.call("Browser.setDownloadBehavior", {"behavior": "deny"}), 10)
         await asyncio.wait_for(self.call("Target.setAutoAttach", dict(_AUTO_ATTACH)), 10)
 
     async def call(self, method: str, params: dict[str, Any], session_id: str | None = None) -> Any:
@@ -434,6 +525,12 @@ class CdpGuard:
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(ConnectionError("CDP guard disconnected"))
+            if not self._closed and self.on_lost is not None:
+                self._closed = True
+                try:
+                    self.on_lost()
+                except Exception:
+                    log.exception("browser CDP guard: on_lost failed")
 
     async def _send_in_order(self, commands: list[tuple[str, dict[str, Any], str | None]]) -> None:
         # Await each reply: interception must be on before the paused page is allowed to run.
@@ -460,10 +557,10 @@ class CdpGuard:
 # --- the agent-browser engine --------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _kill_group_now(pid: int) -> None:
+    """SIGKILL a process group at once (synchronous: safe to call from any callback)."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pid, signal.SIGKILL)
 
 
 @dataclass
@@ -497,7 +594,7 @@ class AgentBrowserEngine:
         self.proxy = proxy
         self.action_timeout_s = action_timeout_s
         self.work_root = Path(work_root or tempfile.gettempdir())
-        self.chrome_extra_args = tuple(chrome_extra_args)
+        self.chrome_extra_args = check_chrome_extra_args(chrome_extra_args)  # refuse at startup
         self.start_timeout_s = start_timeout_s
         self._sessions: dict[str, _AbSession] = {}
         self._policy_path: Path | None = None
@@ -537,12 +634,11 @@ class AgentBrowserEngine:
         policy = self._policy()
         self.work_root.mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(prefix=f"argus-browser-{session_id}-", dir=self.work_root))
-        port = _free_port()
+        profile = workdir / "profile"
         argv = chrome_argv(
             self.chrome,
-            port=port,
             proxy=self.proxy,
-            user_data_dir=str(workdir / "profile"),
+            user_data_dir=str(profile),
             viewport=viewport,
             extra=self.chrome_extra_args,
         )
@@ -551,12 +647,14 @@ class AgentBrowserEngine:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            env=child_env(),
             start_new_session=True,  # its own process group, so stop() reaps the helpers too
         )
         guard: CdpGuard | None = None
         try:
-            ws_url = await self._wait_for_cdp(chrome, port)
-            guard = CdpGuard(ws_url)
+            port, path = await self._wait_for_cdp(chrome, profile)
+            # Losing the guard means pages could run unguarded: kill that Chrome right away.
+            guard = CdpGuard(f"ws://127.0.0.1:{port}{path}", on_lost=lambda: _kill_group_now(chrome.pid))
             await guard.start()
         except BaseException:
             if guard is not None:
@@ -567,23 +665,25 @@ class AgentBrowserEngine:
         self._sessions[session_id] = _AbSession(session_id, workdir, port, chrome, guard)
         log.info("browser session %s started (cdp %s, policy %s)", session_id, port, policy)
 
-    async def _wait_for_cdp(self, chrome: asyncio.subprocess.Process, port: int) -> str:
+    async def _wait_for_cdp(self, chrome: asyncio.subprocess.Process, profile: Path) -> tuple[int, str]:
+        """Chrome's own debugging port and browser path, read from its ``DevToolsActivePort``.
+
+        The file lives in this session's fresh profile, so the port is this Chrome's and no
+        other session's (no free-port guess that another process could take in between).
+        """
+        marker = profile / "DevToolsActivePort"
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.start_timeout_s
-        async with httpx.AsyncClient(trust_env=False, timeout=2) as client:
-            while True:
-                if chrome.returncode is not None:
-                    raise RuntimeError(f"Chrome exited with status {chrome.returncode} on start")
-                try:
-                    r = await client.get(f"http://127.0.0.1:{port}/json/version")
-                    url = r.json().get("webSocketDebuggerUrl")
-                    if r.status_code == 200 and isinstance(url, str):
-                        return url
-                except (httpx.HTTPError, ValueError):
-                    pass
-                if loop.time() > deadline:
-                    raise RuntimeError("Chrome did not open its debugging port in time")
-                await asyncio.sleep(0.1)
+        while True:
+            if chrome.returncode is not None:
+                raise RuntimeError(f"Chrome exited with status {chrome.returncode} on start")
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                parsed = parse_devtools_active_port(marker.read_text())
+                if parsed is not None:
+                    return parsed
+            if loop.time() > deadline:
+                raise RuntimeError("Chrome did not open its debugging port in time")
+            await asyncio.sleep(0.05)
 
     async def stop(self, session_id: str) -> None:
         s = self._sessions.pop(session_id, None)
@@ -614,6 +714,7 @@ class AgentBrowserEngine:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=child_env(),
             )
         except OSError as exc:
             return CliReply(ok=False, error=f"agent-browser could not run: {exc.strerror or exc}")
@@ -703,14 +804,24 @@ class AgentBrowserEngine:
     # -- live frames --
 
     async def _stream_port(self, s: _AbSession) -> int:
+        """The port this session's own agent-browser daemon reports for its stream server.
+
+        Never a port guessed here: a guessed free port could be bound by another session's
+        stream server in between, and the viewer would watch the wrong browser.
+        """
         async with s.stream_lock:
             if s.stream_port is None:
-                port = _free_port()
-                reply = await self._cli(s, ["stream", "enable", "--port", str(port)], limit_s=10)
-                if not reply.ok:
-                    raise RuntimeError(f"cannot start the live view: {reply.error}")
-                bound = reply.data.get("port") if isinstance(reply.data, dict) else None
-                s.stream_port = bound if isinstance(bound, int) else port
+                status = await self._cli(s, ["stream", "status"], limit_s=10)
+                port = stream_port_from(status.data) if status.ok else None
+                if port is None:
+                    enabled = await self._cli(s, ["stream", "enable"], limit_s=10)
+                    if not enabled.ok:
+                        raise RuntimeError(f"cannot start the live view: {enabled.error}")
+                    status = await self._cli(s, ["stream", "status"], limit_s=10)
+                    port = stream_port_from(status.data) if status.ok else None
+                if port is None:
+                    raise RuntimeError("cannot start the live view: agent-browser reported no stream port")
+                s.stream_port = port
             return s.stream_port
 
     async def frames(self, session_id: str, *, max_fps: int) -> AsyncIterator[bytes]:
