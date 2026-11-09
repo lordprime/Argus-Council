@@ -72,6 +72,14 @@ protocols (`/api`, `/mcp`, `/a2a`, `/.well-known`) on one origin.
     ./scripts/smoke.sh http://127.0.0.1:8000
     ```
 
+## Optional: let agents browse
+
+Agents read the web with `web_fetch`. To also give them a real, read-only browser that you can
+watch live, add `browser` to `COMPOSE_PROFILES` in `deploy/.env` (e.g. `COMPOSE_PROFILES=browser`
+or `cli-agents,browser`), set `ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock`, and run
+`./scripts/deploy.sh` again; it generates `ARGUS_BROWSER_TOKEN`. See
+[Deployment](deployment.md#the-live-browser).
+
 ## Add a model provider
 
 Without any keys, councils run on the `mock` provider: an offline, deterministic model that lets

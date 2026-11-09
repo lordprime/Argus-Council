@@ -48,6 +48,40 @@ secret (`ARGUS_SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `ARGUS_SANDBO
 until the web container answers and the API reports ready through it, then records the running
 version in `deploy/.version`.
 
+### The live browser
+
+The live browser (the `browse` tool and the run's Browser view) is opt-in. In `deploy/.env` add
+`browser` to `COMPOSE_PROFILES` (alongside any others, e.g. `COMPOSE_PROFILES=cli-agents,browser`),
+set `ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock`, and run `deploy.sh` again; it fills
+`ARGUS_BROWSER_TOKEN`. Without `ARGUS_BROWSER_URL` the API has no `browse` tool and agents keep
+using `web_fetch`, even if the containers run. See [Configuration](configuration.md#live-browser)
+for the settings and [Security](security-overview.md#the-live-browser) for what it can and cannot do.
+
+* **Two containers.** `browser` (Chrome and agent-browser, behind a token) and `egress` (the proxy
+  that is its only way out). The default `docker compose up` does not start them.
+* **Image.** `deploy.sh` pulls the published `browser` image with the others; `deploy.sh --local`
+  (and `build.sh`) builds it from `backend/docker/browser.Dockerfile` when the profile is on. It is
+  built for amd64 only (Chrome for Testing has no arm64 build), so the profile does not run on
+  arm64 hosts.
+* **Docker 26 or newer is advised.** On older engines the embedded DNS resolver can forward
+  queries from internal networks, which would give a compromised browser a way to send data out
+  through DNS lookups.
+* **Releases.** The release workflow builds and scans the browser image too. Trivy may fail a
+  release on a CVE in a Chrome library; refresh the pinned Chrome version in the Dockerfile (do
+  this regularly anyway: renderer bugs are fixed in Chrome releases) and release again.
+* **Integration test.** `./scripts/tests/browser-integration.sh` runs the real thing on a Docker
+  host: it builds the `browser` and `api` images, starts `browser`, `egress` and two local test
+  sites under their own compose project (`argus-browser-test`, its own networks and volumes, so a
+  deployed stack is not touched), and runs `backend/tests/integration/test_browser_real.py`
+  against them. It proves that a public site loads and can be clicked through, that form
+  submissions (including through a service worker), downloads and `file:`/`chrome:` URLs are
+  refused, that a page cannot reach a private address that egress could route to, and that frames
+  stream. Expect a few minutes, most of it the first image build. Options: `--no-build` uses images
+  already built, `--keep` leaves the stack up, and arguments after `--` go to pytest. It removes
+  the stack, volumes and temp directory on exit, and prints the browser and egress logs when it
+  fails. It needs internet access, `uv` and Docker with Compose v2, and is not part of the normal
+  test run.
+
 To build images only:
 
 ```bash

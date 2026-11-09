@@ -1,6 +1,6 @@
 # Live Browser, Skill Trace and the Removal of ACP
 
-Status: proposed, 2026-11-09. Ships in the 0.1.3 re-release.
+Status: implemented in 0.1.4.
 
 ## Why
 
@@ -322,3 +322,27 @@ the getting-started guide.
   as long as it meets the confinement rules above and is tested.
 - Panel layout details within the existing run view design language (`docs/design/ui-spec.md`).
 - Version pins for agent-browser and Chrome for Testing at build time.
+
+## As built
+
+The live browser shipped in 0.1.4 as designed, with these differences:
+
+- **Opt-in is two settings plus the profile.** `COMPOSE_PROFILES=browser`, `ARGUS_BROWSER_URL`
+  (`unix:/run/argus-browser/browser.sock`) and `ARGUS_BROWSER_TOKEN` (`deploy.sh` generates it).
+  Without `ARGUS_BROWSER_URL` the API has no `browse` tool.
+- **agent-browser's `--allowed-domains` is not used.** The API checks the run's allowed domains on
+  navigations (before `open`, and on the page after every action, with a corrective `back`).
+- **The action policy is default deny by agent-browser's wire names**, not a list of denied
+  actions, and the service refuses anything outside the eight allowed actions itself.
+- **Non-GET document requests fail at the DevTools layer**, including those made through service
+  workers (the service-worker bypass is enabled first). Script `fetch`/XHR POSTs are not blocked.
+- **The guard fails closed.** If its DevTools connection drops, Chrome is killed, and Chrome's
+  extra launch flags are an exact allowlist.
+- **Page text is always wrapped** in content boundaries with a nonce the service generates, never
+  the page's or the CLI's.
+- **`egress`** accepts CONNECT to ports 80 and 443 and plain `http://` GETs on port 80 only, and
+  has no private-address switch.
+- **Frames** are relayed once per session to any number of viewers (about 4 fps, dropping the
+  oldest frame for a slow viewer) and stop a few seconds after the last viewer leaves.
+- **Residual risks** found while building (Chrome's `--no-sandbox`, the pinned Chrome, DNS on old
+  Docker engines) are in the [threat model](../security/threat-model.md).

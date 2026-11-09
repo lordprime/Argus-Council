@@ -26,6 +26,8 @@ flowchart TB
     api --> rd
     api -->|token| sb
     api -->|HTTPS, SSRF-checked| internet((Internet))
+    api -.->|"opt-in, token"| br["browser"]
+    br -.->|"only via egress proxy"| internet
     sb -.-x|no route| internet
 ```
 
@@ -40,9 +42,43 @@ flowchart TB
   list, rejects hosts that resolve to private, loopback, link-local or metadata addresses on every
   redirect, caps size and content types, and treats page text as data. Webhook targets on private
   or loopback addresses are refused too.
+* **Browser**: opt-in; see [The live browser](#the-live-browser).
 * **Protocols**: stdio MCP servers spawn local processes, so they are off unless
   `ARGUS_MCP_ALLOW_STDIO=true` and then admin-only. New MCP servers default to the `ask` trust
   level and remote-agent delegations to `requires_approval: true`.
+
+## The live browser
+
+With the `browser` compose profile on, agents can read pages in a real Chrome (the `browse` tool)
+and you can watch it. A real browser runs page scripts, so it is contained more tightly than
+`web_fetch`:
+
+* **Read-only.** The agent can `open`, `snapshot`, `click`, `scroll`, `get_text`, `back`,
+  `forward` and `wait`. Typing, filling, selecting, key presses, uploads, downloads and script
+  evaluation are never offered, are refused by the browser service, and are denied again in
+  agent-browser's own action policy (default deny by command name). Downloads are denied. Every
+  non-GET page request fails, so no form can be submitted, including through a service worker.
+  Requests a page's own script sends with `fetch` or XHR (a POST, say) are not blocked; this is
+  an accepted residual risk.
+* **No way to the inside.** The `browser` container is on an internal network with only the
+  `egress` proxy. The proxy resolves every host itself, refuses any private, loopback, link-local,
+  metadata or reserved address, pins the connection to the address it checked, and allows only
+  ports 80 and 443. The browser never reaches your intranet, even if you let `web_fetch` do so
+  with `ARGUS_WEB_FETCH_ALLOW_PRIVATE_URLS`; `egress` has no switch for it.
+* **Allowed domains** apply to navigations. The API checks the address before `open` and the page
+  after every action, and goes back if a click landed somewhere not allowed. Images, scripts and
+  other subresources are held only to the private-address rule, or narrowed runs would load broken
+  pages. `file:`, `chrome:`, `javascript:` and `data:` URLs are refused.
+* **Page text is data.** It reaches the model wrapped in content boundaries with a random marker
+  the page cannot know, but a page can still try to steer an agent; the usual approvals and
+  guardrails apply to what the agent does next.
+* **Watching is read-only.** Live frames are relayed only to the run's owner, only while they
+  watch, and never stored. No input goes back to the page.
+* **Residual risks.** Chrome runs with `--no-sandbox` in the container, as the same user as the
+  browser service, so a Chrome renderer exploit could read the service token and reach other
+  runs' sessions (it still cannot leave through `egress`). Chrome is pinned and needs regular
+  refreshes. On Docker engines before 26 the embedded DNS resolver can forward queries from
+  internal networks. See [TM-13](security/threat-model.md#tm-13-a-web-page-attacks-the-agents-browser-or-uses-it-to-reach-or-leak-data).
 
 ## Identity and access
 
@@ -84,3 +120,5 @@ flowchart TB
       uses the isolated sandbox.
 - [ ] Give API keys the narrowest scopes they need, and use `viewer` accounts for read-only users.
 - [ ] Copy `backups/` off the host on a schedule.
+- [ ] If you turn the live browser on, run Docker 26 or newer and refresh the pinned Chrome
+      regularly.

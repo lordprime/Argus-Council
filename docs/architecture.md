@@ -33,8 +33,16 @@ flowchart TB
         sb["sandbox<br/>shell commands,<br/>no network route"]
     end
 
+    subgraph browsernet [browser network, internal]
+        br["browser<br/>Chrome + agent-browser,<br/>opt-in profile"]
+        eg["egress<br/>forward proxy,<br/>public addresses only"]
+    end
+
     api --> pg
     api --> redis
+    api -->|"token, Unix socket"| br
+    br --> eg
+    eg -->|"HTTP/HTTPS, 80 and 443"| web2([Public web])
     runtime -->|token-authenticated| sb
     runtime -->|HTTPS| llm([LLM providers<br/>cloud and self-hosted])
     runtime -->|MCP, A2A| peers([External MCP servers<br/>and remote agents])
@@ -46,8 +54,15 @@ flowchart TB
 | `web` | `argus-council/web` (released: `ghcr.io/lordprime/argus-council/web`) | frontend | Serves the UI and proxies the API and agent protocols on one origin; the only service published on all interfaces by default (port 8080) |
 | `api` | `argus-council/api` (released: `ghcr.io/lordprime/argus-council/api`) | backend, frontend, sandbox | Runs migrations on start, the council runtime, the periodic retention task; bound to `127.0.0.1:8000` by default |
 | `sandbox` | `argus-council/api` | sandbox (internal) | `uvicorn argus.sandbox.server:app`; tmpfs work area, CPU, memory and pid limits |
+| `browser` | `argus-council/browser` (released: `ghcr.io/lordprime/argus-council/browser`) | browser (internal) | Opt-in (compose profile `browser`). Chrome for Testing driven by agent-browser, behind `argus.browser.server` on a Unix socket shared with the API; amd64 only; read-only root filesystem, tmpfs for Chrome profiles |
+| `egress` | `argus-council/api` | browser (internal), browser_egress | Opt-in (profile `browser`). `python -m argus.egress.proxy`, the browser's only way out; refuses private, loopback, link-local and reserved addresses, and ports other than 80 and 443 |
 | `postgres` | `postgres:17-alpine` | backend (internal) | Database volume `pgdata` |
 | `redis` | `redis:7-alpine` | backend (internal) | Password, LRU eviction, append-only file, `FLUSHALL` and `CONFIG` disabled |
+
+The browser reaches the internet only through `egress`; the `browser` network is `internal: true`
+and holds just those two containers, so Chrome has no route to the API, the database, the cache or
+the sandbox. The API drives the browser over a token-protected Unix socket, and relays its frames
+to the web UI only while someone watches ([Browser view](run-views.md#the-browser-view)).
 
 Every container runs with `no-new-privileges`, all capabilities dropped, an init process and
 log rotation; `api`, `web` and `sandbox` also have read-only root filesystems. The `backend` and

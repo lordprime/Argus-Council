@@ -1,6 +1,6 @@
 # Run Views
 
-The run workspace (`/runs/:runId`) shows a live or finished run in seven views, switched from the
+The run workspace (`/runs/:runId`) shows a live or finished run in up to eight views, switched from the
 toolbar. Five of them read one communication log derived from the run's event stream: who sent
 what to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
 `protocol.call`s. The **Debate** view reads the debate's record, and the **Skills** view reads the skill events
@@ -27,6 +27,7 @@ flowchart LR
 | **Timeline** | A chronological feed of the plan, thoughts, tool calls, intercepts, corrections, approvals, votes and messages between members, with a density control |
 | **Debate** | The council's argument: the phase it is in, the claims with their challenge threads, each member's position on each claim, and the co-signed conclusion ([below](#the-debate-view)) |
 | **Skills** | Each skill the run used, with who loaded it, the files read from it and the tool calls made under it, filterable by agent ([below](#the-skills-view)) |
+| **Browser** | What each agent did in its browser: a live picture while you watch, the pages it opened and a text trail of its actions ([below](#the-browser-view)). Shown only once a member has opened a browser |
 | **Map** | An isometric map of agents, overseers, sub-councils, tools, MCP servers and remote agents, with live message pulses along the links, filters, pause and live, zoom and pan, and a details panel that includes the ledger id and hash of protocol calls |
 | **Gantt** | Steps and per-agent activity over time, with a live now-line |
 | **Heatmap** | Who talks when: rows for agents, sub-agents and external peers, auto-sized time bins, and intensity by messages, tokens, cost or errors |
@@ -89,6 +90,25 @@ In the timeline, a skill load or read expands to show exactly the text the agent
 "Content not saved" when the text could not be kept (see
 [Events](concepts/runs.md#skill-events)). Tool-call rows show a chip for each skill in effect.
 The ledger browser has a *Skill* filter.
+
+## The Browser view
+
+When the [live browser](configuration.md#live-browser) is on and an agent uses the `browse` tool,
+a **Browser** view appears. It has a card for each member that opened a browser:
+
+* **Live picture.** While the run is live, the card shows what the agent's browser shows, at about
+  4 frames a second. Frames are sent only while someone has the view open (closing every tab that
+  watches ends the stream within a few seconds), and they are never stored. It is watch-only: your
+  clicks and keys are not passed to the page.
+* **Current page.** The address and title the agent is on.
+* **Actions.** The agent's actions in order: `open`, `snapshot`, `click`, `scroll`, `get_text`,
+  `back`, `forward`, `wait`, each with its result. These are also rows in the timeline.
+* **Pages.** A screenshot of every page the agent opened, and of every action that changed the
+  address, kept as run artifacts (`browser/<member>/<n>.jpg`). At most 50 are kept per agent per
+  run; after that the event says "not kept (limit reached)". They are ordinary run artifacts.
+
+On a finished run the card shows the kept screenshots and the trail. Every browser session and
+action is also recorded in the [ledger](protocols.md#ledger) as protocol `browser`.
 
 ## Header controls
 

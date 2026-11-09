@@ -12,8 +12,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Live browser.** Agents can browse the web read-only in a real browser, and you can watch each
+  agent's browser live in the run view. Opt in with the browser compose profile
+  (`COMPOSE_PROFILES=browser`, `ARGUS_BROWSER_URL`; `deploy.sh` generates `ARGUS_BROWSER_TOKEN`).
+  The browser runs in its own container on an internal network, and its only way out is a new
+  `egress` proxy that refuses private, loopback and link-local addresses. A new **Browser** view
+  keeps a screenshot of each page opened (up to 50 per agent), and browser use is recorded in the
+  ledger as protocol `browser`. Form submissions and downloads are blocked; the threat model
+  (TM-13) lists what is left.
 - **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
   tool calls made with it. Skill use is recorded in the ledger.
+
+### Security
+
+- The `egress` proxy (used only by the browser) resolves each host itself, refuses non-public
+  addresses and serves only ports 80 and 443. It cannot be told to allow private addresses.
 
 ### Changed
 
