@@ -44,7 +44,7 @@ correct any agent, or the whole council, at any moment.
 
     The full list is in the [changelog](changelog.md).
 
-<iframe scrolling="no" class="argus-figure argus-figure--hero" src="assets/figures/hairline-council.html" title="Interactive drawing of a council table: the eye on the table follows the seat you point at" loading="lazy"></iframe>
+<iframe scrolling="no" class="argus-figure argus-figure--hero" src="assets/figures/hairline-council.html" title="Interactive drawing of a council at work: members hand tasks to their helpers, claim and challenge across the table, a devil's advocate asks for proof, and all co-sign at the pupil" loading="lazy"></iframe>
 
 ## What makes it different
 
