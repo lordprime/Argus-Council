@@ -193,6 +193,21 @@ async def test_waiting_open_takes_a_freed_slot():
     assert engine.started == [first, second]
 
 
+async def test_session_closed_while_starting_is_not_leaked():
+    class SlowStart(FakeEngine):
+        async def start(self, session_id, *, viewport):
+            await asyncio.sleep(0.1)
+            await super().start(session_id, viewport=viewport)
+
+    engine, manager, _ = _setup(engine=SlowStart())
+    opening = asyncio.create_task(manager.open("r1", "m1"))
+    await asyncio.sleep(0.02)
+    assert await manager.close_run("r1") == 1  # the run ended mid-start
+    with pytest.raises(UnknownSession):
+        await opening
+    assert engine.sessions == {}
+
+
 async def test_close_run_frees_slots():
     engine, manager, app = _setup(max_sessions=4, per_run=2)
     async with _client(app) as c:

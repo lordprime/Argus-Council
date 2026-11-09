@@ -101,8 +101,11 @@ class SessionManager:
                     self._cond.notify_all()
                 session.ready.set()
                 raise
-            session.last_used = time.monotonic()
             session.ready.set()
+            if self._sessions.get(sid) is not session:  # closed (run ended) while Chrome started
+                await self.engine.stop(sid)
+                raise UnknownSession(sid)
+            session.last_used = time.monotonic()
             log.info("browser session %s opened for run %s member %s", sid, run_id, member_id)
             return sid
 
