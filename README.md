@@ -12,14 +12,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7A2048" alt="MIT License"></a>
 </p>
 
-<p align="center"><b>A council of LLM agents that plans, debates, votes and delivers, with you in the loop.</b></p>
+<p align="center"><b>A council of LLM agents that plans, debates, votes, and delivers, with you in the loop.</b></p>
 
 Argus Council is a self-hosted platform for autonomous, guarded multi-agent work in **research**,
 **coding** and **chat**. You give it a topic and a goal; a council of agents (a chair, researchers,
 analysts, coders, testers, writers, and overseers such as a monitor, a critic and a security
 officer) plans the work, executes it with tools and skills, votes on the result and delivers it as
 Markdown, plain text, HTML, LaTeX, PDF, DOCX or JSON. Every thought passes a *thought bus* before it
-is acted on, where guardrails and overseer agents can annotate, hold or block it; risky tool calls
+is acted on, where guardrails and overseer agents can annotate, hold, or block it; risky tool calls
 wait for a human; and you can intercept and correct any agent, or the whole council, at any moment.
 
 **Documentation: [lordprime.github.io/Argus-Council](https://lordprime.github.io/Argus-Council/)**
