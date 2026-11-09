@@ -202,6 +202,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- ACP removed. It was merged into A2A; connect remote agents over A2A. Saved ACP remote agents are deleted on upgrade; external ACP clients must move to A2A or MCP.
+- Updating a remote agent now rejects unknown fields (HTTP 422) instead of ignoring them.
 - The schema gains `runs.resumed_from_id` (migration 0020).
 - `notes_write` posts to the council board, which is shown to every member on every turn; before,
   notes were seen only through `notes_read`.

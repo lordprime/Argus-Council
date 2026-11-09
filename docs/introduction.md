@@ -46,7 +46,7 @@ enforced; a breach halts the run.
 * **Contained by default.** Shell commands run in a sandbox container with no network route.
   Web fetches refuse private, loopback, link-local and metadata addresses. Secrets are encrypted
   at rest and never returned by the API.
-* **Interoperable and accountable.** Argus speaks MCP, A2A and ACP as both server and client,
+* **Interoperable and accountable.** Argus speaks MCP and A2A as both server and client,
   and writes every protocol call to a per-user, hash-chained ledger you can verify.
 
 ## Modes

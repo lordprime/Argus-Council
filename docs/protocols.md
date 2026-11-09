@@ -1,6 +1,6 @@
 # Protocols and Ledger
 
-Argus speaks the three main agent interoperability protocols in both directions: other agents
+Argus speaks the two main agent interoperability protocols in both directions: other agents
 can start and steer councils, and councils can call external tools and delegate to remote agents.
 Every one of those calls, in or out, is written to a tamper-evident ledger.
 
@@ -9,12 +9,10 @@ flowchart LR
     subgraph inbound [Argus as a server]
         MCPs["/mcp<br/>MCP Streamable HTTP"]
         A2As["/a2a + agent card<br/>A2A JSON-RPC"]
-        ACPs["/acp<br/>ACP REST"]
     end
     subgraph outbound [Argus as a client]
         MCPc["MCP servers<br/>tools as mcp__server__tool"]
         A2Ac["A2A agents"]
-        ACPc["ACP agents"]
     end
     ext([External agents and clients]) --> inbound
     inbound --> R[Council runs]
@@ -28,11 +26,10 @@ flowchart LR
 | --- | --- | --- |
 | **MCP** | `POST /mcp` (Streamable HTTP, JSON-RPC). Tools: `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`. Run deliverables are **resources**, skills are **prompts**. | Register MCP servers (`/api/v1/mcp-servers`, HTTP, or stdio for admins when `ARGUS_MCP_ALLOW_STDIO=true`). Their tools appear to agents as `mcp__<server>__<tool>`, filtered by `tool_allow`, gated by `risk` tags and by the server's trust level. |
 | **A2A** | Agent card at `/.well-known/agent-card.json` (and `/.well-known/agent.json`), JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`). Each task is a council run. | Register remote agents (`/api/v1/remote-agents`, `protocol: a2a`). Councils delegate with the `remote_agent` tool; `requires_approval` (default `true`) gates each delegation. |
-| **ACP** | REST under `/acp`: `GET /ping`, `GET /agents` (the modes plus your saved councils), `GET /agents/{name}`, `POST /runs` (sync or async), `GET /runs/{id}`, `POST /runs/{id}/cancel`. | Register remote ACP agents (`protocol: acp`, `agent_name`) and use them through the same `remote_agent` tool. |
 
 Inbound calls authenticate with an API key (`Authorization: Bearer argus_...`). Calls that start,
 steer or cancel runs need the `runs:write` scope, like `POST /api/v1/runs`: A2A `message/send` and
-`tasks/cancel` (JSON-RPC error `-32010` otherwise), ACP run creation and cancel, and the MCP
+`tasks/cancel` (JSON-RPC error `-32010` otherwise), and the MCP
 `start_run`, `intervene` and `cancel_run` tools. Read-only keys can still query, and viewers can
 never write.
 
@@ -86,11 +83,11 @@ names.
 
 Tools named in `require_approval` always need approval, whatever the trust level.
 `POST /api/v1/mcp-servers/{id}/discover` runs `initialize` and `tools/list` and stores the tools;
-`POST /api/v1/remote-agents/{id}/refresh` fetches an A2A or ACP agent's card again.
+`POST /api/v1/remote-agents/{id}/refresh` fetches an A2A agent's card again.
 
 ## Ledger
 
-Every inbound and outbound MCP, A2A and ACP interaction is written to a per-user ledger. So is
+Every inbound and outbound MCP and A2A interaction is written to a per-user ledger. So is
 every outbound web request an agent makes through a built-in tool (`web_fetch`, `web_search`, the
 market and news tools), as protocol `http`, with the host as the peer. Messages and tasks between
 the members of a council are recorded as protocol `a2a` with direction `internal` (*Council* in
@@ -112,7 +109,7 @@ so it detects any edit, deletion or reordering. `GET /api/v1/ledger` lists entri
 the web UI's ledger browser (`/connections/ledger`) shows them and runs the verification.
 
 Connection housekeeping is ledgered too: MCP discovery (`initialize`, `tools/list`, whether from
-the discover endpoint or when a run attaches the server) and A2A and ACP card refreshes, with the
+the discover endpoint or when a run attaches the server) and A2A card refreshes, with the
 run id when they happen during a run. During a run, each outbound call is also announced live as
 a `protocol.call` event carrying the entry's `ledger_id` and `hash`.
 

@@ -5,7 +5,7 @@
 
 ## What Are We Building?
 
-Multi-user, multi-agent LLM council platform. A FastAPI backend authenticates users with JWT access/refresh tokens and scoped API keys (roles admin/member/viewer), runs councils of LLM agents that call tools (web_fetch, sandboxed shell/code, knowledge search, skills, external MCP servers, remote A2A/ACP agents, sub-councils) under guardrails and human approvals, exposes MCP/A2A/ACP protocol endpoints with a hash-chained ledger, delivers signed webhooks, accepts uploads (skill zips, knowledge documents), and stores LLM provider keys encrypted at rest. A React SPA is served by nginx; Postgres, Redis and a code sandbox run as separate containers. Companion to docs/security/audit.md (finding IDs SEC-xx).
+Multi-user, multi-agent LLM council platform. A FastAPI backend authenticates users with JWT access/refresh tokens and scoped API keys (roles admin/member/viewer), runs councils of LLM agents that call tools (web_fetch, sandboxed shell/code, knowledge search, skills, external MCP servers, remote A2A agents, sub-councils) under guardrails and human approvals, exposes MCP/A2A protocol endpoints with a hash-chained ledger, delivers signed webhooks, accepts uploads (skill zips, knowledge documents), and stores LLM provider keys encrypted at rest. A React SPA is served by nginx; Postgres, Redis and a code sandbox run as separate containers. Companion to docs/security/audit.md (finding IDs SEC-xx).
 
 ## What Data Does It Touch?
 

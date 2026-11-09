@@ -2,7 +2,7 @@
 
 A run is one piece of work by a council: a topic, an optional description, a mode, the output
 formats you want and the guardrails that bound it. Runs are created with `POST /api/v1/runs`,
-from a [template](#templates), or by other agents over [MCP, A2A or ACP](../protocols.md).
+from a [template](#templates), or by other agents over [MCP or A2A](../protocols.md).
 
 ## Starting a run
 
@@ -218,7 +218,7 @@ Every durable event is stored with a per-run sequence number:
 * `POST /runs/{id}/stream-ticket` then `GET /runs/{id}/events/stream?ticket=...` streams events
   live with Server-Sent Events, resuming from `after_seq` or `Last-Event-ID`.
 
-Every outbound MCP, A2A or ACP call an agent makes appears on the stream as a `protocol.call`
+Every outbound MCP or A2A call an agent makes appears on the stream as a `protocol.call`
 event carrying the protocol, peer, method, status, latency and the matching ledger entry's
 `ledger_id` and `hash` ([Ledger](../protocols.md#ledger)).
 

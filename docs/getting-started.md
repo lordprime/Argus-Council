@@ -53,7 +53,7 @@ starts images you already built with `scripts/build.sh`, and `--ca FILE` trusts 
 certificate during the build (for egress proxies).
 
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and the agent
-protocols (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin.
+protocols (`/api`, `/mcp`, `/a2a`, `/.well-known`) on one origin.
 
 !!! warning "Close registration after you sign up"
     The first account that registers becomes an `admin`; later accounts are `member`s. Once your

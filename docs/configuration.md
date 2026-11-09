@@ -100,7 +100,7 @@ base URL, never ambient credentials.
 | Variable | Default | Compose | Meaning |
 | --- | --- | --- | --- |
 | `ARGUS_MCP_ALLOW_STDIO` | `false` | yes | Allow admins to register stdio MCP servers, which spawn local processes |
-| `ARGUS_PROTOCOL_TIMEOUT_S` | `60` | | Timeout for MCP, A2A and ACP calls |
+| `ARGUS_PROTOCOL_TIMEOUT_S` | `60` | | Timeout for MCP and A2A calls |
 | `ARGUS_REMOTE_AGENT_TIMEOUT_S` | `600` | | Timeout for a delegated remote-agent task |
 
 ## Observability

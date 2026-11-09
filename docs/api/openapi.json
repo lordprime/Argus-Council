@@ -4816,7 +4816,7 @@
           "connections"
         ],
         "summary": "Refresh Agent",
-        "description": "Fetch the A2A agent card, or confirm the ACP agent exists, and cache it (both ledgered).",
+        "description": "Fetch the A2A agent card and cache it (ledgered).",
         "operationId": "refresh_agent_api_v1_remote_agents__agent_id__refresh_post",
         "security": [
           {
@@ -7093,252 +7093,6 @@
           }
         }
       }
-    },
-    "/acp/ping": {
-      "get": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "Ping",
-        "operationId": "ping_acp_ping_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Ping Acp Ping Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/acp/agents": {
-      "get": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "List Agents",
-        "operationId": "list_agents_acp_agents_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response List Agents Acp Agents Get"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/acp/agents/{name}": {
-      "get": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "Get Agent",
-        "operationId": "get_agent_acp_agents__name__get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Agent Acp Agents  Name  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/acp/runs": {
-      "post": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "Create Run",
-        "operationId": "create_run_acp_runs_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RunCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Create Run Acp Runs Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/acp/runs/{run_id}": {
-      "get": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "Get Run",
-        "operationId": "get_run_acp_runs__run_id__get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Run Acp Runs  Run Id  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/acp/runs/{run_id}/cancel": {
-      "post": {
-        "tags": [
-          "acp"
-        ],
-        "summary": "Cancel Run",
-        "operationId": "cancel_run_acp_runs__run_id__cancel_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Cancel Run Acp Runs  Run Id  Cancel Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -7476,29 +7230,6 @@
         ],
         "title": "AccountOut",
         "description": "UserOut plus the RBAC role (\"admin\" | \"member\" | \"viewer\"); `is_admin` mirrors role == \"admin\"."
-      },
-      "AcpMessage": {
-        "properties": {
-          "role": {
-            "type": "string",
-            "title": "Role",
-            "default": "user"
-          },
-          "parts": {
-            "items": {
-              "$ref": "#/components/schemas/MessagePart"
-            },
-            "type": "array",
-            "maxItems": 50,
-            "minItems": 1,
-            "title": "Parts"
-          }
-        },
-        "type": "object",
-        "required": [
-          "parts"
-        ],
-        "title": "AcpMessage"
       },
       "AdminUserOut": {
         "properties": {
@@ -9141,51 +8872,6 @@
         ],
         "title": "MemoryIn"
       },
-      "MessagePart": {
-        "properties": {
-          "content_type": {
-            "type": "string",
-            "title": "Content Type",
-            "default": "text/plain"
-          },
-          "content": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200000
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content"
-          },
-          "content_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content Url"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          }
-        },
-        "type": "object",
-        "title": "MessagePart"
-      },
       "MfaChallengeOut": {
         "properties": {
           "mfa_required": {
@@ -9883,30 +9569,14 @@
           },
           "protocol": {
             "type": "string",
-            "enum": [
-              "a2a",
-              "acp"
-            ],
+            "const": "a2a",
             "title": "Protocol"
           },
           "url": {
             "type": "string",
             "maxLength": 500,
             "title": "Url",
-            "description": "A2A JSON-RPC endpoint or ACP base URL"
-          },
-          "agent_name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 120
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Name",
-            "description": "Required for ACP"
+            "description": "A2A JSON-RPC endpoint"
           },
           "token": {
             "anyOf": [
@@ -10005,22 +9675,9 @@
               }
             ],
             "title": "Requires Approval"
-          },
-          "agent_name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 120,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Name",
-            "description": "ACP only"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "RemoteAgentPatch"
       },
@@ -10115,51 +9772,6 @@
         },
         "type": "object",
         "title": "RetentionRunIn"
-      },
-      "RunCreate": {
-        "properties": {
-          "agent_name": {
-            "type": "string",
-            "maxLength": 120,
-            "title": "Agent Name"
-          },
-          "input": {
-            "items": {
-              "$ref": "#/components/schemas/AcpMessage"
-            },
-            "type": "array",
-            "maxItems": 50,
-            "minItems": 1,
-            "title": "Input"
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "sync",
-              "async",
-              "stream"
-            ],
-            "title": "Mode",
-            "default": "sync"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_name",
-          "input"
-        ],
-        "title": "RunCreate"
       },
       "RunDetail": {
         "properties": {

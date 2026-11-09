@@ -75,7 +75,7 @@ correct any agent, or the whole council, at any moment.
 
     ---
 
-    Argus is an MCP, A2A and ACP server and client. Every inbound and outbound
+    Argus is an MCP and A2A server and client. Every inbound and outbound
     protocol call is written to a SHA-256 hash chain that detects any edit,
     deletion or reordering.
 
@@ -155,7 +155,7 @@ runs, LLM spend, tools, intercepts and protocol calls ([Security](security-overv
 
     ---
 
-    MCP, A2A and ACP in both directions, MCP trust levels and the hash-chained ledger.
+    MCP and A2A in both directions, MCP trust levels and the hash-chained ledger.
 
 -   **[Integration](integration.md)**
 

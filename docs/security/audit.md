@@ -1,5 +1,9 @@
 # Security audit: Argus Council
 
+!!! note "ACP removed (2026-11-09)"
+    ACP was removed from Argus after this audit. Findings and notes below that mention ACP or
+    `/acp` are void and are kept as the record of that time; the other findings stand.
+
 | | |
 |---|---|
 | Date | 2026-10-27 |

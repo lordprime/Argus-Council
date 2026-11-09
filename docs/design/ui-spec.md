@@ -82,7 +82,7 @@ On a 401, run a single-flight refresh through `/api/v1/auth/refresh` and retry o
 /skills/:skillId                Skill detail (rendered SKILL.md, files, requested tools)
 /connections/providers          LLM providers (keys, base URLs, model lists, health)
 /connections/mcp                MCP servers (stdio/HTTP), discovered tools, enable/trust
-/connections/agents             Remote agents (A2A agent cards, ACP endpoints)
+/connections/agents             Remote agents (A2A agent cards)
 /settings/profile               Profile, theme, density, shortcuts on/off, notification prefs
 /settings/api-keys              Scoped API keys (existing /auth/api-keys)
 /admin/users                    Admin only
@@ -190,7 +190,7 @@ show a live budget microbar.
   - **Message** (prefills the intervention bar with `@name`)
   - **Hold / Release**
   - **Edit seat**. Model and temperature changes apply from the next step; a confirmation states this.
-- Group order: Chair, Workers, Overseers, Remote agents (badge "A2A"/"ACP"), Sub-councils (expandable tree; each
+- Group order: Chair, Workers, Overseers, Remote agents (badge "A2A"), Sub-councils (expandable tree; each
   node links to `/runs/:runId/sub/:subRunId`).
 - A **Resize** control sits at the bottom of the rail: a stepper bounded by `min_size`/`max_size`. It previews the
   seats that would be added or removed (same priority logic as `roster_for`) and applies at the next step boundary.
@@ -201,7 +201,7 @@ show a live budget microbar.
 | --- | --- | --- |
 | Plan card | Steps list: `#`, title, assignee avatar, status icon. Sticky mini-version at top when scrolled past. | Click a step to filter timeline to it. Re-plans show a diff badge "Plan v3 (+2 −1)". |
 | Thought | Avatar, name, kind tag (`message`, `reasoning`, `plan`, `rationale`), first 3 lines, time, tokens. Streaming shows a caret and a live token count. | Full markdown. Reasoning kind is muted, italic label "reasoning", hidden in *Decisions* density. |
-| Tool call | One-line chip: icon by source (builtin / MCP / skill / A2A / ACP), `tool_name(args summary)`, status, duration. | Args JSON (collapsible tree), streamed output (mono, max 400px scroll), result, "Open in inspector". |
+| Tool call | One-line chip: icon by source (builtin / MCP / skill / A2A), `tool_name(args summary)`, status, duration. | Args JSON (collapsible tree), streamed output (mono, max 400px scroll), result, "Open in inspector". |
 | Intercept thread | Attached under its target thought, indented 24px with the overseer's role-colored left rail. Shows reason tag (`drift`, `loop`, `scope`, `guardrail`, `factual`, `safety`, `user`), severity, correction text, and outcome pill (`pending`, `applied`, `rejected by agent`, `overridden by you`). | User actions: **Accept**, **Edit correction**, **Dismiss** (releases hold). |
 | Approval gate | High-emphasis card: "Coder wants to run `shell: pip install requests`", with the risk reasons and the rule that triggered it. **Approve** / **Edit & approve** / **Reject (with reason)**. | Shown in the timeline and pinned to the top of the feed while it is pending. A badge goes in the nav and the tab title ("(1) Argus"). |
 | Vote | Motion text, options with tally bars (also as numbers), quorum, each voter's avatar + choice. | Rationale of each vote expandable. |
@@ -387,8 +387,7 @@ In **chat mode** the workspace becomes a conversation layout:
   - Each server has a trust level (`trusted` / `ask` / `blocked`) and health status, and its log is viewable.
 - **Remote agents.**
   - Paste an A2A Agent Card URL, which renders the card: name, skills, auth, endpoint.
-  - Or add an ACP endpoint.
-  - Both have an enable toggle and "Requires approval". A remote agent can be seated as a council member, shown with
+  - It has an enable toggle and "Requires approval". A remote agent can be seated as a council member, shown with
     the "external" badge.
 
 ### 3.9 Guardrails form (shared by council detail, run composer Advanced, inspector)
@@ -514,7 +513,7 @@ Single-key shortcuts are active only when focus is not in a text field, and user
 ```
 
 - `actor.kind` is one of `agent`, `user`, `system`, or `remote`. For `remote`, the actor also carries
-  `"protocol": "a2a" | "acp"`.
+  `"protocol": "a2a"`.
 - `causation_id` links each event to the event that caused it. This is what draws the intercept threads, the tool chips
   under their thoughts, and the graph edges.
 
@@ -532,7 +531,7 @@ Single-key shortcuts are active only when focus is not in a text field, and user
 | `intercept.raised` | `{intercept_id, target:{thought_id?, tool_call_id?, member_id}, by:"user"\|"overseer", reason:"drift"\|"loop"\|"scope"\|"guardrail"\|"factual"\|"safety"\|"user", severity:"low"\|"medium"\|"high", action:"annotate"\|"hold"\|"block", note?}` | Thread under target; hold state. |
 | `correction.issued` | `{correction_id, intercept_id?, target_member_id\|"council", text, scope:"thought"\|"member"\|"council", force?:bool}` | Correction in thread / standing order chip on rail. |
 | `correction.resolved` | `{correction_id, outcome:"applied"\|"rejected"\|"overridden"\|"superseded", agent_reply?}` | Outcome pill. |
-| `tool.call.started` | `{tool_call_id, source:"builtin"\|"mcp"\|"skill"\|"a2a"\|"acp", server?, tool, args, args_redacted:bool}` | Tool chip. |
+| `tool.call.started` | `{tool_call_id, source:"builtin"\|"mcp"\|"skill"\|"a2a", server?, tool, args, args_redacted:bool}` | Tool chip. |
 | `tool.call.output` | `{tool_call_id, stream:"stdout"\|"stderr"\|"text", chunk}` | Streamed output. |
 | `tool.call.completed` | `{tool_call_id, status:"ok"\|"error"\|"blocked"\|"timeout", result_preview, result_ref?, truncated, duration_ms, cost_usd?}` | Chip status. |
 | `approval.requested` | `{approval_id, tool_call_id?, member_id, action_summary, risk:["shell","network"...], rule, expires_at?}` | Pinned gate card, notification. |
@@ -671,7 +670,7 @@ cue.
 | critic (overseer) | orange `#C2410C` / `#FDBA74` | `Scale` + eye badge |
 | monitor (overseer) | cyan `#0E7490` / `#67E8F9` | `Radar` + eye badge |
 | security (overseer) | rose `#BE123C` / `#FDA4AF` | `Shield` + eye badge |
-| remote (A2A/ACP) | neutral + dashed border | `Globe` + "A2A"/"ACP" text badge |
+| remote (A2A) | neutral + dashed border | `Globe` + "A2A" text badge |
 
 Overseer avatars get a 1.5px **dashed** ring, which tells them apart in grayscale. Custom roles not in the table get a
 deterministic hue from a hash of the role key, chosen from the same 12 hues.

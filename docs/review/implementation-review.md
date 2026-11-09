@@ -1,5 +1,10 @@
 # Implementation review: reliability, performance, operability
 
+!!! note "ACP removed (2026-11-09)"
+    ACP was removed from Argus after this review. Mentions of ACP below (`protocols/acp.py`,
+    `mode=sync`) are void and are kept as the record of that time; the finding still applies to the
+    MCP and A2A paths.
+
 Scope: run runtime, data layer, API, observability, frontend data flow and ops scripts. This review leaves out security, which a separate review covers.
 Baseline: commit `8a5d60a` plus the uncommitted work that was in the tree during the review (2026-10-27). Line numbers refer to `HEAD`. In `backend/argus/runtime/manager.py`, the uncommitted notifications change moves everything after line 115 down by about 8 lines in the working tree.
 

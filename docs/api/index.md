@@ -1,7 +1,7 @@
 # API Reference
 
 The REST API lives under `/api/v1`, next to the health checks (`/health/live`, `/health/ready`),
-Prometheus metrics (`/metrics`) and the agent protocols (`/mcp`, `/a2a`, `/acp`,
+Prometheus metrics (`/metrics`) and the agent protocols (`/mcp`, `/a2a`,
 `/.well-known/agent-card.json`). Every endpoint, schema and error is in the reference generated
 from the server's own OpenAPI document:
 
@@ -29,7 +29,7 @@ and the document at `/openapi.json`. In production both are switched off.
 | knowledge | `/api/v1/knowledge-bases`, `/api/v1/memory` | Knowledge bases, documents, search, memory |
 | templates | `/api/v1/templates` | Run templates |
 | notifications | `/api/v1/notifications` | In-app notifications |
-| mcp, a2a, acp | `/mcp`, `/a2a`, `/acp`, `/.well-known` | Agent protocols ([Protocols and Ledger](../protocols.md)) |
+| mcp, a2a | `/mcp`, `/a2a`, `/.well-known` | Agent protocols ([Protocols and Ledger](../protocols.md)) |
 
 ## Regenerating the document
 

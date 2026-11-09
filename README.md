@@ -57,7 +57,7 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 | **Skills** | `SKILL.md` packages loaded on demand, six built-ins, an eight-skill marketplace, import and export, version history and restore |
 | **Knowledge** | Knowledge bases of Markdown, text and HTML with BM25 search and citations; council-scoped long-term memory; a [council knowledge graph](https://lordprime.github.io/Argus-Council/concepts/councils/#the-council-knowledge-graph) built from each run's events sends short digests instead of raw text, recalls what earlier runs knew, and Anthropic prompt caching covers the stable prompt prefix |
 | **Research tools** | `web_fetch` extracts article text (trafilatura), reads PDFs, retries with backoff and falls back to the Internet Archive's closest snapshot; `knowledge_read` and `artifact_read` resolve names, paths and close matches; failed tool calls end with a `Recovery:` line |
-| **Protocols** | MCP, A2A and ACP as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call, including agents' outbound web requests (`http`) and members' A2A exchanges (direction `internal`) ([docs](https://lordprime.github.io/Argus-Council/protocols/)) |
+| **Protocols** | MCP and A2A as both server and client, MCP trust levels, and a per-user SHA-256 hash-chained ledger of every call, including agents' outbound web requests (`http`) and members' A2A exchanges (direction `internal`) ([docs](https://lordprime.github.io/Argus-Council/protocols/)) |
 | **Run views** | Timeline, Debate, isometric Map, Gantt, Heatmap and Route, all live from one resumable event stream, with replay of finished runs |
 | **Outputs** | `md`, `txt`, `html`, `latex`, `pdf`, `docx`, `json`, rendered from the structured report, checked after rendering and regenerated on demand |
 | **Web UI** | Home leads with the composer and the runs waiting for you; an Insights dashboard with period-over-period changes, tool reliability, model health and oversight; six palettes in light and dark (Wine, Indigo, Graphite, Forest, Ocean, Ember) |
@@ -68,8 +68,8 @@ wait for a human; and you can intercept and correct any agent, or the whole coun
 ```mermaid
 flowchart TB
     browser([Browser]) -->|HTTPS| web
-    client([MCP / A2A / ACP clients]) --> web
-    web["web: nginx + React UI<br/>strict CSP, port 8080"] -->|"/api /mcp /a2a /acp /.well-known"| api
+    client([MCP / A2A clients]) --> web
+    web["web: nginx + React UI<br/>strict CSP, port 8080"] -->|"/api /mcp /a2a /.well-known"| api
     subgraph apibox [api container]
         api["API (FastAPI)"] --- runtime["Council runtime<br/>orchestrator, thought bus,<br/>guardrails, approvals"]
     end
@@ -84,7 +84,7 @@ flowchart TB
     api --> redis
     runtime -->|token| sb
     runtime --> llm([LLM providers<br/>cloud and self-hosted])
-    runtime --> peers([MCP servers and<br/>A2A / ACP agents])
+    runtime --> peers([MCP servers and<br/>A2A agents])
 ```
 
 | Layer | Implementation |
@@ -109,7 +109,7 @@ cd Argus-Council
 ```
 
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and agent
-protocols (`/api`, `/mcp`, `/a2a`, `/acp`, `/.well-known`) on one origin with a strict
+protocols (`/api`, `/mcp`, `/a2a`, `/.well-known`) on one origin with a strict
 Content-Security-Policy. The first account that registers becomes an `admin`; later accounts are
 `member`s. Set `ARGUS_ALLOW_REGISTRATION=false` once your accounts exist.
 
@@ -306,13 +306,12 @@ sequenceDiagram
 | --- | --- | --- |
 | **MCP** | `POST /mcp` (Streamable HTTP): tools `start_run`, `get_run`, `list_runs`, `intervene`, `cancel_run`, `list_councils`; deliverables as resources, skills as prompts | Registered MCP servers' tools appear as `mcp__<server>__<tool>`, gated by trust level (`trusted`, `ask`, `blocked`) and per-tool approval |
 | **A2A** | Agent card at `/.well-known/agent-card.json`, JSON-RPC at `/a2a` (`message/send`, `tasks/get`, `tasks/cancel`) | Remote agents through the `remote_agent` tool, approval by default |
-| **ACP** | REST under `/acp`: agents, sync and async runs, cancel | Remote ACP agents through the same tool |
 
 ```bash
 claude mcp add --transport http argus http://localhost:8000/mcp --header "Authorization: Bearer argus_..."
 ```
 
-Every inbound and outbound MCP, A2A and ACP call, every outbound web request an agent makes
+Every inbound and outbound MCP and A2A call, every outbound web request an agent makes
 (`web_fetch`, `web_search`, market and news tools, as protocol `http`), and every A2A exchange between
 council members (direction `internal`) is written to a per-user ledger with SHA-256 digests of the
 request and response, chained so that any edit, deletion or reordering is detected by
@@ -332,7 +331,7 @@ flowchart LR
 backend/            FastAPI service (uv project)
   argus/api/v1/     REST routers
   argus/runtime/    run manager, orchestrator, agents, council bus (A2A), oversight, guardrails, events
-  argus/protocols/  MCP, A2A and ACP servers and clients
+  argus/protocols/  MCP and A2A servers and clients
   argus/providers/  LLM providers, pricing, health
   argus/tools/      agent tools (web, code, shell, skills, knowledge, council communication, remote agents, sub-councils)
   argus/skills/     SKILL.md packages, built-ins and marketplace

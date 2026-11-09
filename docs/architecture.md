@@ -10,13 +10,13 @@ deliberates, and where each part lives in the code.
 ```mermaid
 flowchart TB
     browser([Browser]) -->|HTTPS| web
-    client([MCP / A2A / ACP clients]) -->|/mcp /a2a /acp| web
+    client([MCP / A2A clients]) -->|/mcp /a2a| web
 
     subgraph frontend [frontend network]
         web["web<br/>nginx + React UI<br/>strict CSP"]
     end
 
-    web -->|"/api, /mcp, /a2a, /acp, /.well-known"| api
+    web -->|"/api, /mcp, /a2a, /.well-known"| api
 
     subgraph core [api container]
         api["API (FastAPI)<br/>auth, councils, runs,<br/>skills, knowledge, protocols"]
@@ -37,7 +37,7 @@ flowchart TB
     api --> redis
     runtime -->|token-authenticated| sb
     runtime -->|HTTPS| llm([LLM providers<br/>cloud and self-hosted])
-    runtime -->|MCP, A2A, ACP| peers([External MCP servers<br/>and remote agents])
+    runtime -->|MCP, A2A| peers([External MCP servers<br/>and remote agents])
     runtime -->|SearXNG, Tavily, Brave| search([Web search])
 ```
 
@@ -367,7 +367,7 @@ an `EventSource`, so it first exchanges its bearer token for a short-lived ticke
 | `backend/argus/agents/roles.py` | The twelve roles, their prompts and default tools, and each mode's roster |
 | `backend/argus/providers/` | Anthropic SDK, OpenAI-compatible and Gemini clients, the mock provider, pricing and health checks |
 | `backend/argus/tools/` | Agent tools: notes and artifacts, web, code and shell, skills, knowledge and memory, council communication and debate, helpers (`spawn`), the knowledge graph, remote agents, sub-councils |
-| `backend/argus/protocols/` | MCP server and client, A2A server and client, ACP server and client, JSON-RPC helpers |
+| `backend/argus/protocols/` | MCP server and client, A2A server and client, JSON-RPC helpers |
 | `backend/argus/skills/` | `SKILL.md` packages, the built-in skills and the marketplace catalogue |
 | `backend/argus/knowledge/` | Text extraction, chunking and BM25 ranking |
 | `backend/argus/services/` | Ledger, exports, webhooks, notifications, retention, account export and erasure, audit |
