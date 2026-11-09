@@ -84,6 +84,10 @@ RUN set -eu; \
 COPY --from=fetch --chown=root:root /opt/chrome /opt/chrome
 COPY --from=fetch --chown=root:root /opt/agent-browser/agent-browser /usr/local/bin/agent-browser
 COPY --from=build --chown=root:root /opt/venv /opt/venv
+# Managed policy (root-owned, read-only for the service): turns off Chrome's own calls to Google
+# services that no switch covers (captive portal checks, search preconnect, network time), and
+# blocks downloads. Chrome for Testing reads its policies from /etc/opt/chrome_for_testing.
+COPY --chown=root:root --chmod=0644 docker/chrome-policy.json /etc/opt/chrome_for_testing/policies/managed/argus-browser.json
 RUN set -eu; \
     if ldd /opt/chrome/chrome | grep 'not found'; then echo "Chrome is missing shared libraries" >&2; exit 1; fi; \
     /opt/chrome/chrome --version; \

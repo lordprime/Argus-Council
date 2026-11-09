@@ -55,6 +55,9 @@ All notable changes to this project are documented here. The format follows
   (TM-13) lists what is left. Councils created before the browser was available (before 0.1.4) do
   not get `browse` automatically, since saved seats keep their tools: add `browse` to the **Tools**
   of each seat that should browse, in the council's seat editor.
+  Chrome's own calls to Google services (search preconnect, network time, autofill, captive
+  portal checks) are turned off by switches and a managed policy in the image, so egress sees only
+  the pages agents open. `ARGUS_BROWSER_LOG_LEVEL=DEBUG` logs the browser's per-page CDP trace.
 - **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
   tool calls made with it. Skill use is recorded in the ledger.
 

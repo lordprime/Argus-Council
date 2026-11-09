@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from argus.browser.engine import AgentBrowserEngine, Engine, FakeEngine
 from argus.browser.sessions import ActionRefused, BrowserBusy, SessionManager, UnknownSession
+from argus.core.logging import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,27 @@ REAP_INTERVAL_S = 30.0
 # An idle page sends no frames; a comment line every few seconds is what notices a gone viewer.
 FRAME_HEARTBEAT_S = 3.0
 _ID = r"^[A-Za-z0-9._:-]+$"
+
+
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def configure_logging_from_env(environ: dict[str, str] | None = None) -> str:
+    """Log like the API: ``ARGUS_LOG_LEVEL`` (default INFO) and ``ARGUS_LOG_JSON``.
+
+    At DEBUG the CDP guard logs every target it attaches, each command and answer, and each
+    paused document request. Returns the level in effect (an unknown name falls back to INFO).
+    """
+    env = os.environ if environ is None else environ
+    level = (env.get("ARGUS_LOG_LEVEL") or "INFO").strip().upper()
+    unknown = level not in _LOG_LEVELS
+    if unknown:
+        level = "INFO"
+    json_logs = (env.get("ARGUS_LOG_JSON") or "").strip().lower() in ("1", "true", "yes", "on")
+    configure_logging(level, json_logs)
+    if unknown:
+        log.warning("ARGUS_LOG_LEVEL is not one of %s; logging at INFO", ", ".join(_LOG_LEVELS))
+    return level
 
 
 def _engine_from_env() -> Engine:
@@ -126,10 +148,15 @@ async def _reaper(manager: SessionManager) -> None:
 
 def create_app(token: str | None = None, manager: SessionManager | None = None) -> FastAPI:
     secret = token if token is not None else os.environ.get("ARGUS_BROWSER_TOKEN", "")
+    own_service = manager is None  # tests pass their own manager and keep their own logging
     manager = manager or _manager_from_env()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if own_service:
+            # At startup, not on import: importing this module must not reconfigure logging.
+            level = configure_logging_from_env()
+            log.info("browser service logging at %s", level)
         reaper = asyncio.create_task(_reaper(manager))
         try:
             yield

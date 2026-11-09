@@ -17,11 +17,14 @@ import pytest
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
+import argus.browser.engine as engine_module
 from argus.browser.engine import (
     ACTIONS,
     DOCUMENT_PATTERNS,
     FORBIDDEN_ACTIONS,
+    GUARD_STEPS,
     MAX_PAGE_CHARS,
+    QUIET_CHROME_ARGS,
     TRUNCATED_NOTE,
     AgentBrowserEngine,
     CdpGuard,
@@ -35,6 +38,7 @@ from argus.browser.engine import (
     cap_boundaries,
     child_env,
     chrome_argv,
+    collect_process,
     guard_commands,
     parse_cli_output,
     parse_devtools_active_port,
@@ -47,11 +51,15 @@ from argus.browser.engine import (
     wrap_boundaries,
 )
 from argus.browser.limits import (
+    AGENT_BROWSER_LOAD_WAIT_S,
     CLIENT_MARGIN_S,
     DEFAULT_ACTION_TIMEOUT_S,
     SLOT_WAIT_S,
     START_TIMEOUT_S,
+    action_budget,
+    action_timeout_from_env,
     client_timeouts,
+    command_limit,
 )
 from argus.browser.server import create_app
 from argus.browser.sessions import ActionRefused, BrowserBusy, SessionManager, UnknownSession
@@ -451,6 +459,31 @@ def test_chrome_argv_confines_the_network():
     ]
     assert [a for a in argv[1:] if not a.startswith("--")] == ["about:blank"]
     assert argv[-1] == "about:blank"
+    # Chrome's own background traffic to Google services is off (one switch list each).
+    for flag in QUIET_CHROME_ARGS:
+        assert flag in argv
+    features = [a for a in argv if a.startswith("--disable-features=")]
+    assert len(features) == 1
+    for name in (
+        "AutofillServerCommunication",
+        "NetworkTimeServiceQuerying",
+        "PreconnectToSearch",
+        "MediaRouter",
+    ):
+        assert name in features[0].split("=", 1)[1].split(",")
+    for flag in ("--disable-component-extensions-with-background-pages", "--disable-domain-reliability"):
+        assert flag in argv
+
+
+def test_chrome_policy_turns_off_background_services():
+    policy = json.loads((Path(__file__).parents[1] / "docker" / "chrome-policy.json").read_text())
+    # Captive portal checks (connectivitycheck.gstatic.com) have no switch: the policy turns them off.
+    assert policy["AlternateErrorPagesEnabled"] is False
+    assert policy["DefaultSearchProviderEnabled"] is False and policy["NetworkPredictionOptions"] == 2
+    assert policy["BrowserNetworkTimeQueriesEnabled"] is False
+    assert policy["DownloadRestrictions"] == 3  # no downloads, whatever CDP says
+    dockerfile = (Path(__file__).parents[1] / "docker" / "browser.Dockerfile").read_text()
+    assert "/etc/opt/chrome_for_testing/policies/managed/" in dockerfile
 
 
 @pytest.mark.parametrize(
@@ -690,43 +723,187 @@ async def test_cdp_guard_against_a_fake_chrome():
     assert [c["params"] for c in conts] == [{"requestId": "R2"}]
 
 
-async def test_cdp_guard_leaves_a_page_paused_when_a_step_fails(caplog):
-    """If Chrome refuses Network.enable, the bypass and the resume are never sent: fail closed."""
-    caplog.set_level(logging.WARNING, logger="argus.browser.engine")
-    received: list[str] = []
-    refused = asyncio.Event()
+class _GuardedChrome:
+    """A fake Chrome for the guard: one page ``S1`` attaches paused when auto-attach is set.
 
-    async def chrome(ws):
+    ``renderer`` methods behave like Chrome's renderer-side commands on a target paused at start:
+    they are only answered once that target is resumed. ``answers`` overrides an answer:
+    ``"refuse"`` (an error), ``"gone"`` (the session no longer exists) or ``"silent"`` (never).
+    """
+
+    def __init__(self, *, renderer=(), answers=None, attach_kind="page"):
+        self.renderer = set(renderer)
+        self.answers = dict(answers or {})
+        self.attach_kind = attach_kind
+        self.received: list[tuple[str, str | None]] = []
+        self.resumed = asyncio.Event()
+        self.settled = asyncio.Event()
+
+    async def __call__(self, ws):
+        held: list[dict] = []
+
+        async def answer(msg):
+            how = self.answers.get(msg["method"]) if msg.get("sessionId") else None
+            if how == "silent":
+                return
+            if how == "refuse":
+                reply = {"id": msg["id"], "error": {"code": -32000, "message": "not allowed here"}}
+            elif how == "gone":
+                reply = {
+                    "id": msg["id"],
+                    "error": {"code": -32001, "message": "Session with given id not found."},
+                }
+            else:
+                reply = {"id": msg["id"], "result": {}}
+            await ws.send(json.dumps(reply))
+
         async for raw in ws:
             msg = json.loads(raw)
-            received.append(msg["method"])
-            if msg["method"] == "Network.enable":
-                await ws.send(json.dumps({"id": msg["id"], "error": {"code": -32000, "message": "no"}}))
-                refused.set()
+            sid = msg.get("sessionId")
+            self.received.append((msg["method"], sid))
+            if sid and msg["method"] in self.renderer and not self.resumed.is_set():
+                held.append(msg)  # a paused target's renderer cannot answer yet
                 continue
-            await ws.send(json.dumps({"id": msg["id"], "result": {}}))
-            if msg["method"] == "Target.setAutoAttach" and "sessionId" not in msg:
+            await answer(msg)
+            if msg["method"] == "Runtime.runIfWaitingForDebugger" and sid == "S1":
+                self.resumed.set()
+                for m in held:
+                    await answer(m)
+                held.clear()
+            if msg["method"] == "Target.setAutoAttach" and not sid:
                 await ws.send(
                     json.dumps(
                         {
                             "method": "Target.attachedToTarget",
-                            "params": {"sessionId": "S1", "targetInfo": {"type": "page"}},
+                            "params": {
+                                "sessionId": "S1",
+                                "targetInfo": {"type": self.attach_kind, "url": "https://a.test/"},
+                                "waitingForDebugger": True,
+                            },
                         }
                     )
                 )
+            self.settled.set()
 
+    def sent(self, sid="S1"):
+        return [m for m, s in self.received if s == sid]
+
+
+async def _run_guard(chrome, *, wait=0.3, on_lost=None):
     async with serve(chrome, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
-        guard = CdpGuard(f"ws://127.0.0.1:{port}/")
+        guard = CdpGuard(f"ws://127.0.0.1:{port}/", on_lost=on_lost)
         await guard.start()
-        await asyncio.wait_for(refused.wait(), 3)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(wait)
+        state = {sid: t.state for sid, t in guard.targets.items()}
+        stuck, alive = guard.stuck(), guard.alive
         await guard.close()
+    return state, stuck, alive
 
-    assert "Network.setBypassServiceWorker" not in received
-    assert "Runtime.runIfWaitingForDebugger" not in received
-    failed = [r for r in caplog.records if "CDP guard Network.enable failed" in r.getMessage()]
-    assert failed and failed[0].levelno == logging.WARNING
+
+PAGE_STEPS = [
+    "Fetch.enable",
+    "Network.enable",
+    "Network.setBypassServiceWorker",
+    "Target.setAutoAttach",
+    "Runtime.runIfWaitingForDebugger",
+]
+
+
+async def test_cdp_guard_resumes_without_waiting_on_the_paused_renderer(caplog):
+    """The hang seen on Chrome 157: Network.enable is answered by the renderer, which a target
+    paused at start does not run until it is resumed. The guard must not wait for it first."""
+    caplog.set_level(logging.DEBUG, logger="argus.browser.engine")
+    lost: list[str] = []
+    chrome = _GuardedChrome(renderer={"Network.enable", "Network.setBypassServiceWorker"})
+    state, stuck, alive = await _run_guard(chrome, on_lost=lambda: lost.append("lost"))
+    assert chrome.resumed.is_set()
+    # Same order as before: interception first, the bypass and auto-attach before the resume.
+    assert chrome.sent() == PAGE_STEPS
+    assert state == {"S1": "running"} and stuck == [] and alive and lost == []
+    text = caplog.text
+    assert "CDP guard: attached page https://a.test/ session=S1" in text
+    assert "<- Network.enable session=S1 ok" in text  # answered after the resume, and checked
+
+
+async def test_cdp_guard_waits_for_interception_before_the_resume(caplog):
+    """Fetch.enable (browser-side) is awaited: if Chrome refuses it, nothing more is sent and the
+    target stays paused (fail closed)."""
+    caplog.set_level(logging.WARNING, logger="argus.browser.engine")
+    chrome = _GuardedChrome(answers={"Fetch.enable": "refuse"})
+    state, stuck, alive = await _run_guard(chrome)
+    assert chrome.sent() == ["Fetch.enable"]
+    assert not chrome.resumed.is_set()
+    assert state == {"S1": "failed"} and alive
+    assert len(stuck) == 1 and stuck[0].startswith("page https://a.test/ (session S1, failed at Fetch.enable")
+    failed = [r for r in caplog.records if "CDP guard Fetch.enable failed" in r.getMessage()]
+    assert failed and failed[0].levelno == logging.WARNING and "left paused" in failed[0].getMessage()
+
+
+async def test_cdp_guard_holds_a_target_when_interception_does_not_answer(monkeypatch):
+    monkeypatch.setattr(engine_module, "GUARD_STEP_TIMEOUT_S", 0.2)
+    chrome = _GuardedChrome(answers={"Fetch.enable": "silent"})
+    state, stuck, _alive = await _run_guard(chrome, wait=0.5)
+    assert chrome.sent() == ["Fetch.enable"] and not chrome.resumed.is_set()
+    assert state == {"S1": "failed"} and "no answer" in stuck[0]
+
+
+@pytest.mark.parametrize(
+    "method", ["Network.enable", "Network.setBypassServiceWorker", "Target.setAutoAttach"]
+)
+async def test_cdp_guard_ends_the_session_when_a_protection_is_refused(method, caplog):
+    """Sent before the resume and confirmed after it: a refusal means a running target lacks the
+    bypass (or Network, or its children's guard), so the browser session ends."""
+    caplog.set_level(logging.ERROR, logger="argus.browser.engine")
+    lost: list[str] = []
+    chrome = _GuardedChrome(answers={method: "refuse"})
+    state, _stuck, alive = await _run_guard(chrome, on_lost=lambda: lost.append("lost"))
+    assert lost == ["lost"] and not alive
+    assert state == {"S1": "failed"}
+    assert any(f"CDP guard {method} failed after the resume" in r.getMessage() for r in caplog.records)
+
+
+async def test_cdp_guard_ends_the_session_when_a_protection_never_answers(monkeypatch):
+    monkeypatch.setattr(engine_module, "GUARD_ANSWER_TIMEOUT_S", 0.2)
+    lost: list[str] = []
+    chrome = _GuardedChrome(answers={"Network.setBypassServiceWorker": "silent"})
+    _state, _stuck, alive = await _run_guard(chrome, wait=0.6, on_lost=lambda: lost.append("lost"))
+    assert lost == ["lost"] and not alive
+
+
+@pytest.mark.parametrize("method", ["Fetch.enable", "Network.enable"])
+async def test_cdp_guard_a_gone_target_is_nothing_to_guard(method, caplog):
+    """A target that closed under the guard is not a failure: no warning, the session goes on."""
+    caplog.set_level(logging.WARNING, logger="argus.browser.engine")
+    lost: list[str] = []
+    chrome = _GuardedChrome(answers={method: "gone"})
+    state, stuck, alive = await _run_guard(chrome, on_lost=lambda: lost.append("lost"))
+    assert state == {"S1": "gone"} and stuck == [] and alive and lost == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_cdp_guard_resumes_ui_and_other_targets_without_steps():
+    """Chrome's own UI targets (browser_ui) and dedicated workers only need resuming."""
+    for kind in ("browser_ui", "worker", "other"):
+        chrome = _GuardedChrome(attach_kind=kind)
+        state, stuck, alive = await _run_guard(chrome, wait=0.2)
+        assert chrome.sent() == ["Runtime.runIfWaitingForDebugger"]
+        assert state == {"S1": "running"} and stuck == [] and alive
+
+
+def test_guard_steps_can_only_be_skipped_explicitly():
+    attached = {
+        "method": "Target.attachedToTarget",
+        "params": {"sessionId": "S1", "targetInfo": {"type": "page"}},
+    }
+    assert [c[0] for c in guard_commands(attached)] == PAGE_STEPS
+    assert [c[0] for c in guard_commands(attached, frozenset({"network", "bypass"}))] == [
+        "Fetch.enable",
+        "Target.setAutoAttach",
+        "Runtime.runIfWaitingForDebugger",
+    ]
+    assert CdpGuard("ws://x").skip == frozenset()  # the service's guard sends every step
+    assert set(GUARD_STEPS) == {"fetch", "network", "bypass", "autoattach"}
 
 
 async def test_cdp_guard_reports_a_dropped_connection():
@@ -929,6 +1106,24 @@ async def test_agent_browser_act_caps_an_oversized_page(tmp_path):
     assert len(unwrap_boundaries(result.snapshot)) == MAX_PAGE_CHARS + 1 + len(TRUNCATED_NOTE)
 
 
+def test_service_configures_logging_from_the_environment(monkeypatch):
+    """The service logs (it printed nothing but access lines before): ARGUS_LOG_LEVEL, INFO default."""
+    from argus.browser import server
+
+    calls: list = []
+    monkeypatch.setattr(
+        server, "configure_logging", lambda level, json_logs: calls.append((level, json_logs))
+    )
+    assert server.configure_logging_from_env({}) == "INFO"
+    assert (
+        server.configure_logging_from_env({"ARGUS_LOG_LEVEL": "debug", "ARGUS_LOG_JSON": "true"}) == "DEBUG"
+    )
+    assert server.configure_logging_from_env({"ARGUS_LOG_LEVEL": "loud"}) == "INFO"
+    assert calls == [("INFO", False), ("DEBUG", True), ("INFO", False)]
+    compose = (Path(__file__).parents[2] / "deploy" / "docker-compose.yml").read_text()
+    assert "ARGUS_LOG_LEVEL: ${ARGUS_BROWSER_LOG_LEVEL:-INFO}" in compose
+
+
 def test_action_timeout_is_one_setting_for_both_sides(monkeypatch, tmp_path):
     monkeypatch.delenv("ARGUS_BROWSER_ACTION_TIMEOUT_S", raising=False)
     monkeypatch.setenv("ARGUS_BROWSER_WORKDIR", str(tmp_path))
@@ -1028,14 +1223,17 @@ def _ab_engine(tmp_path, *, binary="agent-browser", action_timeout_s=5.0):
     return engine, session
 
 
-def _scripted_cli(engine, replies: dict, seen: list) -> None:
+def _scripted_cli(engine, replies: dict, seen: list, limits: list | None = None) -> None:
+    limits = [] if limits is None else limits
+
     async def cli(s, command, *, limit_s, extra_globals=()):
         seen.append((tuple(command), tuple(extra_globals)))
         if command[0] == "screenshot":
             _write(command[1], b"\xff\xd8shot")
         payload = replies.get(tuple(command), {"success": True, "data": {}})
         if payload == "timeout":
-            return CliReply(ok=False, error=f"timed out after {limit_s:.0f}s")
+            limits.append((tuple(command), limit_s))
+            return CliReply(ok=False, error=f"timed out after {limit_s:.0f}s", timed_out=True)
         return parse_cli_output(json.dumps(payload).encode())
 
     engine._cli = cli
@@ -1089,10 +1287,55 @@ async def test_agent_browser_click_follows_a_new_tab(tmp_path):
 
 async def test_agent_browser_timeout_is_an_actionable_error(tmp_path):
     engine, _ = _ab_engine(tmp_path)
-    _scripted_cli(engine, {("open", "https://slow.example/"): "timeout"}, [])
+    limits: list = []
+    _scripted_cli(engine, {("open", "https://slow.example/"): "timeout"}, [], limits)
     result = await engine.act("s1", "open", {"url": "https://slow.example/"})
-    assert result.error.startswith("open timed out after 3s")
-    assert "back" in result.error
+    # Longer than agent-browser's own load wait, so its own answer would have come first.
+    assert limits[0][1] > AGENT_BROWSER_LOAD_WAIT_S
+    assert result.error.startswith(f"open did not return within {limits[0][1]:.0f}s")
+    assert "may have loaded" in result.error and "snapshot or get_text" in result.error
+    assert "did not finish loading" not in result.error
+
+
+def test_navigating_actions_outwait_agent_browser():
+    for timeout in (1, 5, 30, 300):
+        for action in ("open", "click"):
+            limit = command_limit(action, timeout)
+            assert limit > AGENT_BROWSER_LOAD_WAIT_S
+            assert action_budget(action, timeout) >= limit + 10  # room to read the page back
+        assert command_limit("snapshot", timeout) == pytest.approx(timeout * 0.6)
+        assert action_budget("snapshot", timeout) == timeout
+        # The API's client outlasts the service's longest action.
+        assert client_timeouts(timeout)[0] >= action_budget("open", timeout) + CLIENT_MARGIN_S
+    assert command_limit("open", 300) == pytest.approx(180)
+
+
+@pytest.mark.parametrize("raw", ["0", "-5", "301", "abc", "nan", "inf"])
+def test_action_timeout_is_checked_like_the_api(raw, tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="ARGUS_BROWSER_ACTION_TIMEOUT_S"):
+        action_timeout_from_env({"ARGUS_BROWSER_ACTION_TIMEOUT_S": raw})
+    monkeypatch.setenv("ARGUS_BROWSER_ACTION_TIMEOUT_S", raw)
+    monkeypatch.setenv("ARGUS_BROWSER_WORKDIR", str(tmp_path))
+    with pytest.raises(ValueError, match="ARGUS_BROWSER_ACTION_TIMEOUT_S"):
+        AgentBrowserEngine.from_env()
+    with pytest.raises(ValueError):
+        AgentBrowserEngine(action_timeout_s=0)
+    assert action_timeout_from_env({"ARGUS_BROWSER_ACTION_TIMEOUT_S": " 300 "}) == 300
+    assert action_timeout_from_env({"ARGUS_BROWSER_ACTION_TIMEOUT_S": ""}) == DEFAULT_ACTION_TIMEOUT_S
+
+
+async def test_collect_process_keeps_partial_output_on_a_timeout():
+    code = (
+        "import sys, time; print('partial', flush=True); "
+        "print('waiting for load', file=sys.stderr, flush=True); time.sleep(30)"
+    )
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    run = await collect_process(proc, 1.0)
+    assert run.timed_out and proc.returncode is not None
+    assert run.stdout.strip() == b"partial" and b"waiting for load" in run.stderr
+    assert 0.9 < run.elapsed_s < 10
 
 
 async def test_agent_browser_dead_guard_is_session_gone(tmp_path):
@@ -1102,7 +1345,7 @@ async def test_agent_browser_dead_guard_is_session_gone(tmp_path):
         await engine.act("s1", "snapshot", {})
 
 
-async def test_agent_browser_cli_runs_and_times_out(tmp_path, monkeypatch):
+async def test_agent_browser_cli_runs_and_times_out(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("ARGUS_BROWSER_TOKEN", "service-secret")
     monkeypatch.setenv("ARGUS_SECRET_KEY", "api-secret")
     monkeypatch.setenv("AGENT_BROWSER_SOCKET_DIR", "/tmp/ab")
@@ -1130,9 +1373,12 @@ async def test_agent_browser_cli_runs_and_times_out(tmp_path, monkeypatch):
     assert argv[-1] == "back"
 
     t0 = time.monotonic()
-    reply = await engine._cli(session, ["slow"], limit_s=0.3)
+    with caplog.at_level(logging.WARNING, logger="argus.browser.engine"):
+        reply = await engine._cli(session, ["slow"], limit_s=0.3)
     assert time.monotonic() - t0 < 5
-    assert not reply.ok and reply.error.startswith("timed out")
+    assert not reply.ok and reply.timed_out and reply.error.startswith("timed out")
+    timed_out = [r.getMessage() for r in caplog.records if "agent-browser slow timed out" in r.getMessage()]
+    assert timed_out and "session s1" in timed_out[0] and "stderr:" in timed_out[0]
 
     missing_engine, _ = _ab_engine(tmp_path, binary=str(tmp_path / "nope"))
     missing = await missing_engine._cli(session, ["back"], limit_s=1)

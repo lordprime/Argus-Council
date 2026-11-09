@@ -10,6 +10,9 @@
 #                      egress must refuse it, so it never logs a request.
 services:
   browser:
+    environment:
+      # The guard's per-target trace, for scripts/tests/browser-diagnose.sh and failed runs.
+      ARGUS_LOG_LEVEL: ${ARGUS_BROWSER_LOG_LEVEL:-DEBUG}
     volumes:
       # Replaces the browsersock volume (same target): the test connects to the socket from the host.
       - "${ARGUS_TEST_DIR:?run scripts/tests/browser-integration.sh}/sock:/run/argus-browser:z"

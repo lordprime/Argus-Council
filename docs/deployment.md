@@ -82,9 +82,12 @@ for the settings and [Security](security-overview.md#the-live-browser) for what 
   write actions are refused by the service and by agent-browser's policy, that the private canary
   and loopback services in the browser container are unreachable, and that frames stream. Expect a
   few minutes, most of it the first image build. Options: `--no-build` uses images
-  already built, `--keep` leaves the stack up, and arguments after `--` go to pytest. It removes
-  the stack, volumes and temp directory on exit, and prints the browser and egress logs when it
-  fails. It needs `uv`, Docker with Compose v2 and internet access only to pull base images and build, and is not part of the normal
+  already built, `--keep` leaves the stack up (and prints the command that removes it), and
+  arguments after `--` go to pytest. After the tests it also fails if egress let Chrome reach any
+  Google service (`google.com`, `gstatic.com`, `googleapis.com`): only the test sites belong in
+  its log. It removes the stack, volumes and temp directory on exit, and prints the browser and
+  egress logs when it fails; the browser service logs at DEBUG here, so they include the CDP
+  guard's trace of every target and command. It needs `uv`, Docker with Compose v2 and internet access only to pull base images and build, and is not part of the normal
   test run.
 
 To build images only:

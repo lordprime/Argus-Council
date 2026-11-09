@@ -41,9 +41,10 @@ mkdir -p "$TEST_DIR"/{sock,site,canary,tls}
 # The browser service (uid 10003) creates its socket here; the sites (this user) write their logs.
 chmod 0755 "$TEST_DIR"
 chmod 1777 "$TEST_DIR/sock"
-: >"$TEST_DIR/empty.env"
 
 # Compose interpolates the whole file: the services this test does not start still need values.
+# They go in an env file too, so the compose command printed with --keep (and the one
+# scripts/tests/browser-diagnose.sh uses) works from any shell, not only this one.
 ARGUS_TEST_UID="$(id -u)"
 ARGUS_TEST_GID="$(id -g)"
 export ARGUS_TEST_DIR="$TEST_DIR" ARGUS_TEST_UID ARGUS_TEST_GID
@@ -52,8 +53,15 @@ export ARGUS_VERSION="${ARGUS_VERSION:-browser-test}"
 export POSTGRES_PASSWORD=unused REDIS_PASSWORD=unused ARGUS_SECRET_KEY=unused ARGUS_SANDBOX_TOKEN=unused
 ARGUS_BROWSER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export ARGUS_BROWSER_TOKEN
+(
+  umask 077
+  for var in ARGUS_TEST_DIR ARGUS_TEST_UID ARGUS_TEST_GID COMPOSE_PROFILES ARGUS_IMAGE_REPO ARGUS_VERSION \
+    POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SECRET_KEY ARGUS_SANDBOX_TOKEN ARGUS_BROWSER_TOKEN; do
+    printf '%s=%s\n' "$var" "${!var}"
+  done >"$TEST_DIR/compose.env"
+)
 
-DC=(docker compose -p argus-browser-test --env-file "$TEST_DIR/empty.env"
+DC=(docker compose -p argus-browser-test --env-file "$TEST_DIR/compose.env"
   -f "$ROOT/deploy/docker-compose.yml" -f "$ROOT/deploy/docker-compose.build.yml"
   -f "$ROOT/deploy/docker-compose.browser-test.yml")
 
@@ -64,7 +72,9 @@ cleanup() {
     "${DC[@]}" logs --no-color --tail 200 egress browser 2>/dev/null || true
   fi
   if [ "$keep" = 1 ]; then
-    log "kept the stack (${DC[*]} down -v) and $TEST_DIR"
+    log "kept the stack and $TEST_DIR"
+    log "diagnose: ./scripts/tests/browser-diagnose.sh $TEST_DIR"
+    log "clean up: $(printf '%q ' "${DC[@]}")down -v --remove-orphans && rm -rf $(printf '%q' "$TEST_DIR")"
   else
     "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
     rm -rf "$TEST_DIR" 2>/dev/null || log "could not remove all of $TEST_DIR (files owned by container users)"
@@ -117,4 +127,21 @@ ARGUS_TEST_SITE_LOG="$TEST_DIR/site" \
 ARGUS_TEST_CANARY_URL="https://canary.argus.test" \
 ARGUS_TEST_CANARY_LOG="$TEST_DIR/canary" \
 ARGUS_TEST_BROWSER_EXEC="$exec_prefix" \
-  uv run pytest -m browser tests/integration/test_browser_real.py -v ${pytest_args[@]+"${pytest_args[@]}"}
+  uv run pytest -m browser tests/integration/test_browser_real.py -v ${pytest_args[@]+"${pytest_args[@]}"} \
+  || rc=$?
+
+# Chrome's own background traffic: every session above started a Chrome and opened pages, and
+# none of them may have reached Google's services through egress (www.google.com, network time,
+# autofill, captive portal checks, ...). Only the test sites belong in egress's allow lines.
+log "checking egress for Chrome background traffic to Google services"
+google="$("${DC[@]}" logs --no-color egress 2>/dev/null \
+  | grep 'egress.allow' | grep -oE '(host=|"host": ?")[^ ",]*(google\.com|gstatic\.com|googleapis\.com)' \
+  | sort | uniq -c || true)"
+if [ -n "$google" ]; then
+  echo "FAIL: Chrome reached Google services through egress:" >&2
+  echo "$google" >&2
+  rc="${rc:-1}"
+else
+  echo "ok: no egress.allow for google.com, gstatic.com or googleapis.com hosts"
+fi
+exit "${rc:-0}"

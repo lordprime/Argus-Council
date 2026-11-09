@@ -240,6 +240,8 @@ services:
     shm_size: 1g
     environment:
       ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
+      # DEBUG logs every CDP target the guard attaches and each command it sends (troubleshooting).
+      ARGUS_LOG_LEVEL: ${ARGUS_BROWSER_LOG_LEVEL:-INFO}
       ARGUS_BROWSER_MAX_SESSIONS: ${ARGUS_BROWSER_MAX_SESSIONS:-4}
       ARGUS_BROWSER_SESSIONS_PER_RUN: ${ARGUS_BROWSER_SESSIONS_PER_RUN:-2}
       ARGUS_BROWSER_IDLE_TIMEOUT_S: ${ARGUS_BROWSER_IDLE_TIMEOUT_S:-300}

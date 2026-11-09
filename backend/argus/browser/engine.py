@@ -25,6 +25,7 @@ import shlex
 import shutil
 import signal
 import tempfile
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,10 +33,12 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from argus.browser.limits import (
-    ACTION_SHARE,
     DEFAULT_ACTION_TIMEOUT_S,
     START_TIMEOUT_S,
+    action_budget,
     action_timeout_from_env,
+    check_action_timeout,
+    command_limit,
 )
 
 log = logging.getLogger(__name__)
@@ -100,6 +103,39 @@ _NETWORK_ENABLE = {"maxTotalBufferSize": 1_000_000, "maxResourceBufferSize": 100
 # could take Chrome off the proxy or loosen the debugging port, so it is refused at startup.
 ALLOWED_CHROME_EXTRA_ARGS = frozenset(
     {"--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-software-rasterizer"}
+)
+# Chrome's own background traffic (Google services, not the page) despite
+# --disable-background-networking: the search preconnect to www.google.com, network time
+# (clients2.google.com), autofill field types (content-autofill.googleapis.com), optimization
+# hints, translate, Cast discovery, and so on. Names from Playwright's chromiumSwitches.ts and
+# Puppeteer's ChromeLauncher defaults. The managed policy baked into the image
+# (docker/chrome-policy.json) turns off the rest, e.g. captive portal checks (connectivitycheck
+# .gstatic.com), which have no switch.
+_DISABLED_FEATURES = (
+    "AutofillServerCommunication",
+    "OptimizationHints",
+    "MediaRouter",
+    "Translate",
+    "NetworkTimeServiceQuerying",
+    "PreconnectToSearch",
+    "AimEnabled",
+    "LensOverlay",
+    "CertificateTransparencyComponentUpdater",
+)
+QUIET_CHROME_ARGS = (
+    f"--disable-features={','.join(_DISABLED_FEATURES)}",
+    "--enable-features=SkipListAccountsWithoutGaiaCookies",
+    "--disable-field-trial-config",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--safebrowsing-disable-auto-update",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-search-engine-choice-screen",
+    "--metrics-recording-only",
+    "--no-pings",
+    "--disable-breakpad",
+    "--disable-crash-reporter",
+    "--no-service-autorun",
 )
 # What Chrome and agent-browser inherit: never the service token or the rest of our environment.
 # An exact list, with no ``AGENT_BROWSER_*`` passthrough: operator env cannot pin one stream port
@@ -252,6 +288,7 @@ def chrome_argv(
         "--disable-quic",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--disable-background-networking",
+        *QUIET_CHROME_ARGS,
         f"--user-data-dir={user_data_dir}",
         f"--window-size={width},{height}",
         "--no-first-run",
@@ -300,6 +337,7 @@ class CliReply:
     data: Any = None
     error: str | None = None
     boundary: dict[str, Any] | None = None
+    timed_out: bool = False  # the service stopped waiting for agent-browser
 
     def text(self, *keys: str) -> str:
         """The string payload: ``data`` itself, or the first of ``keys`` holding a string."""
@@ -311,6 +349,68 @@ class CliReply:
                 if isinstance(value, str):
                     return value
         return ""
+
+
+def timeout_message(action: str, limit_s: float) -> str:
+    """The error an agent sees when an action's command did not return in time.
+
+    agent-browser waits for a page's load event; the page itself has often loaded by then (or
+    loaded enough to read), so the agent is pointed at reading it rather than told it failed.
+    """
+    return (
+        f"{action} did not return within {limit_s:.0f}s (the browser was still waiting, for example "
+        "for the page's load event). The page may have loaded anyway: use snapshot or get_text to "
+        "read what is there, or back."
+    )
+
+
+@dataclass
+class ProcessRun:
+    stdout: bytes
+    stderr: bytes
+    returncode: int | None
+    timed_out: bool
+    elapsed_s: float
+
+
+async def collect_process(proc: asyncio.subprocess.Process, limit_s: float) -> ProcessRun:
+    """Wait up to ``limit_s`` for ``proc`` (stdout and stderr piped), keeping whatever it wrote.
+
+    On a timeout the process is killed, and what it had written so far is returned with it, so a
+    hang can be explained from its own output.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, err = bytearray(), bytearray()
+
+    async def drain(stream: asyncio.StreamReader | None, into: bytearray) -> None:
+        if stream is None:
+            return
+        while chunk := await stream.read(65536):
+            into += chunk
+
+    readers = asyncio.gather(drain(proc.stdout, out), drain(proc.stderr, err), proc.wait())
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.shield(readers), limit_s)
+    except TimeoutError:
+        timed_out = True
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        # The pipes close with the process (a daemon it started keeps no copy of them).
+        with contextlib.suppress(TimeoutError, Exception):
+            await asyncio.wait_for(readers, 2)
+        if not readers.done():
+            readers.cancel()
+            with contextlib.suppress(BaseException):
+                await readers
+        await proc.wait()
+    return ProcessRun(bytes(out), bytes(err), proc.returncode, timed_out, loop.time() - started)
+
+
+def _guard_stuck(guard: Any) -> list[str]:
+    stuck = getattr(guard, "stuck", None)
+    return stuck() if callable(stuck) else []
 
 
 def parse_cli_output(stdout: bytes, stderr: bytes = b"", returncode: int | None = 0) -> CliReply:
@@ -450,7 +550,19 @@ def parse_devtools_active_port(text: str) -> tuple[int, str] | None:
     return port, path
 
 
-def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], str | None]]:
+# Guard steps by name: only the diagnostic tool (argus.browser.diagnose) ever leaves any out, to
+# find which one a hang depends on. The service's guard always sends every step.
+GUARD_STEPS = {
+    "fetch": "Fetch.enable",
+    "network": "Network.enable",
+    "bypass": "Network.setBypassServiceWorker",
+    "autoattach": "Target.setAutoAttach",
+}
+
+
+def guard_commands(
+    message: dict[str, Any], skip: frozenset[str] = frozenset()
+) -> list[tuple[str, dict[str, Any], str | None]]:
     """CDP commands ``(method, params, session_id)`` the guard sends in answer to one event.
 
     - A page (or out-of-process iframe) attaches paused: intercept its document requests, turn the
@@ -462,7 +574,8 @@ def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], s
     - A paused document request: ``GET``/``HEAD`` continue; any other method fails, so a form
       submission (or any POST navigation) never leaves the browser.
 
-    If any command fails the sequence stops and the target stays paused: fail closed.
+    If any command fails the sequence stops and the target stays paused: fail closed (unless the
+    target is already gone, see :class:`CdpGuard`). ``skip`` is for the diagnostic tool only.
     """
     method = message.get("method")
     params = message.get("params") or {}
@@ -472,19 +585,22 @@ def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], s
         if not sid:
             return []
         if kind in _GUARDED_TARGETS:
-            return [
+            commands = [
                 ("Fetch.enable", {"patterns": DOCUMENT_PATTERNS}, sid),
                 ("Network.enable", dict(_NETWORK_ENABLE), sid),
                 ("Network.setBypassServiceWorker", {"bypass": True}, sid),
                 ("Target.setAutoAttach", dict(_AUTO_ATTACH), sid),
                 ("Runtime.runIfWaitingForDebugger", {}, sid),
             ]
-        if kind in _GUARDED_WORKERS:
-            return [
+        elif kind in _GUARDED_WORKERS:
+            commands = [
                 ("Fetch.enable", {"patterns": DOCUMENT_PATTERNS}, sid),
                 ("Runtime.runIfWaitingForDebugger", {}, sid),
             ]
-        return [("Runtime.runIfWaitingForDebugger", {}, sid)]
+        else:
+            commands = [("Runtime.runIfWaitingForDebugger", {}, sid)]
+        skipped = {GUARD_STEPS[s] for s in skip if s in GUARD_STEPS}
+        return [c for c in commands if c[0] not in skipped]
     if method == "Fetch.requestPaused":
         sid = message.get("sessionId")
         request_id = params.get("requestId")
@@ -552,16 +668,86 @@ async def relay_stream(url: str, max_fps: int) -> AsyncIterator[bytes]:
             return
 
 
+# Chrome's answers when a command's session or target no longer exists (code -32001, or the
+# target closed under it). Nothing is left to guard then, so this is not a reason to fail closed.
+_GONE_ERRORS = (
+    "session with given id not found",
+    "no session with given id",
+    "no target with given id",
+    "target closed",
+    "target crashed",
+)
+GUARD_STEP_TIMEOUT_S = 10.0
+# How long after the resume the pipelined commands' answers may take (the renderer starts first).
+GUARD_ANSWER_TIMEOUT_S = 20.0
+# Answered by the browser process even for a target paused at start: awaited before the resume.
+_AWAITED_BEFORE_RESUME = frozenset({"Fetch.enable"})
+# Sent before the resume without waiting (they may need the target's renderer to answer), and
+# confirmed after it: a refusal of any of them ends the session.
+_CONFIRMED_AFTER_RESUME = frozenset(
+    {"Network.enable", "Network.setBypassServiceWorker", "Target.setAutoAttach"}
+)
+
+
+class CdpError(RuntimeError):
+    """Chrome answered a CDP command with an error."""
+
+    def __init__(self, error: Any) -> None:
+        self.code = error.get("code") if isinstance(error, dict) else None
+        self.text = str(error.get("message", error)) if isinstance(error, dict) else str(error)
+        super().__init__(str(error))
+
+    @property
+    def target_gone(self) -> bool:
+        return self.code == -32001 or any(g in self.text.lower() for g in _GONE_ERRORS)
+
+
+@dataclass
+class GuardTarget:
+    """What the guard knows about one attached target (for logs and the diagnostic tool)."""
+
+    kind: str
+    url: str
+    waiting: bool
+    attached_at: float
+    state: str = "guarding"  # guarding -> running | failed | gone
+    step: str = ""
+    error: str = ""
+
+    def describe(self, session_id: str, now: float) -> str:
+        at = f" at {self.step}" if self.step else ""
+        why = f": {self.error}" if self.error else ""
+        return (
+            f"{self.kind} {self.url[:120] or '-'} (session {session_id[:8]}, {self.state}{at}{why}, "
+            f"{now - self.attached_at:.1f}s since attach)"
+        )
+
+
 class CdpGuard:
     """A browser-level CDP connection that holds every page to GET/HEAD document requests.
 
     ``on_lost`` runs (once) the moment the connection drops without ``close()``: the engine
     kills that Chrome then, so no page is ever left running unguarded.
+
+    Each attached target is tracked (:meth:`stuck`): a target the guard could not prepare stays
+    paused (fail closed), and the engine names it in its log when an action then times out. A
+    target that is already gone when a command reaches it is not a failure: nothing is left to
+    guard. At DEBUG every attach and detach, command and answer, and paused request is logged.
+
+    ``skip`` leaves guard steps out (see :data:`GUARD_STEPS`); only the diagnostic tool passes it.
     """
 
-    def __init__(self, ws_url: str, on_lost: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        ws_url: str,
+        on_lost: Callable[[], None] | None = None,
+        *,
+        skip: frozenset[str] = frozenset(),
+    ) -> None:
         self.ws_url = ws_url
         self.on_lost = on_lost
+        self.skip = skip
+        self.targets: dict[str, GuardTarget] = {}
         self._ws: Any = None
         self._reader: asyncio.Task | None = None
         self._next_id = 0
@@ -573,6 +759,56 @@ class CdpGuard:
     def alive(self) -> bool:
         return not self._closed and self._reader is not None and not self._reader.done()
 
+    def stuck(self, older_than_s: float = 0.0) -> list[str]:
+        """Targets the guard has not let run (still being prepared, or failed and left paused)."""
+        now = time.monotonic()
+        return [
+            t.describe(sid, now)
+            for sid, t in self.targets.items()
+            if t.state in ("guarding", "failed") and now - t.attached_at >= older_than_s
+        ]
+
+    def _note_event(self, msg: dict[str, Any]) -> None:
+        method = msg.get("method")
+        params = msg.get("params") or {}
+        if method == "Target.attachedToTarget":
+            info = params.get("targetInfo") or {}
+            sid = str(params.get("sessionId") or "")
+            target = GuardTarget(
+                kind=str(info.get("type", "?")),
+                url=str(info.get("url", "")),
+                waiting=params.get("waitingForDebugger") is True,
+                attached_at=time.monotonic(),
+            )
+            if sid:
+                self.targets[sid] = target
+            log.debug(
+                "CDP guard: attached %s %s session=%s parent=%s waitingForDebugger=%s",
+                target.kind,
+                target.url[:200],
+                sid,
+                msg.get("sessionId"),
+                target.waiting,
+            )
+        elif method == "Target.detachedFromTarget":
+            sid = str(params.get("sessionId") or "")
+            gone = self.targets.pop(sid, None)
+            log.debug(
+                "CDP guard: detached session=%s (%s, was %s)",
+                sid,
+                gone.kind if gone else "unknown",
+                gone.state if gone else "-",
+            )
+        elif method == "Fetch.requestPaused":
+            request = params.get("request") or {}
+            log.debug(
+                "CDP guard: paused %s %s %s session=%s",
+                params.get("resourceType"),
+                request.get("method"),
+                str(request.get("url", ""))[:200],
+                msg.get("sessionId"),
+            )
+
     async def start(self) -> None:
         from websockets.asyncio.client import connect
 
@@ -582,20 +818,29 @@ class CdpGuard:
         await asyncio.wait_for(self.call("Browser.setDownloadBehavior", {"behavior": "deny"}), 10)
         await asyncio.wait_for(self.call("Target.setAutoAttach", dict(_AUTO_ATTACH)), 10)
 
-    async def call(self, method: str, params: dict[str, Any], session_id: str | None = None) -> Any:
+    async def _send(
+        self, method: str, params: dict[str, Any], session_id: str | None = None
+    ) -> asyncio.Future:
+        """Send one command; the returned future gets Chrome's answer (or a :class:`CdpError`)."""
         if self._ws is None or not self.alive:
             raise ConnectionError("CDP guard is not connected")
         self._next_id += 1
-        msg: dict[str, Any] = {"id": self._next_id, "method": method, "params": params}
+        msg_id = self._next_id
+        msg: dict[str, Any] = {"id": msg_id, "method": method, "params": params}
         if session_id:
             msg["sessionId"] = session_id
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending[self._next_id] = fut
+        self._pending[msg_id] = fut
+        fut.add_done_callback(lambda _f: self._pending.pop(msg_id, None))
         try:
             await self._ws.send(json.dumps(msg))
-            return await fut
-        finally:
-            self._pending.pop(msg["id"], None)
+        except BaseException:
+            fut.cancel()
+            raise
+        return fut
+
+    async def call(self, method: str, params: dict[str, Any], session_id: str | None = None) -> Any:
+        return await (await self._send(method, params, session_id))
 
     async def _read(self) -> None:
         try:
@@ -608,11 +853,12 @@ class CdpGuard:
                     fut = self._pending.get(msg["id"])
                     if fut and not fut.done():
                         if "error" in msg:
-                            fut.set_exception(RuntimeError(str(msg["error"])))
+                            fut.set_exception(CdpError(msg["error"]))
                         else:
                             fut.set_result(msg.get("result"))
                     continue
-                commands = guard_commands(msg)
+                self._note_event(msg)
+                commands = guard_commands(msg, self.skip)
                 if commands:
                     task = asyncio.create_task(self._send_in_order(commands))
                     self._tasks.add(task)
@@ -631,13 +877,155 @@ class CdpGuard:
                     log.exception("browser CDP guard: on_lost failed")
 
     async def _send_in_order(self, commands: list[tuple[str, dict[str, Any], str | None]]) -> None:
-        # Await each reply: interception must be on before the paused page is allowed to run.
-        for method, params, session_id in commands:
+        """Prepare an attached target (then let it run), or answer a paused request.
+
+        A target paused at start (``waitForDebuggerOnStart``) has no running renderer, so Chrome
+        cannot answer the commands its renderer handles (``Network.enable`` among them) until it
+        runs: awaiting those before the resume deadlocks until the guard gives up, and the target
+        (with every page that waits on it) never runs. So only the commands Chrome answers in the
+        browser process, :data:`_AWAITED_BEFORE_RESUME` (document interception), are awaited before
+        the resume. The rest are sent in order right behind them, then the resume: Chrome
+        dispatches one session's commands in order and applies their browser-side part (Network
+        on, the service-worker bypass, auto-attach) as it does, so all of it is in place before
+        the target runs. Their answers are checked after the resume, and if Chrome refused any of
+        them the guarantee is not there for a running target: the whole session ends.
+        """
+        if commands[-1][0] != "Runtime.runIfWaitingForDebugger":  # a paused request's answer
+            for method, params, session_id in commands:
+                await self._await_step(None, method, params, session_id, "request left paused")
+            return
+        session_id = commands[0][2]
+        target = self.targets.get(session_id or "")
+        for method, params, sid in commands:
+            if method in _AWAITED_BEFORE_RESUME and not await self._await_step(target, method, params, sid):
+                return  # fail closed: nothing else is sent, the target stays paused
+        loop = asyncio.get_running_loop()
+        sent: list[tuple[str, str | None, asyncio.Future, float]] = []
+        for method, params, sid in commands:
+            if method in _AWAITED_BEFORE_RESUME:
+                continue
+            log.debug("CDP guard: -> %s session=%s %s (pipelined)", method, sid, json.dumps(params)[:200])
             try:
-                await asyncio.wait_for(self.call(method, params, session_id), 10)
-            except Exception as exc:  # the target went away, or Chrome refused: nothing to guard
-                log.warning("CDP guard %s failed: %s", method, exc)
+                sent.append((method, sid, await self._send(method, params, sid), loop.time()))
+            except Exception as exc:  # the guard's own connection is going away: on_lost handles it
+                self._failed(target, method, sid, str(exc) or type(exc).__name__)
                 return
+        if target is not None:
+            target.step = "answers after resume"
+        deadline = loop.time() + GUARD_ANSWER_TIMEOUT_S
+        for method, sid, fut, started in sent:
+            try:
+                result = await asyncio.wait_for(fut, max(0.01, deadline - loop.time()))
+            except CdpError as exc:
+                if exc.target_gone:
+                    self._gone(target, method, sid, exc.text)
+                    return
+                problem = f"Chrome refused it: {exc.text}"
+            except TimeoutError:
+                if (sid or "") not in self.targets:  # detached meanwhile (a closed popup, a frame)
+                    self._gone(target, method, sid, "detached")
+                    return
+                problem = f"no answer within {GUARD_ANSWER_TIMEOUT_S:.0f}s of the resume"
+            except Exception as exc:  # the guard's own connection is going away
+                problem = str(exc) or type(exc).__name__
+            else:
+                log.debug(
+                    "CDP guard: <- %s session=%s ok in %.0fms %s",
+                    method,
+                    sid,
+                    (loop.time() - started) * 1000,
+                    json.dumps(result)[:200] if result else "",
+                )
+                if target is not None and method == "Runtime.runIfWaitingForDebugger":
+                    target.state, target.step = "running", ""
+                continue
+            if method in _CONFIRMED_AFTER_RESUME:
+                self._end_session(target, method, sid, problem)
+            else:
+                self._failed(target, method, sid, problem)
+            return
+
+    async def _await_step(
+        self,
+        target: GuardTarget | None,
+        method: str,
+        params: dict[str, Any],
+        session_id: str | None,
+        fail_closed_note: str = "",
+    ) -> bool:
+        """Send one command and wait for its answer. False when it failed (or the target is gone)."""
+        if target is not None:
+            target.step = method
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        log.debug("CDP guard: -> %s session=%s %s", method, session_id, json.dumps(params)[:200])
+        try:
+            result = await asyncio.wait_for(self.call(method, params, session_id), GUARD_STEP_TIMEOUT_S)
+        except CdpError as exc:
+            if exc.target_gone:
+                self._gone(target, method, session_id, exc.text)
+                return False
+            self._failed(target, method, session_id, f"Chrome refused it: {exc.text}", fail_closed_note)
+            return False
+        except TimeoutError:
+            problem = f"no answer in {GUARD_STEP_TIMEOUT_S:.0f}s"
+            self._failed(target, method, session_id, problem, fail_closed_note)
+            return False
+        except Exception as exc:  # the guard's own connection is going away
+            self._failed(target, method, session_id, str(exc) or type(exc).__name__, fail_closed_note)
+            return False
+        log.debug(
+            "CDP guard: <- %s session=%s ok in %.0fms %s",
+            method,
+            session_id,
+            (loop.time() - started) * 1000,
+            json.dumps(result)[:200] if result else "",
+        )
+        return True
+
+    def _gone(self, target: GuardTarget | None, method: str, session_id: str | None, why: str) -> None:
+        # The target closed (or its session ended) under us: nothing is left to guard.
+        log.debug("CDP guard: %s session=%s: target already gone (%s)", method, session_id, why)
+        if target is not None:
+            target.state, target.error = "gone", why
+
+    def _failed(
+        self,
+        target: GuardTarget | None,
+        method: str,
+        session_id: str | None,
+        error: str,
+        note: str = "",
+    ) -> None:
+        # Fail closed: nothing more is sent for this target, which stays paused.
+        if target is not None:
+            target.state, target.error = "failed", error
+        where = target.describe(session_id or "", time.monotonic()) if target else f"session {session_id}"
+        log.warning(
+            "CDP guard %s failed (%s): %s %s (fail closed)", method, error, where, note or "left paused"
+        )
+
+    def _end_session(
+        self, target: GuardTarget | None, method: str, session_id: str | None, error: str
+    ) -> None:
+        """A running target lacks a protection the guard could not confirm: end the browser."""
+        if target is not None:
+            target.state, target.error = "failed", error
+        where = target.describe(session_id or "", time.monotonic()) if target else f"session {session_id}"
+        log.error(
+            "CDP guard %s failed after the resume (%s): %s; ending the browser session (fail closed)",
+            method,
+            error,
+            where,
+        )
+        if self._closed:
+            return
+        self._closed = True  # alive is now False: the engine refuses every further action
+        if self.on_lost is not None:
+            try:
+                self.on_lost()
+            except Exception:
+                log.exception("browser CDP guard: on_lost failed")
 
     async def close(self) -> None:
         self._closed = True
@@ -690,7 +1078,7 @@ class AgentBrowserEngine:
         self.binary = binary
         self.chrome = chrome
         self.proxy = proxy
-        self.action_timeout_s = action_timeout_s
+        self.action_timeout_s = check_action_timeout(action_timeout_s)  # refuse at startup
         self.work_root = Path(work_root or tempfile.gettempdir())
         self.chrome_extra_args = check_chrome_extra_args(chrome_extra_args)  # refuse at startup
         self.start_timeout_s = start_timeout_s
@@ -816,31 +1204,45 @@ class AgentBrowserEngine:
             )
         except OSError as exc:
             return CliReply(ok=False, error=f"agent-browser could not run: {exc.strerror or exc}")
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), limit_s)
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.wait()
-            return CliReply(ok=False, error=f"timed out after {limit_s:.0f}s")
-        return parse_cli_output(out, err, proc.returncode)
+        run = await collect_process(proc, limit_s)
+        if run.timed_out:
+            # What agent-browser had said by then, and which targets the guard still holds, are
+            # what tells a slow page from a hang (scripts/tests/browser-diagnose.sh reads this).
+            log.warning(
+                "agent-browser %s timed out after %.1fs (session %s, limit %.0fs); stderr: %s; "
+                "partial stdout: %s; targets the guard has not let run: %s",
+                command[0] if command else "?",
+                run.elapsed_s,
+                s.session_id,
+                limit_s,
+                run.stderr.decode("utf-8", "replace").strip()[-2000:] or "-",
+                run.stdout.decode("utf-8", "replace").strip()[-1000:] or "-",
+                "; ".join(_guard_stuck(s.guard)) or "none",
+            )
+            return CliReply(ok=False, error=f"timed out after {limit_s:.0f}s", timed_out=True)
+        log.debug(
+            "agent-browser %s exited %s in %.1fs (session %s)",
+            command[0] if command else "?",
+            run.returncode,
+            run.elapsed_s,
+            s.session_id,
+        )
+        return parse_cli_output(run.stdout, run.stderr, run.returncode)
 
     async def act(self, session_id: str, action: str, args: dict[str, Any]) -> ActionResult:
         s = self._session(session_id)
         command = build_command(action, args)
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.action_timeout_s
+        deadline = loop.time() + action_budget(action, self.action_timeout_s)
 
         def left(share: float = 1.0) -> float:
             return max(0.0, (deadline - loop.time()) * share)
 
-        reply = await self._cli(s, command, limit_s=self.action_timeout_s * ACTION_SHARE)
+        limit = command_limit(action, self.action_timeout_s)
+        reply = await self._cli(s, command, limit_s=limit)
         error = reply.error
-        if error and error.startswith("timed out"):
-            error = (
-                f"{action} {error}: the page did not finish loading. "
-                "Try snapshot or wait to read what has loaded, or back."
-            )
+        if reply.timed_out:
+            error = timeout_message(action, limit)
         self._session(session_id)  # Chrome or the guard died during the action: fail closed
 
         if action == "click" and left() > 1:
