@@ -113,6 +113,10 @@ the discover endpoint or when a run attaches the server) and A2A card refreshes,
 run id when they happen during a run. During a run, each outbound call is also announced live as
 a `protocol.call` event carrying the entry's `ledger_id` and `hash`.
 
+Older entries with protocol `acp` stay in the ledger, because ACP was removed and deleting them would
+break the chain. They still verify, and the ledger browser shows them as "ACP (removed)". Migration
+0022 deleted saved ACP remote agents on upgrade and logged their names.
+
 !!! warning "Do not prune the ledger"
     Verification replays the chain from its first entry, so deleting any prefix makes it report a
     broken chain forever after. `ARGUS_RETENTION_LEDGER_DAYS` is `0` (never prune) by default;
