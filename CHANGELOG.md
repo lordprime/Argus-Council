@@ -186,6 +186,8 @@ All notable changes to this project are documented here. The format follows
   anyone without MCP servers or remote agents.
 - `web_fetch` reads PDFs (up to 15 MB). It can render JavaScript-only pages in headless Chromium
   when `ARGUS_WEB_FETCH_RENDER_JS=true` and the optional `browser` extra (Playwright) is installed.
+- **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
+  tool calls made with it. Skill use is recorded in the ledger.
 - **Released images on the GitHub Container Registry.**
   - Every release publishes `ghcr.io/lordprime/argus-council/{api,web,runner}` as `<version>`,
     `<major>.<minor>` and `latest`. They are scanned with Trivy before they are pushed.

@@ -222,6 +222,21 @@ Every outbound MCP or A2A call an agent makes appears on the stream as a `protoc
 event carrying the protocol, peer, method, status, latency and the matching ledger entry's
 `ledger_id` and `hash` ([Ledger](../protocols.md#ledger)).
 
+### Skill events
+
+`use_skill` and `skill_read` save the exact text the agent received, once per run, as a run
+artifact: `skills/<name>/SKILL.md` or `skills/<name>/<path>`, with kind `skill`. If it cannot be
+saved (the workspace path is read-only, or the text is larger than the file-size limit), the skill
+still works and the event says it was not saved.
+
+| Event | Data |
+| --- | --- |
+| `skill.loaded` | `skill_id`, `name`, `member_id`, `version`, `tool_call_id`, `artifact_path` (or null), `sha256`, `bytes`, `files`, `expected_tools` |
+| `skill.read` | `name`, `version`, `member_id`, `tool_call_id`, `path`, `artifact_path` (or null), `sha256`, `bytes` |
+
+`tool.call.started` carries `active_skills`: the skills the calling member has loaded so far. Each
+call is also a `skill` entry in the [ledger](../protocols.md#ledger).
+
 ## Outputs and artifacts
 
 The deliverable is written to the run's workspace (`report.md`, `SUMMARY.md`, `answer.md` or

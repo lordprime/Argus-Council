@@ -1,7 +1,7 @@
 # Run Views
 
-The run workspace (`/runs/:runId`) shows a live or finished run in six views, switched from the
-toolbar. Five of them read one communication log derived from the run's event stream: who sent
+The run workspace (`/runs/:runId`) shows a live or finished run in seven views, switched from the
+toolbar. Six of them read one communication log derived from the run's event stream: who sent
 what to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
 `protocol.call`s. The **Debate** view reads the debate's record from the same stream. Selecting an
 item in any view jumps to it in the timeline.
@@ -23,6 +23,7 @@ flowchart LR
 | --- | --- |
 | **Timeline** | A chronological feed of the plan, thoughts, tool calls, intercepts, corrections, approvals, votes and messages between members, with a density control |
 | **Debate** | The council's argument: the phase it is in, the claims with their challenge threads, each member's position on each claim, and the co-signed conclusion ([below](#the-debate-view)) |
+| **Skills** | Each skill the run used, with who loaded it, the files read from it and the tool calls made under it, filterable by agent ([below](#the-skills-view)) |
 | **Map** | An isometric map of agents, overseers, sub-councils, tools, MCP servers and remote agents, with live message pulses along the links, filters, pause and live, zoom and pan, and a details panel that includes the ledger id and hash of protocol calls |
 | **Gantt** | Steps and per-agent activity over time, with a live now-line |
 | **Heatmap** | Who talks when: rows for agents, sub-agents and external peers, auto-sized time bins, and intensity by messages, tokens, cost or errors |
@@ -73,6 +74,18 @@ The **Debate** view follows the [debate](concepts/councils.md#the-debate) as it 
 On a live run, every claim and challenge has **Message** buttons for its author, challenger or
 target. They send an ordinary message to that member, about that claim or challenge; nothing
 waits for your answer.
+
+## The Skills view
+
+Skills are traced as they are used. The view lists each skill the run loaded (`use_skill`) or read
+a file from (`skill_read`), with its version, the members that loaded it, the files read from it
+and the tool calls made while it was in effect. A skill stays in effect for the member that loaded
+it until the run ends. The agent filter narrows the list to one member.
+
+In the timeline, a skill load or read expands to show exactly the text the agent received. It says
+"Content not saved" when the text could not be kept (see
+[Events](concepts/runs.md#skill-events)). Tool-call rows show a chip for each skill in effect.
+The ledger browser has a *Skill* filter.
 
 ## Header controls
 

@@ -91,7 +91,10 @@ Every inbound and outbound MCP and A2A interaction is written to a per-user ledg
 every outbound web request an agent makes through a built-in tool (`web_fetch`, `web_search`, the
 market and news tools), as protocol `http`, with the host as the peer. Messages and tasks between
 the members of a council are recorded as protocol `a2a` with direction `internal` (*Council* in
-the ledger browser). Each entry
+the ledger browser). Every `use_skill` and `skill_read` call is recorded as protocol `skill`,
+direction `internal` (*Skill* in the ledger browser): the peer is `<name>@<version>` (`<name>@unknown`
+for a skill that does not exist), the method is `use_skill` or `skill_read`, and the detail holds the
+member and the file path. Each entry
 holds the peer, protocol, direction, method, status, latency, run id and SHA-256 digests of the
 request and response (not the payloads themselves), and is chained to the previous entry:
 
