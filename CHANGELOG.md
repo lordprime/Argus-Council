@@ -19,7 +19,9 @@ All notable changes to this project are documented here. The format follows
   `egress` proxy that refuses private, loopback and link-local addresses. A new **Browser** view
   keeps a screenshot of each page opened (up to 50 per agent), and browser use is recorded in the
   ledger as protocol `browser`. Form submissions and downloads are blocked; the threat model
-  (TM-13) lists what is left.
+  (TM-13) lists what is left. Councils created before the browser was available (before 0.1.4) do
+  not get `browse` automatically, since saved seats keep their tools: add `browse` to the **Tools**
+  of each seat that should browse, in the council's seat editor.
 - **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
   tool calls made with it. Skill use is recorded in the ledger.
 
