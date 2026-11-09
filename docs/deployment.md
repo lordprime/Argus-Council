@@ -23,16 +23,22 @@ flowchart TB
 ## Deploy
 
 ```bash
-./scripts/deploy.sh             # build, run every pending migration, start, wait until ready
-./scripts/deploy.sh --pull      # git pull first: a full update in one command
+./scripts/deploy.sh             # pull the published release (ARGUS_VERSION, default latest), migrate, start
+./scripts/deploy.sh --local     # build the images from this checkout instead (unreleased code)
+./scripts/deploy.sh --release 0.1.4  # pull that release, whatever ARGUS_VERSION says
+./scripts/deploy.sh --pull      # git pull first (scripts, compose file, and what --local builds)
 ./scripts/deploy.sh --smoke     # also run the end-to-end smoke test afterwards
-./scripts/deploy.sh --no-build  # start the images already built (see build.sh)
-./scripts/deploy.sh --release 0.1.4  # pull a published release instead of building (or latest)
+./scripts/deploy.sh --no-build  # start the images already on this host (see build.sh)
 ./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
-./scripts/deploy.sh --ca FILE   # trust an extra CA while building
+./scripts/deploy.sh --ca FILE   # with --local: trust an extra CA while building
 ```
 
-`deploy.sh` handles installs and updates alike. On a fresh install it builds, applies all database
+By default `deploy.sh` runs a published release: it pulls the images for `ARGUS_VERSION` in
+`deploy/.env` (`latest` unless you pin it) from `ARGUS_RELEASE_REPO`. A checkout that is ahead of
+the last release therefore still runs that release; to run the code you have checked out, add
+`--local`, which builds the images from it (the same as `build.sh`).
+
+`deploy.sh` handles installs and updates alike. On a fresh install it pulls or builds, applies all database
 migrations (`alembic upgrade head`) as their own step, and only then starts the stack; if a migration
 fails nothing is started. On an existing deployment (`deploy/.version` exists) it hands over to
 `update.sh`, below: backup, build, migrate, restart, automatic rollback.

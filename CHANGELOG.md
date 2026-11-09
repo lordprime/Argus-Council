@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows
 
 - ACP removed. It was merged into A2A; connect remote agents over A2A. Saved ACP remote agents are deleted on upgrade; external ACP clients must move to A2A or MCP.
 - Updating a remote agent now rejects unknown fields (HTTP 422) instead of ignoring them.
+- `scripts/deploy.sh` now deploys the published release by default (`ARGUS_VERSION` in
+  `deploy/.env`, `latest` unless pinned) instead of building the checkout. Add `--local` to build
+  and run the code you have checked out, as plain `deploy.sh` did before.
 
 ### Removed
 

@@ -42,15 +42,16 @@ cd Argus-Council
 
 1. copies `deploy/.env.example` to `deploy/.env` (mode `600`) and generates every empty secret:
    `ARGUS_SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` and `ARGUS_SANDBOX_TOKEN`;
-2. builds the `argus-council/api` and `argus-council/web` images, tagged with the current commit
-   (or, with `--release`, pulls a published release instead);
+2. pulls the published images: the release named by `ARGUS_VERSION` in `deploy/.env` (`latest`
+   by default), tagged locally as `argus-council/<service>:<version>`;
 3. starts the stack and waits until every service is healthy;
 4. with `--smoke`, runs `scripts/smoke.sh`, which registers a throwaway account and creates a
    council through the API.
 
-Other options: `--release 0.1.4` pulls that published release instead of building, `--no-build`
-starts images you already built with `scripts/build.sh`, and `--ca FILE` trusts an extra CA
-certificate during the build (for egress proxies).
+Other options: `--local` builds the images from your checkout instead of pulling a release (use
+it to run code that is not released yet), `--release 0.1.4` pulls that release whatever
+`ARGUS_VERSION` says, `--no-build` starts images already on the host, and `--ca FILE` trusts an
+extra CA certificate during a `--local` build (for egress proxies).
 
 Open **http://localhost:8080**. The web container serves the UI and proxies the API and the agent
 protocols (`/api`, `/mcp`, `/a2a`, `/.well-known`) on one origin.

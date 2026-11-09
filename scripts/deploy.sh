@@ -1,38 +1,43 @@
 #!/usr/bin/env bash
 # Deploy or update Argus Council with Docker Compose: the one script for installs and updates.
 #
-#   ./scripts/deploy.sh             # build, run every pending migration, start, wait until ready
-#   ./scripts/deploy.sh --pull      # git pull the latest code first (an update in one command)
+#   ./scripts/deploy.sh             # pull the published images (ARGUS_VERSION in deploy/.env, default
+#                                   #   latest), run every pending migration, start, wait until ready
+#   ./scripts/deploy.sh --local     # build the images from this checkout instead (unreleased code)
+#   ./scripts/deploy.sh --release 0.1.4  # pull that published release (or `latest`)
+#   ./scripts/deploy.sh --pull      # git pull the latest code first (scripts, compose file, and the
+#                                   #   source --local builds from)
 #   ./scripts/deploy.sh --smoke     # also run the end-to-end smoke test afterwards
-#   ./scripts/deploy.sh --no-build  # start the images already built (see build.sh)
-#   ./scripts/deploy.sh --release 0.1.4  # pull a published release instead of building (or `latest`)
+#   ./scripts/deploy.sh --no-build  # start the images already on this host (see build.sh)
 #   ./scripts/deploy.sh --no-backup # existing deployment: skip the pre-update backup
-#   ./scripts/deploy.sh --ca FILE   # trust an extra CA while building
+#   ./scripts/deploy.sh --ca FILE   # with --local: trust an extra CA while building
 #
 # On first run it copies deploy/.env.example to deploy/.env and generates any empty secret
 # (ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN). Add provider keys there.
-# On an existing deployment it hands over to update.sh: backup, build, migrate, start, and an
-# automatic rollback (schema included) if the new version does not become ready.
+# On an existing deployment it hands over to update.sh: backup, pull or build, migrate, start, and
+# an automatic rollback (schema included) if the new version does not become ready.
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-build=1 smoke=0 pull=0 backup_flag=() build_args=()
+build=1 local=0 release="" smoke=0 pull=0 backup_flag=() ca_args=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --local) local=1; shift ;;
     --no-build) build=0; shift ;;
     --smoke) smoke=1; shift ;;
     --pull) pull=1; shift ;;
     --no-backup) backup_flag=(--no-backup); shift ;;
-    --ca) build_args+=(--ca "${2:?--ca needs a file}"); shift 2 ;;
-    --release) build_args+=(--release "${2:?--release needs a version}"); shift 2 ;;
-    -h | --help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ca) ca_args=(--ca "${2:?--ca needs a file}"); shift 2 ;;
+    --release) release="${2:?--release needs a version}"; shift 2 ;;
+    -h | --help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
-if [ "$build" = 0 ] && [ ${#build_args[@]} -gt 0 ] && [[ " ${build_args[*]} " == *" --release "* ]]; then
-  die "--release pulls the images instead of building them: drop --no-build"
-fi
+[ "$local" = 0 ] || [ -z "$release" ] || die "--local builds this checkout; --release pulls a published one: pick one"
+[ "$build" = 1 ] || [ -z "$release" ] || die "--release pulls the images instead of building them: drop --no-build"
+[ "$build" = 1 ] || [ "$local" = 0 ] || die "--no-build starts the images already on this host: drop --local"
+[ ${#ca_args[@]} -eq 0 ] || [ "$local" = 1 ] || die "--ca only applies to --local builds"
 require_docker
 
 secret() {
@@ -56,19 +61,32 @@ for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN
   fi
 done
 
+if [ "$pull" = 1 ]; then
+  git -C "$ROOT" diff --quiet HEAD -- || die "the checkout has local changes; commit or stash them first"
+  log "pulling the latest code"
+  git -C "$ROOT" pull --ff-only
+fi
+
+# What to deploy: the published images by default, this checkout with --local, nothing new with
+# --no-build (the images already on this host).
+build_args=()
+if [ "$build" = 1 ] && [ "$local" = 1 ]; then
+  build_args=(${ca_args[@]+"${ca_args[@]}"})
+  log "building the images from this checkout (--local)"
+elif [ "$build" = 1 ]; then
+  release="${release:-${ARGUS_VERSION:-$(envval ARGUS_VERSION latest)}}"
+  build_args=(--release "$release")
+  log "deploying the published release $release (use --local to build this checkout instead)"
+fi
+
 if [ -f "$VERSION_FILE" ]; then
   # Already deployed: update in place (backup, build, migrate, start, roll back on failure).
-  update_args=(${backup_flag[@]+"${backup_flag[@]}"} ${build_args[@]+"${build_args[@]}"})
-  [ "$pull" = 1 ] || update_args+=(--no-pull)
+  # The code was already pulled above (with --pull): update.sh must not pull again.
+  update_args=(--no-pull ${backup_flag[@]+"${backup_flag[@]}"} ${build_args[@]+"${build_args[@]}"})
   [ "$build" = 1 ] || update_args+=(--images "${ARGUS_VERSION:-$(current_version)}")
   log "existing deployment ($(cat "$VERSION_FILE")): updating"
   "$ROOT/scripts/update.sh" ${update_args[@]+"${update_args[@]}"} || exit 1
 else
-  if [ "$pull" = 1 ]; then
-    git -C "$ROOT" diff --quiet HEAD -- || die "the checkout has local changes; commit or stash them first"
-    log "pulling the latest code"
-    git -C "$ROOT" pull --ff-only
-  fi
   lock_deploy
   if [ "$build" = 1 ]; then
     "$ROOT/scripts/build.sh" ${build_args[@]+"${build_args[@]}"}

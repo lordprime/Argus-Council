@@ -539,9 +539,11 @@ if begin update_failed_migration_rolls_back; then
   end
 fi
 
-if begin deploy_on_existing_deployment_updates_with_backup_and_migrations; then
+if begin deploy_local_on_existing_deployment_updates_with_backup_and_migrations; then
   export STUB_BUILD_HEAD=2
-  check "deploy.sh succeeds" ok run deploy.sh
+  check "deploy.sh --local succeeds" ok run deploy.sh --local
+  check "it built this checkout" contains "$STUB_STATE/calls.log" "docker build"
+  check "nothing was pulled from the registry" lacks "$STUB_STATE/calls.log" "pull -q"
   check "it took the update path" contains "$T/out" "existing deployment (v1): updating"
   check "a backup was taken" eq "$(dumps | wc -l | tr -d ' ')" 1
   check "alembic upgrade ran" eq "$(count upgrades.log)" 1
@@ -553,11 +555,11 @@ if begin deploy_on_existing_deployment_updates_with_backup_and_migrations; then
   end
 fi
 
-if begin deploy_fresh_install_migrates_then_starts; then
+if begin deploy_local_fresh_install_migrates_then_starts; then
   rm -f "$R/deploy/.version" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
   echo 0 >"$STUB_STATE/db/rev"
   export STUB_BUILD_HEAD=3
-  check "deploy.sh succeeds" ok run deploy.sh
+  check "deploy.sh --local succeeds" ok run deploy.sh --local
   check "alembic upgrade ran" eq "$(count upgrades.log)" 1
   check "the database is at the new head" eq "$(st db/rev)" 3
   check "the revisions are logged" contains "$T/out" "database schema migrated base -> 3"
@@ -571,7 +573,7 @@ if begin deploy_fresh_install_stops_when_migrations_fail; then
   rm -f "$R/deploy/.version" "$STUB_STATE/ct/api" "$STUB_STATE/ct/web"
   echo 0 >"$STUB_STATE/db/rev"
   export STUB_BUILD_HEAD=3 STUB_MIGRATE_FAIL=1
-  check "deploy.sh fails" fails run deploy.sh
+  check "deploy.sh --local fails" fails run deploy.sh --local
   check "it says nothing was started" contains "$T/out" "nothing was started"
   check "no version is recorded" fails test -f "$R/deploy/.version"
   end
@@ -620,6 +622,35 @@ if begin deploy_fresh_install_from_a_release; then
   check "the database is at the release's head" eq "$(st db/rev)" 3
   check "the release version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
   check "--release with --no-build is refused" fails run deploy.sh --release 0.1.4 --no-build
+  end
+fi
+
+if begin deploy_defaults_to_the_published_release; then
+  export STUB_BUILD_HEAD=2 STUB_PULL_VERSION=0.1.5
+  check "deploy.sh succeeds" ok run deploy.sh
+  check "it says it deploys the release" contains "$T/out" "deploying the published release latest"
+  check "latest was pulled from the registry" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/api:latest"
+  check "nothing was built" lacks "$STUB_STATE/calls.log" "docker build"
+  check "the release's version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.5
+  end
+fi
+
+if begin deploy_default_follows_argus_version_in_env; then
+  export STUB_BUILD_HEAD=2
+  echo ARGUS_VERSION=0.1.4 >>"$R/deploy/.env"
+  check "deploy.sh succeeds" ok run deploy.sh
+  check "the pinned release was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/api:0.1.4"
+  check "the pinned version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
+  end
+fi
+
+if begin deploy_refuses_conflicting_options; then
+  check "--local with --release is refused" fails run deploy.sh --local --release 0.1.4
+  check "with a clear error" contains "$T/out" "pick one"
+  check "--local with --no-build is refused" fails run deploy.sh --local --no-build
+  check "--ca without --local is refused" fails run deploy.sh --ca /dev/null
+  check "with a clear error" contains "$T/out" "--ca only applies to --local builds"
+  check "nothing changed" eq "$(cat "$R/deploy/.version")" v1
   end
 fi
 

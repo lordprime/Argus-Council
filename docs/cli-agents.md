@@ -110,8 +110,8 @@ Operators:
    (`./scripts/deploy.sh` generates `ARGUS_RUNNER_TOKEN`). Optional:
    `ARGUS_CLI_AGENTS_ALLOWED=claude,codex,gemini`, `ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false` for
    API keys only, `ARGUS_CLI_AGENTS_TIMEOUT_S`, `ARGUS_RUNNER_HTTPS_PROXY`.
-2. Run `./scripts/deploy.sh` (or `./scripts/update.sh`). `build.sh` builds the `runner` image when
-   the profile is on, and update snapshots keep it for rollbacks.
+2. Run `./scripts/deploy.sh` (or `./scripts/update.sh`). With the profile on, the `runner` image is
+   pulled with the release (or built, with `--local`), and update snapshots keep it for rollbacks.
 3. Sign a user's CLI in with the CLI's own flow, inside the runner, in that user's HOME:
 
     ```bash
