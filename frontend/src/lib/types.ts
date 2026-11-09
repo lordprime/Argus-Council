@@ -313,6 +313,33 @@ export interface RemoteAgentInfo {
   created_at: string;
 }
 
+/** `skill.loaded` payload; the trace fields are absent in older runs. */
+export interface SkillLoadedData {
+  skill_id: string;
+  name: string;
+  member_id: string;
+  version: string;
+  tool_call_id?: string;
+  /** Where the loaded instructions were saved; null when they were not (read-only workspace, too large). */
+  artifact_path?: string | null;
+  sha256?: string;
+  bytes?: number;
+  files?: string[];
+  expected_tools?: string[];
+}
+
+/** `skill.read` payload: a member read one file of a skill. */
+export interface SkillReadData {
+  name: string;
+  version: string;
+  member_id: string;
+  tool_call_id?: string;
+  path: string;
+  artifact_path?: string | null;
+  sha256?: string;
+  bytes?: number;
+}
+
 export interface LedgerEntry {
   seq: number;
   ts: string;

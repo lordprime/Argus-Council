@@ -45,6 +45,22 @@ describe("skill trace", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it("retrying after a failed fetch clears the error", async () => {
+    seq = 0;
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => (++calls === 1 ? new Response("boom", { status: 500 }) : text("Do X")));
+    const s = reduceAll(emptyRun("r1", MEMBERS), [ev("skill.loaded", {
+      skill_id: "sk1", name: "brief", member_id: "m1", version: "1.0.0", artifact_path: "skills/brief/SKILL.md",
+    })]);
+    render(<SimpleRow item={Object.values(s.items)[0] as SimpleItem} runId="r1" onOpenArtifact={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Show" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show" }));
+    expect(await screen.findByText("Do X")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("says when the content was not saved", () => {
     seq = 0;
     const s = reduceAll(emptyRun("r1", MEMBERS), [ev("skill.loaded", {

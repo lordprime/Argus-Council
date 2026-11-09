@@ -44,7 +44,7 @@ import { RESUMABLE } from "@/features/runs/queries";
 import { api, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, compact, usd } from "@/lib/format";
-import type { Member, Mode } from "@/lib/types";
+import type { Member, Mode, SkillLoadedData, SkillReadData } from "@/lib/types";
 import { BREAKPOINT, useMediaQuery } from "@/lib/useMediaQuery";
 import type { DebateState } from "@/stores/debate";
 import type {
@@ -246,15 +246,16 @@ function ViolationRow({ d }: { d: Record<string, any> }) { // eslint-disable-lin
 }
 
 /** A skill the member loaded, or a file of one it read; the saved text expands in place. */
-function SkillRow({ runId, type, d }: { runId?: string; type: string; d: Record<string, any> }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+function SkillRow({ runId, type, d }: { runId?: string; type: string; d: SkillLoadedData | SkillReadData }) {
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [err, setErr] = useState<unknown>(null);
-  const saved = typeof d.artifact_path === "string" && d.artifact_path ? (d.artifact_path as string) : null;
+  const saved = d.artifact_path || null;
   const read = type === "skill.read";
   const hasTrace = "artifact_path" in d; // older runs recorded only the load
   useEffect(() => {
     if (!open || !saved || !runId || content != null) return;
+    setErr(null);
     api.get<string>(`${V1}/runs/${runId}/artifacts/content?path=${encodeURIComponent(saved)}`).then(setContent, setErr);
   }, [open, saved, runId, content]);
   return (
@@ -262,7 +263,7 @@ function SkillRow({ runId, type, d }: { runId?: string; type: string; d: Record<
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span>
           {read ? "Read " : "Loaded skill "}
-          {read && <span className="font-mono">{String(d.path)}</span>}
+          {read && "path" in d && <span className="font-mono">{d.path}</span>}
           {read && " of skill "}
           <span className="font-mono">{d.name}</span>
         </span>
@@ -653,7 +654,7 @@ export function SimpleRow({ item, onOpenArtifact, members = [], debate, runId }:
           </Row>
         );
       }
-      if (item.type === "skill.loaded" || item.type === "skill.read") return <SkillRow runId={runId} type={item.type} d={d} />;
+      if (item.type === "skill.loaded" || item.type === "skill.read") return <SkillRow runId={runId} type={item.type} d={d as SkillLoadedData | SkillReadData} />;
       if (item.type === "knowledge.linked") {
         const names = ((d.names as string[] | undefined) ?? []).join(", ") || "a knowledge base";
         return <Row icon={BookOpen}>{d.action === "unlinked" ? "Unlinked" : "Linked"} knowledge: <span className="font-medium">{names}</span></Row>;

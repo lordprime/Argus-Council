@@ -7,7 +7,7 @@ import { applyComms } from "@/features/viz/comms";
 import { emptyDebate, reduceDebate, type ContextSavings, type DebateState, type HelperInfo, type LiveTail } from "@/stores/debate";
 import { beginDraft, endDraft, writable } from "@/stores/draft";
 import type { CommEvent, SubCouncilInfo } from "@/features/viz/types";
-import type { Actor, AutoMode, Member, RunEvent } from "@/lib/types";
+import type { Actor, AutoMode, Member, RunEvent, SkillLoadedData, SkillReadData } from "@/lib/types";
 
 export type MemberStatus = "idle" | "thinking" | "tool" | "waiting" | "held" | "blocked" | "error";
 
@@ -569,10 +569,11 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
     }
     case "skill.loaded":
     case "skill.read": {
+      const sk = d as Partial<SkillLoadedData & SkillReadData>;
       const loaded = ev.type === "skill.loaded";
       s.skills = [...(s.skills ?? []), {
-        name: String(d.name ?? ""), version: String(d.version ?? ""), memberId: String(d.member_id ?? ev.actor?.member_id ?? ""),
-        kind: loaded ? "loaded" : "read", path: loaded ? null : (d.path ?? null), artifactPath: d.artifact_path ?? null, seq: ev.seq, ts: ev.ts,
+        name: sk.name ?? "", version: sk.version ?? "", memberId: sk.member_id ?? ev.actor?.member_id ?? "",
+        kind: loaded ? "loaded" : "read", path: loaded ? null : (sk.path ?? null), artifactPath: sk.artifact_path ?? null, seq: ev.seq, ts: ev.ts,
       }];
       push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
       break;
