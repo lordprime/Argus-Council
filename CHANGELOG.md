@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format follows
 (`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
 `mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
+## [0.1.4] - Unreleased
+
+### Added
+
+- **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
+  tool calls made with it. Skill use is recorded in the ledger.
+
+### Changed
+
+- ACP removed. It was merged into A2A; connect remote agents over A2A. Saved ACP remote agents are deleted on upgrade; external ACP clients must move to A2A or MCP.
+- Updating a remote agent now rejects unknown fields (HTTP 422) instead of ignoring them.
+
+### Removed
+
+- ACP (the Agent Communication Protocol): the `/acp` routes, the ACP client and ACP remote agents.
+  Migration 0022 deletes saved ACP remote agents (logging their names) and drops
+  `remote_agents.agent_name`. Older ledger entries with protocol `acp` are kept and shown as
+  *ACP (removed)*.
+
 ## [0.1.3] - 2026-11-06
 
 ### Added
@@ -186,8 +205,6 @@ All notable changes to this project are documented here. The format follows
   anyone without MCP servers or remote agents.
 - `web_fetch` reads PDFs (up to 15 MB). It can render JavaScript-only pages in headless Chromium
   when `ARGUS_WEB_FETCH_RENDER_JS=true` and the optional `browser` extra (Playwright) is installed.
-- **Skill trace.** See which agent loaded or read which skill, exactly what it received, and the
-  tool calls made with it. Skill use is recorded in the ledger.
 - **Released images on the GitHub Container Registry.**
   - Every release publishes `ghcr.io/lordprime/argus-council/{api,web,runner}` as `<version>`,
     `<major>.<minor>` and `latest`. They are scanned with Trivy before they are pushed.
@@ -204,8 +221,6 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- ACP removed. It was merged into A2A; connect remote agents over A2A. Saved ACP remote agents are deleted on upgrade; external ACP clients must move to A2A or MCP.
-- Updating a remote agent now rejects unknown fields (HTTP 422) instead of ignoring them.
 - The schema gains `runs.resumed_from_id` (migration 0020).
 - `notes_write` posts to the council board, which is shown to every member on every turn; before,
   notes were seen only through `notes_read`.
@@ -479,6 +494,7 @@ All notable changes to this project are documented here. The format follows
 - `notes_write` (and other list arguments) accept a comma-separated or JSON-encoded string, which
   models often send, instead of failing with "Input should be a valid list".
 
+[0.1.4]: https://github.com/lordprime/Argus-Council/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/lordprime/Argus-Council/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lordprime/Argus-Council/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/lordprime/Argus-Council/releases/tag/v0.1.0
