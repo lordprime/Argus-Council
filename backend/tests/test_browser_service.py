@@ -1338,6 +1338,32 @@ async def test_collect_process_keeps_partial_output_on_a_timeout():
     assert 0.9 < run.elapsed_s < 10
 
 
+async def test_collect_process_returns_once_the_answer_is_complete_while_a_daemon_holds_the_pipes():
+    # agent-browser's first command in a session starts its daemon, which inherits stdout/stderr:
+    # the CLI has answered and exited, but the pipes stay open as long as the daemon lives.
+    code = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+        'print(\'{"success": true, "data": {"url": "https://a.test/"}}\', flush=True)'
+    )
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    run = await collect_process(proc, 20.0)
+    assert not run.timed_out and run.elapsed_s < 5
+    assert parse_cli_output(run.stdout, run.stderr, run.returncode).ok
+
+
+async def test_collect_process_ends_a_cli_that_lingers_after_its_answer():
+    code = 'import time; print(\'{"success": true, "data": {}}\', flush=True); time.sleep(30)'
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    run = await collect_process(proc, 20.0)
+    assert not run.timed_out and run.elapsed_s < 5 and proc.returncode is not None
+    assert parse_cli_output(run.stdout).ok
+
+
 async def test_agent_browser_dead_guard_is_session_gone(tmp_path):
     engine, session = _ab_engine(tmp_path)
     session.guard.alive = False  # unguarded pages must not be driven

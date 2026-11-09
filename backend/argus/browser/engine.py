@@ -376,36 +376,67 @@ class ProcessRun:
 async def collect_process(proc: asyncio.subprocess.Process, limit_s: float) -> ProcessRun:
     """Wait up to ``limit_s`` for ``proc`` (stdout and stderr piped), keeping whatever it wrote.
 
-    On a timeout the process is killed, and what it had written so far is returned with it, so a
-    hang can be explained from its own output.
+    It returns as soon as stdout holds a complete JSON answer, without waiting for the pipes to
+    close: agent-browser's first command in a session starts its daemon, which inherits stdout and
+    stderr and keeps them open for its whole life. A CLI still running a moment after its answer
+    is ended. On a timeout the process is killed, and what it had written so far is returned with
+    it, so a hang can be explained from its own output.
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
     out, err = bytearray(), bytearray()
+    answered = asyncio.Event()
 
-    async def drain(stream: asyncio.StreamReader | None, into: bytearray) -> None:
+    async def drain(stream: asyncio.StreamReader | None, into: bytearray, watch: bool) -> None:
         if stream is None:
             return
         while chunk := await stream.read(65536):
             into += chunk
+            if watch and _complete_json(into):
+                answered.set()
 
-    readers = asyncio.gather(drain(proc.stdout, out), drain(proc.stderr, err), proc.wait())
+    readers = asyncio.gather(drain(proc.stdout, out, True), drain(proc.stderr, err, False), proc.wait())
+    answer = asyncio.ensure_future(answered.wait())
     timed_out = False
     try:
-        await asyncio.wait_for(asyncio.shield(readers), limit_s)
-    except TimeoutError:
-        timed_out = True
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        # The pipes close with the process (a daemon it started keeps no copy of them).
-        with contextlib.suppress(TimeoutError, Exception):
-            await asyncio.wait_for(readers, 2)
+        await asyncio.wait({readers, answer}, timeout=limit_s, return_when=asyncio.FIRST_COMPLETED)
         if not readers.done():
-            readers.cancel()
-            with contextlib.suppress(BaseException):
-                await readers
-        await proc.wait()
+            if answer.done():
+                # Answered: give the CLI a moment to exit by itself, then stop listening.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(proc.wait()), ANSWER_EXIT_GRACE_S)
+            else:
+                timed_out = True
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            # The pipes may stay open in a daemon the CLI started: never wait long for them.
+            with contextlib.suppress(TimeoutError, Exception):
+                await asyncio.wait_for(asyncio.shield(readers), 0.2)
+            if not readers.done():
+                readers.cancel()
+                with contextlib.suppress(BaseException):
+                    await readers
+            await proc.wait()
+    finally:
+        answer.cancel()
     return ProcessRun(bytes(out), bytes(err), proc.returncode, timed_out, loop.time() - started)
+
+
+# How long a CLI may keep running after it has printed its whole answer.
+ANSWER_EXIT_GRACE_S = 0.5
+
+
+def _complete_json(data: bytearray) -> bool:
+    """Whether ``data`` already holds one whole JSON document (agent-browser's ``--json`` answer)."""
+    text = bytes(data).strip()
+    if not text.endswith((b"}", b"]")):
+        return False
+    try:
+        json.loads(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _guard_stuck(guard: Any) -> list[str]:
