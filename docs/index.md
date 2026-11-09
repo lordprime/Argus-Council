@@ -15,8 +15,14 @@ text. Every thought passes a *thought bus* before it is acted on: guardrails and
 can annotate, hold or block it, risky tool calls wait for a human, and you can intercept and
 correct any agent, or the whole council, at any moment.
 
-!!! tip "Current version: 0.1.3"
-    **0.1.3** lets a council's members
+!!! tip "Current version: 0.1.4"
+    **0.1.4** gives agents a [live, read-only browser](configuration.md#live-browser) behind an
+    egress proxy, and you can watch each agent's browser in the run view. Skills a task calls for
+    are [loaded automatically](run-views.md#the-skills-view) and every use is traced. You sign
+    [CLI agents](cli-agents.md) in from the app, with six more CLIs, and turn optional features on
+    and off in **Settings → Features**. ACP is removed (it merged into A2A).
+
+    **0.1.3** let a council's members
     [talk to each other over A2A](concepts/councils.md#how-members-talk-to-each-other): they
     ask, delegate, review, broadcast and share a board, and your messages during a run stay in
     their instructions. The council now
