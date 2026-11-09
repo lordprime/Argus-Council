@@ -54,6 +54,7 @@ nav:
       - Design Consistency Audit: design/consistency-audit.md
       - UI Specification: design/ui-spec.md
       - Parallel, Debating Council: design/parallel-council.md
+      - Live Browser and Skill Trace: design/live-browser.md
       - Security Audit: security/audit.md
       - Threat Model: security/threat-model.md
   - Brand: brand/README.md
