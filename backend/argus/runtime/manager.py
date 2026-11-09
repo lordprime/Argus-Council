@@ -32,6 +32,7 @@ from argus.services.llm import LLMRouter
 from argus.services.notifications import Notifier
 from argus.skills.library import skill_permitted, skills_for_owner
 from argus.tools.base import ToolRegistry
+from argus.tools.browser import browser_tools
 from argus.tools.builtin import builtin_tools
 from argus.tools.code import code_tools
 from argus.tools.knowledge import SCOPE_KEY, knowledge_tools
@@ -93,6 +94,7 @@ class RunManager:
                     *skill_tools(),
                     *knowledge_tools(),
                     *web_tools(settings),
+                    *browser_tools(settings),
                     *code_tools(self.sandbox),
                     SubCouncilTool(self),
                 ]

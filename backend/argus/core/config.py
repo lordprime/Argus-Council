@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     sandbox_token: SecretStr | None = None
     sandbox_local: bool = False
 
+    # Live browser (separate container behind an egress proxy); unset: agents have no browse tool
+    browser_url: str | None = None
+    browser_token: SecretStr | None = None
+    browser_frame_fps: int = Field(default=4, ge=1, le=30)
+    browser_screenshots_per_member: int = Field(default=50, ge=1)
+    browser_action_timeout_s: int = Field(default=30, ge=1, le=300)
+
     # CLI agents: the vendors' official CLIs (claude, codex, gemini) run as council agents in the
     # separate agent runner service. Off unless the operator opts in. Each vendor's terms govern its
     # CLI; subscription logins are for the account owner's own use (multi-user: use API keys).
@@ -148,6 +155,8 @@ class Settings(BaseSettings):
         "searxng_url",
         "sandbox_url",
         "sandbox_token",
+        "browser_url",
+        "browser_token",
         "runner_url",
         "runner_token",
         "metrics_token",

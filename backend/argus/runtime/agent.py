@@ -197,8 +197,8 @@ class AgentOutcome:
 _SIDE_EFFECTS = frozenset(
     {"shell", "fs_write", "network_write", "remote_agent", "package_install", "subcouncil"}
 )
-# Sources that write their own protocol ledger entries (MCP servers, remote A2A agents, skills).
-_LEDGERED_SOURCES = frozenset({"mcp", "a2a", "remote", "council", "skill"})
+# Sources that write their own protocol ledger entries (MCP servers, remote A2A agents, skills, the browser).
+_LEDGERED_SOURCES = frozenset({"mcp", "a2a", "remote", "council", "skill", "browser"})
 # Phrases that show a tool's error already tells the model what to do next.
 _HAS_HINT = re.compile(r"\b(?:try|use|did you mean|available|instead|check|files in the workspace)\b", re.I)
 _NOT_FOUND = ("not found", "no such", "no document", "does not exist", "unknown ", "http 404", "http 410")
