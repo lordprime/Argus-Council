@@ -36,6 +36,9 @@ PW = "correct horse battery staple"
         ("fe80::1", True, True),
         ("0.0.0.0", True, True),  # noqa: S104 - an address under test, not a bind
         ("::1", False, True),
+        ("fec0::1", False, True),  # IPv6 site-local: Python calls it global
+        ("fec0::1", True, True),
+        ("feff:ffff::1", True, True),
     ],
 )
 def test_ip_blocked_matrix(ip, allow_private, blocked):

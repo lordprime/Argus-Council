@@ -41,6 +41,10 @@ def _normalise(ip: str | IPAddress) -> IPAddress:
 def always_blocked(ip: str | IPAddress) -> bool:
     """Addresses never contacted, whatever the private-network setting says."""
     addr = _normalise(ip)
+    # IPv6 site-local (fec0::/10, deprecated by RFC 3879 but still routed by some stacks) is never a
+    # public peer, yet Python counts it as global.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.is_site_local:
+        return True
     return addr.is_link_local or addr.is_multicast or addr.is_unspecified
 
 

@@ -49,6 +49,7 @@ async def test_use_skill_saves_instructions_once_and_emits_full_event(db):
     await UseSkill().invoke({"name": "brief"}, tctx(ctx, "m2", "c2"))
     arts = await artifacts_at(ctx, "skills/brief/SKILL.md")
     assert len(arts) == 1 and arts[0].kind == "skill" and arts[0].content == out1.content
+    assert arts[0].created_by == "M1"  # the member's name, as the other tools record it
     ev = evs(events, "skill.loaded")
     assert [e.data["member_id"] for e in ev] == ["m1", "m2"]
     assert ev[0].data["artifact_path"] == "skills/brief/SKILL.md"
@@ -63,6 +64,7 @@ async def test_skill_read_saves_file_and_emits_skill_read(db):
     assert out.content == "R"
     arts = await artifacts_at(ctx, "skills/brief/ref.md")
     assert len(arts) == 1 and arts[0].content == "R" and arts[0].kind == "skill"
+    assert arts[0].created_by == "M1"
     ev = evs(events, "skill.read")
     assert len(ev) == 1
     assert ev[0].data["path"] == "ref.md" and ev[0].data["artifact_path"] == "skills/brief/ref.md"

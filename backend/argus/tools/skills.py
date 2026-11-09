@@ -24,7 +24,7 @@ async def save_skill_text(ctx: ToolCallContext, path: str, text: str) -> tuple[s
     if saved.get(path) == sha:
         return path, sha
     try:
-        await ctx.run.workspace.write(path, text, by=ctx.member_id, kind="skill")
+        await ctx.run.workspace.write(path, text, by=ctx.member_name, kind="skill")
     except GuardrailBreach as exc:
         log.info("skill.artifact_failed", path=path, error=str(exc))
         return None, sha
