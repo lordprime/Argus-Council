@@ -35,8 +35,41 @@ log = logging.getLogger(__name__)
 
 ACTIONS = ("open", "snapshot", "click", "scroll", "get_text", "back", "forward", "wait")
 FORBIDDEN_ACTIONS = ("fill", "type", "press", "select", "upload", "download", "eval")
-# agent-browser files ``press`` (and hover, focus, drag...) under its ``interact`` category.
-_POLICY_DENY = (*FORBIDDEN_ACTIONS, "interact")
+# agent-browser's ``--action-policy`` matches the daemon's wire action names (agent-browser 0.41.2,
+# cli/src/commands.rs), not the CLI words: ``open`` is "navigate", ``get text`` "gettext", ``eval``
+# "evaluate". Default deny: only what this engine sends is allowed ("launch" is sent by the CLI
+# itself when it attaches with ``--cdp``), and the write actions are named in ``deny`` as well.
+_POLICY_ALLOW = (
+    "launch",
+    "close",
+    "navigate",
+    "snapshot",
+    "click",
+    "scroll",
+    "gettext",
+    "url",
+    "title",
+    "back",
+    "forward",
+    "wait",
+    "tab_list",
+    "tab_switch",
+    "tab_close",
+    "screenshot",
+    "stream_enable",
+    "stream_status",
+)
+_POLICY_DENY = (
+    *FORBIDDEN_ACTIONS,
+    "evaluate",
+    "keyboard",
+    "keydown",
+    "keyup",
+    "check",
+    "uncheck",
+    "waitforfunction",
+    "waitfordownload",
+)
 
 MAX_OUTPUT = 30_000
 MAX_URL = 2000
@@ -159,8 +192,8 @@ def build_command(action: str, args: dict[str, Any] | None) -> list[str]:
 
 
 def action_policy_json() -> str:
-    """agent-browser ``--action-policy`` file: everything allowed except the write actions."""
-    return json.dumps({"default": "allow", "deny": list(_POLICY_DENY)})
+    """agent-browser ``--action-policy`` file: only the engine's own actions, never a write action."""
+    return json.dumps({"default": "deny", "allow": list(_POLICY_ALLOW), "deny": list(_POLICY_DENY)})
 
 
 def check_chrome_extra_args(extra: Sequence[str]) -> tuple[str, ...]:
@@ -177,7 +210,10 @@ def check_chrome_extra_args(extra: Sequence[str]) -> tuple[str, ...]:
 def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:
     """A minimal environment for Chrome and agent-browser (no service token, no API settings)."""
     environ = dict(os.environ if environ is None else environ)
-    return {k: environ[k] for k in _CHILD_ENV_KEYS if k in environ}
+    env = {k: environ[k] for k in _CHILD_ENV_KEYS if k in environ}
+    # agent-browser would otherwise fetch chromereleases.googleblog.com itself, outside the proxy.
+    env["AGENT_BROWSER_NO_VERSION_CHECK"] = "1"
+    return env
 
 
 def chrome_argv(

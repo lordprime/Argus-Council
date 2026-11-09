@@ -363,12 +363,40 @@ def test_actions_and_forbidden_lists():
 
 
 def test_action_policy_denies_every_write_action():
+    # agent-browser 0.41.2 checks the daemon's wire action names (cli/src/commands.rs), not the
+    # CLI words: `open` is "navigate", `get text` is "gettext", `eval` is "evaluate", and
+    # `keyboard type` / `wait --fn` / `wait --download` are "keyboard" / "waitforfunction" /
+    # "waitfordownload". Default deny, so an action this list does not name never runs.
     policy = json.loads(action_policy_json())
-    assert policy["default"] == "allow"
-    for name in ("fill", "type", "press", "select", "upload", "download", "eval"):
-        assert name in policy["deny"]
-    for name in ("navigate", "click", "scroll", "snapshot", "get", "wait"):
-        assert name not in policy["deny"]
+    assert policy["default"] == "deny"
+    used_by_the_engine = {
+        "launch",  # sent by the CLI itself when it attaches with --cdp
+        "close",
+        "navigate",
+        "snapshot",
+        "click",
+        "scroll",
+        "gettext",
+        "url",
+        "title",
+        "back",
+        "forward",
+        "wait",
+        "tab_list",
+        "tab_switch",
+        "tab_close",
+        "screenshot",
+        "stream_enable",
+        "stream_status",
+    }
+    assert set(policy["allow"]) == used_by_the_engine
+    for name in (
+        *("fill", "type", "press", "select", "upload", "download", "eval"),
+        *("evaluate", "keyboard", "keydown", "keyup", "check", "uncheck"),
+        *("waitforfunction", "waitfordownload"),
+    ):
+        assert name in policy["deny"], name
+        assert name not in policy["allow"], name
 
 
 def test_chrome_argv_confines_the_network():
@@ -1048,7 +1076,11 @@ def test_child_env_keeps_only_what_the_children_need():
         "HOME": "/home/browser",
         "TMPDIR": "/tmp",
         "AGENT_BROWSER_SOCKET_DIR": "/tmp/ab",
+        # Set by the service, whatever the environment says: agent-browser would otherwise fetch
+        # chromereleases.googleblog.com itself, outside the proxy.
+        "AGENT_BROWSER_NO_VERSION_CHECK": "1",
     }
+    assert child_env({"AGENT_BROWSER_NO_VERSION_CHECK": "0"})["AGENT_BROWSER_NO_VERSION_CHECK"] == "1"
 
 
 def test_parse_devtools_active_port():
