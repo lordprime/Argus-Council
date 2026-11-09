@@ -311,7 +311,7 @@ class LedgerEntry(Base):
     protocol: Mapped[str] = mapped_column(
         String(8)
     )  # mcp | a2a | http | browser | skill; historic rows may say acp
-    direction: Mapped[str] = mapped_column(String(8))  # inbound | outbound
+    direction: Mapped[str] = mapped_column(String(8))  # inbound | outbound | internal
     peer: Mapped[str] = mapped_column(String(500))
     method: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(16))

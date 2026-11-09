@@ -87,7 +87,10 @@ APPROVALS_PENDING = Gauge(
     "argus_approvals_pending", "Approval requests waiting for a decision in this process", registry=REGISTRY
 )
 PROTOCOL_CALLS = Counter(
-    "argus_protocol_calls_total", "MCP/A2A calls", ["protocol", "direction", "status"], registry=REGISTRY
+    "argus_protocol_calls_total",
+    "MCP/A2A/HTTP/browser/skill calls",
+    ["protocol", "direction", "status"],
+    registry=REGISTRY,
 )
 PROTOCOL_BLOCKING_WAITS = Gauge(
     "argus_protocol_blocking_waits",

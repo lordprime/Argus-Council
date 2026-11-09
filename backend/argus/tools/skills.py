@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from argus.core.logging import get_logger
 from argus.runtime.guardrails import GuardrailBreach
 from argus.tools.base import Tool, ToolCallContext, ToolResult
+from argus.tools.remote import record_call
 
 log = get_logger(__name__)
 
@@ -41,6 +42,33 @@ def mark_active(ctx: ToolCallContext, name: str) -> None:
         active.append(name)
 
 
+async def ledger_skill(
+    ctx: ToolCallContext,
+    method: str,
+    name: str,
+    version: str | None,
+    path: str,
+    request: dict,
+    response: dict,
+    status: str,
+) -> None:
+    """Write the ledger row for a skill call. A failure is logged, never raised."""
+    try:
+        await record_call(
+            ctx,
+            protocol="skill",
+            direction="internal",
+            peer=f"{name}@{version or 'unknown'}",
+            method=method,
+            status=status,
+            request=request,
+            response=response,
+            detail={"member_id": ctx.member_id, "path": path},
+        )
+    except Exception as exc:  # the ledger is a record, never a dependency
+        log.warning("skill.ledger_failed", method=method, error=type(exc).__name__)
+
+
 class UseSkill(Tool):
     name = "use_skill"
     description = (
@@ -56,7 +84,18 @@ class UseSkill(Tool):
         pkg = ctx.run.skills.get(args.name)
         if pkg is None:
             available = ", ".join(sorted(ctx.run.skills)) or "none"
-            return ToolResult.error(f"No skill named '{args.name}'. Available: {available}")
+            err = f"No skill named '{args.name}'. Available: {available}"
+            await ledger_skill(
+                ctx,
+                "use_skill",
+                args.name,
+                None,
+                f"skills/{args.name}/SKILL.md",
+                args.model_dump(),
+                {"error": err},
+                "error",
+            )
+            return ToolResult.error(err)
         files = "\n".join(f"- {p}" for p in sorted(pkg.files)) or "(none)"
         tools = ", ".join(pkg.allowed_tools) or "any permitted tool"
         text = (
@@ -66,6 +105,16 @@ class UseSkill(Tool):
         )
         artifact_path, sha = await save_skill_text(ctx, f"skills/{pkg.name}/SKILL.md", text)
         mark_active(ctx, pkg.name)
+        await ledger_skill(
+            ctx,
+            "use_skill",
+            pkg.name,
+            pkg.version,
+            f"skills/{pkg.name}/SKILL.md",
+            args.model_dump(),
+            {"sha256": sha, "bytes": len(text.encode())},
+            "ok",
+        )
         await ctx.run.sink.emit(
             "skill.loaded",
             {
@@ -96,14 +145,44 @@ class SkillRead(Tool):
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
         pkg = ctx.run.skills.get(args.name)
         if pkg is None:
-            return ToolResult.error(f"No skill named '{args.name}'")
+            err = f"No skill named '{args.name}'"
+            await ledger_skill(
+                ctx,
+                "skill_read",
+                args.name,
+                None,
+                args.path.lstrip("./"),
+                args.model_dump(),
+                {"error": err},
+                "error",
+            )
+            return ToolResult.error(err)
         rel = args.path.lstrip("./")
         content = pkg.files.get(rel)
         if content is None:
-            return ToolResult.error(
-                f"'{args.path}' not found in skill {pkg.name}. Files: {', '.join(sorted(pkg.files))}"
+            err = f"'{args.path}' not found in skill {pkg.name}. Files: {', '.join(sorted(pkg.files))}"
+            await ledger_skill(
+                ctx,
+                "skill_read",
+                pkg.name,
+                pkg.version,
+                f"skills/{pkg.name}/{rel}",
+                args.model_dump(),
+                {"error": err},
+                "error",
             )
+            return ToolResult.error(err)
         artifact_path, sha = await save_skill_text(ctx, f"skills/{pkg.name}/{rel}", content)
+        await ledger_skill(
+            ctx,
+            "skill_read",
+            pkg.name,
+            pkg.version,
+            f"skills/{pkg.name}/{rel}",
+            args.model_dump(),
+            {"sha256": sha, "bytes": len(content.encode())},
+            "ok",
+        )
         await ctx.run.sink.emit(
             "skill.read",
             {

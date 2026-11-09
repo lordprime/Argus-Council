@@ -5,10 +5,14 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from argus.db.models import Artifact
+from argus.db.models import Artifact, LedgerEntry
+from argus.providers.types import ToolCall
+from argus.runtime.agent import AgentRunner, MemberSpec
+from argus.runtime.oversight import ThoughtBus
+from argus.services import ledger
 from argus.skills.package import SkillPackage
-from argus.tools.base import ToolCallContext
-from argus.tools.skills import SkillRead, UseSkill
+from argus.tools.base import ToolCallContext, ToolRegistry
+from argus.tools.skills import SkillRead, UseSkill, skill_tools
 from tests import test_limit_extension as limits
 from tests.test_graph_context import QUIET, FakeLLM, _council, _ctx, _owner, reply
 
@@ -90,3 +94,83 @@ async def test_oversize_skill_still_returned_without_artifact(db):
     assert not out.is_error and "Do X" in out.content
     assert evs(events, "skill.loaded")[0].data["artifact_path"] is None
     assert await artifacts_at(ctx, "skills/brief/SKILL.md") == []
+
+
+def _skill_script():
+    turn = [0]
+    calls = [
+        ToolCall(id="c1", name="use_skill", arguments={"name": "brief"}),
+        ToolCall(id="c2", name="skill_read", arguments={"name": "brief", "path": "ref.md"}),
+        ToolCall(id="c3", name="skill_read", arguments={"name": "brief", "path": "nope.md"}),
+    ]
+
+    def script(req):
+        turn[0] += 1
+        if turn[0] <= len(calls):
+            return reply("", [calls[turn[0] - 1]])
+        return reply("done")
+
+    return script
+
+
+async def _run_agent(db):
+    ctx, events = await make_ctx(db)
+    ctx.llm = FakeLLM(_skill_script())
+    member = MemberSpec(
+        id="m1", name="Ada", role="researcher", provider="fake", model="m", system_prompt="", tools=["*"]
+    )
+    runner = AgentRunner(member, ctx, ToolRegistry(skill_tools()), ThoughtBus(ctx, []), "brief")
+    out = await runner.run_task("go")
+    assert out.ok
+    return ctx, events
+
+
+async def ledger_rows(db, ctx):
+    async with db.sessionmaker() as s:
+        rows = await s.execute(
+            select(LedgerEntry).where(LedgerEntry.owner_id == ctx.owner_id).order_by(LedgerEntry.seq)
+        )
+        return list(rows.scalars())
+
+
+async def test_tool_calls_after_use_skill_carry_active_skills(db):
+    ctx, events = await _run_agent(db)
+    started = [e.data for e in evs(events, "tool.call.started")]
+    assert started[0]["active_skills"] == []  # the use_skill call itself
+    assert started[1]["active_skills"] == ["brief"]
+    assert started[2]["active_skills"] == ["brief"]
+    assert started[0]["active_skills"] is not ctx.extra["active_skills"]["m1"]
+
+
+async def test_skill_calls_write_skill_ledger_rows(db):
+    ctx, events = await _run_agent(db)
+    rows = await ledger_rows(db, ctx)
+    assert [(r.protocol, r.method, r.peer, r.direction, r.status) for r in rows] == [
+        ("skill", "use_skill", "brief@1.0.0", "internal", "ok"),
+        ("skill", "skill_read", "brief@1.0.0", "internal", "ok"),
+        ("skill", "skill_read", "brief@1.0.0", "internal", "error"),
+    ]
+    assert rows[0].detail == {"member_id": "m1", "path": "skills/brief/SKILL.md"}
+    assert (await ledger.verify(db.sessionmaker, ctx.owner_id))["ok"] is True
+    assert len(evs(events, "protocol.call")) == 3
+
+
+async def test_skill_read_error_writes_error_row(db):
+    ctx, _ = await make_ctx(db)
+    await SkillRead().invoke({"name": "brief", "path": "nope.md"}, tctx(ctx, "m1", "c1"))
+    await UseSkill().invoke({"name": "ghost"}, tctx(ctx, "m1", "c2"))
+    rows = await ledger_rows(db, ctx)
+    assert [(r.method, r.peer, r.status) for r in rows] == [
+        ("skill_read", "brief@1.0.0", "error"),
+        ("use_skill", "ghost@unknown", "error"),
+    ]
+
+
+async def test_ledger_failure_never_fails_the_skill_call(db, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr("argus.tools.skills.record_call", boom)
+    ctx, _ = await make_ctx(db)
+    out = await UseSkill().invoke({"name": "brief"}, tctx(ctx, "m1", "c1"))
+    assert not out.is_error and "Do X" in out.content
