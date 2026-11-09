@@ -15,6 +15,12 @@ import { emptyRun, reduceAll, useRuns, type RunState } from "@/stores/run";
 const frames = vi.hoisted(() => ({ openFrames: vi.fn() }));
 vi.mock("@/lib/frames", () => frames);
 
+// A JPEG body as bytes. Not `new Blob(...)`: under jsdom that is jsdom's Blob, which Node's
+// Response handles differently by version (Node 24 stringifies it; Node 22's undici treats it as
+// blob-like and calls the stream() jsdom lacks, so reading the body fails).
+const jpegResponse = () =>
+  new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { status: 200, headers: { "content-type": "image/jpeg" } });
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -129,7 +135,7 @@ describe("BrowserView", () => {
   });
 
   it("finished runs show saved screenshots with their actions", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new Blob(["jpg"]), { status: 200 }));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jpegResponse());
     const { unmount } = render(<BrowserView runId="r1" run={withBrowser({ closed: true })} live={false} />);
     expect(frames.openFrames).not.toHaveBeenCalled();
     const shots = await screen.findAllByRole("img", { name: /^Screenshot \d of / });
@@ -160,7 +166,7 @@ describe("Browser tab", () => {
       if (path === "/api/v1/runs/r1") return json(RUN);
       if (path === "/api/v1/runs/r1/artifacts") return json({ artifacts: [] });
       if (path === "/api/v1/runs/r1/events/stream") return new Response(STREAM, { status: 200, headers: { "content-type": "text/event-stream" } });
-      return new Response(new Blob(["jpg"]), { status: 200 });
+      return jpegResponse();
     });
     useRuns.setState({ runs: { r1: { ...state, status: "completed", lastSeq: 100 } } });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
