@@ -101,6 +101,9 @@ class CouncilOrchestrator:
         )
         roster = ", ".join(f"{m.name} ({m.role})" for m in members)
         self.brief = f"Your council: {roster}. Mode: {ctx.mode}."
+        browsers = [m.name for m in members if self._grants(m, "browse")]
+        if browsers:
+            self.brief += f" With a web browser (browse): {', '.join(browsers)}."
         self.steps: list[Step] = []
         # Members talk to each other over the council's A2A bus (argus.runtime.council_bus).
         for tool in council_tools():
@@ -128,6 +131,12 @@ class CouncilOrchestrator:
         self.added_steps = 0
 
     # ------------------------------------------------------------ members joining while it works
+    def _grants(self, member: MemberSpec, name: str) -> bool:
+        """Whether ``member`` may use the registered tool ``name`` (by its seat and the guardrails)."""
+        if name not in self.tools:
+            return False
+        return self.ctx.engine.tool_allowed(name, member.tools or None) is None
+
     def add_member(self, member: MemberSpec) -> None:
         """A helper joins: it is in the roster (and the live run's, the same list) until it leaves."""
         if all(m.id != member.id for m in self.members):

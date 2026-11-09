@@ -342,6 +342,7 @@ class AgentRunner:
                 "doing any other work a listed skill covers, call use_skill with its name and follow "
                 f"it:\n{index}"
             )
+        parts.append(self._web_access_note())
         if self._allowed("knowledge_search"):
             linked = self.ctx.extra.get("linked_knowledge") or []
             if linked:
@@ -390,6 +391,44 @@ class AgentRunner:
         if rails.graph.prompt_cache and stable and len(stable) < len(text):
             return SystemPrompt(text, len(stable))
         return text
+
+    def _web_access_note(self) -> str:
+        """What web access this member has and how to use it. Without it, models tend to tell the
+        user they "cannot browse" (especially with no web_search provider configured)."""
+
+        def has(name: str) -> bool:
+            return name in self.tools and self._allowed(name)
+
+        search, fetch, browse = has("web_search"), has("web_fetch"), has("browse")
+        if not (search or fetch or browse):
+            if getattr(self, "_tool_mode", "all") != "all":
+                return ""
+            return (
+                "\nYou have no web tools. When a task needs the web, ask a council member who has them "
+                "(the council roster names them) with ask_agent or delegate_task; do not tell the user "
+                "the web is unreachable."
+            )
+        lines = ["\nYour web access (you have it: never tell the user you cannot reach the web):"]
+        if search:
+            lines.append("- web_search: search the web by query; then read the best results.")
+        if fetch:
+            lines.append("- web_fetch: read a web page, text document or PDF by URL.")
+        if browse:
+            lines.append(
+                "- browse: a real, read-only browser. action=open with a url, then snapshot or get_text "
+                "to read it, click links by ref (e.g. @e3), scroll, back, forward. It cannot type or "
+                "submit forms. Use it for pages that need JavaScript or clicks, and when asked to "
+                "'browse' or 'open the browser'."
+            )
+        if not search:
+            tool = "browse (action=open)" if browse else "web_fetch"
+            lines.append(
+                f"- To search the web, open a search engine's results page with {tool}: "
+                "https://html.duckduckgo.com/html/?q=words+joined+by+plus (or "
+                "https://www.bing.com/search?q=...), then open the result links. A skill that mentions "
+                "web_search means this."
+            )
+        return "\n".join(lines)
 
     def _member_tools(self, name: str) -> list[str] | None:
         """The seat's tool grant for ``name``; the council's communication tools belong to every seat."""
@@ -1066,7 +1105,11 @@ class AgentRunner:
         the same as the tool's (artifact, ledger row, ``skill.loaded`` marked ``auto``), so the
         trace and the Skills view show it either way.
         """
-        if self._tool_mode != "all" or not self.ctx.skills or not self._allowed("use_skill"):
+        if (
+            getattr(self, "_tool_mode", "all") != "all"
+            or not self.ctx.skills
+            or not self._allowed("use_skill")
+        ):
             return ""
         from argus.skills.auto import pick_skills
         from argus.tools.base import ToolCallContext
