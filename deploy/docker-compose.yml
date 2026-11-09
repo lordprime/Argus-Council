@@ -233,7 +233,8 @@ services:
     stop_grace_period: 20s
     read_only: true
     # Chrome profiles, agent-browser's sockets and screenshots; all gone when the container stops.
-    tmpfs: ["/tmp:size=1g,nosuid,nodev"]
+    # noexec: Chrome, its helpers and agent-browser all run from the image (/opt/chrome, /usr/local/bin).
+    tmpfs: ["/tmp:size=1g,noexec,nosuid,nodev"]
     shm_size: 1g
     environment:
       ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
