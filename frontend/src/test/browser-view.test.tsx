@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserView } from "@/components/run/BrowserView";
 import type { Member, RunDetail, RunEvent } from "@/lib/types";
-import RunWorkspace from "@/routes/RunWorkspace";
+import RunWorkspace, { ArtifactViewer } from "@/routes/RunWorkspace";
 import Ledger from "@/routes/connections/Ledger";
 import { emptyRun, reduceAll, useRuns, type RunState } from "@/stores/run";
 
-const frames = vi.hoisted(() => ({ openFrames: vi.fn() }));
+const frames = vi.hoisted(() => ({ followFrames: vi.fn() }));
 vi.mock("@/lib/frames", () => frames);
 
 // A JPEG body as bytes. Not `new Blob(...)`: under jsdom that is jsdom's Blob, which Node's
@@ -49,14 +49,13 @@ function withBrowser(opts: { closed?: boolean } = {}): RunState {
 }
 
 beforeEach(() => {
-  frames.openFrames.mockReset();
-  frames.openFrames.mockImplementation(() => new Promise<void>(() => {}));
+  frames.followFrames.mockReset();
+  frames.followFrames.mockImplementation(() => new Promise<void>(() => {}));
   try {
     localStorage.removeItem("argus.runView");
   } catch {
     /* storage unavailable */
   }
-  Object.assign(URL, { createObjectURL: vi.fn((b: Blob) => `blob:${b.size}-${Math.random()}`), revokeObjectURL: vi.fn() });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -82,21 +81,21 @@ describe("browser events in the store", () => {
 
 describe("BrowserView", () => {
   it("shows the live frame for each browsing member", async () => {
-    frames.openFrames.mockImplementation(async (_run: string, _member: string, onFrame: (b: string) => void) => {
+    frames.followFrames.mockImplementation(async (_run: string, _member: string, onFrame: (b: string) => void) => {
       onFrame("QUJD");
       return new Promise<void>(() => {});
     });
     render(<BrowserView runId="r1" run={withBrowser()} live />);
     const img = await screen.findByRole("img", { name: "Live view of Ana's browser" });
     await waitFor(() => expect(img.getAttribute("src")).toBe("data:image/jpeg;base64,QUJD"));
-    expect(frames.openFrames).toHaveBeenCalledWith("r1", "m1", expect.any(Function), expect.any(AbortSignal));
+    expect(frames.followFrames).toHaveBeenCalledWith("r1", "m1", expect.any(Function), expect.any(AbortSignal));
     expect(screen.getAllByText("https://example.com/next").length).toBeGreaterThan(0);
     // The last actions, failures in words.
     expect(screen.getByText(/timed out/)).toBeInTheDocument();
   });
 
   it("the live image has no interaction handlers", async () => {
-    frames.openFrames.mockImplementation(async (_r: string, _m: string, onFrame: (b: string) => void) => {
+    frames.followFrames.mockImplementation(async (_r: string, _m: string, onFrame: (b: string) => void) => {
       onFrame("QUJD");
       return new Promise<void>(() => {});
     });
@@ -118,12 +117,12 @@ describe("BrowserView", () => {
 
   it("stops streaming when the view is left", async () => {
     let signal!: AbortSignal;
-    frames.openFrames.mockImplementation((_r: string, _m: string, _f: unknown, s: AbortSignal) => {
+    frames.followFrames.mockImplementation((_r: string, _m: string, _f: unknown, s: AbortSignal) => {
       signal = s;
       return new Promise<void>(() => {});
     });
     const { unmount } = render(<BrowserView runId="r1" run={withBrowser()} live />);
-    await waitFor(() => expect(frames.openFrames).toHaveBeenCalled());
+    await waitFor(() => expect(frames.followFrames).toHaveBeenCalled());
     expect(signal.aborted).toBe(false);
     unmount();
     expect(signal.aborted).toBe(true);
@@ -131,24 +130,72 @@ describe("BrowserView", () => {
 
   it("does not stream a closed session", () => {
     render(<BrowserView runId="r1" run={withBrowser({ closed: true })} live />);
-    expect(frames.openFrames).not.toHaveBeenCalled();
+    expect(frames.followFrames).not.toHaveBeenCalled();
   });
 
   it("finished runs show saved screenshots with their actions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jpegResponse());
     const { unmount } = render(<BrowserView runId="r1" run={withBrowser({ closed: true })} live={false} />);
-    expect(frames.openFrames).not.toHaveBeenCalled();
+    expect(frames.followFrames).not.toHaveBeenCalled();
     const shots = await screen.findAllByRole("img", { name: /^Screenshot \d of / });
     expect(shots).toHaveLength(2);
     expect(shots[0]).toHaveAttribute("alt", "Screenshot 1 of https://example.com/");
     const urls = fetchMock.mock.calls.map(([u]) => String(u));
     expect(urls).toContain("/api/v1/runs/r1/artifacts/download?path=" + encodeURIComponent("browser/m1/1.jpg"));
     expect(urls).toContain("/api/v1/runs/r1/artifacts/download?path=" + encodeURIComponent("browser/m1/2.jpg"));
+    // data: URLs, which the production CSP (img-src 'self' data:) allows; blob: would be blocked.
+    await waitFor(() => expect(shots[0]!.getAttribute("src")).toBe("data:image/jpeg;base64,/9j/2Q=="));
+    expect(shots[1]!.getAttribute("src")).toMatch(/^data:image\/jpeg;base64,/);
     const list = screen.getByRole("list", { name: "Actions by Ana" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     expect(within(list).getByText(/click/)).toBeInTheDocument();
     unmount();
-    expect(URL.revokeObjectURL).toHaveBeenCalled();
+  });
+
+  it("fetches only new screenshots when the list grows, and never shows a dropped one", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jpegResponse());
+    const closed = withBrowser({ closed: true });
+    const { rerender } = render(<BrowserView runId="r1" run={closed} live={false} />);
+    await waitFor(() => expect(screen.getAllByRole("img", { name: /^Screenshot \d of / })).toHaveLength(2));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const grown = reduceAll(closed, [ev("browser.snapshot.saved", { member_id: "m1", path: "browser/m1/3.jpg", url: "https://example.com/3", n: 3 })]);
+    rerender(<BrowserView runId="r1" run={grown} live={false} />);
+    await waitFor(() => expect(screen.getAllByRole("img", { name: /^Screenshot \d of / })).toHaveLength(3));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2]![0])).toContain(encodeURIComponent("browser/m1/3.jpg"));
+
+    // A list without the earlier shots shows only what is listed: nothing stale from before.
+    const other = { ...grown, browser: { m1: { ...grown.browser.m1!, shots: [{ path: "browser/m1/9.jpg", url: "https://example.com/9", n: 9 }] } } };
+    rerender(<BrowserView runId="r1" run={other} live={false} />);
+    expect(screen.queryByRole("img", { name: "Screenshot 1 of https://example.com/" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "Screenshot 9 of https://example.com/9" })).toHaveAttribute("src", expect.stringMatching(/^data:/));
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("reconnects to a replaced session and drops the old session's frame", async () => {
+    const signals: AbortSignal[] = [];
+    let push!: (b: string) => void;
+    frames.followFrames.mockImplementation((_r: string, _m: string, onFrame: (b: string) => void, s: AbortSignal) => {
+      signals.push(s);
+      push = onFrame;
+      return new Promise<void>(() => {});
+    });
+    const first = withBrowser();
+    const { rerender } = render(<BrowserView runId="r1" run={first} live />);
+    await waitFor(() => expect(frames.followFrames).toHaveBeenCalledTimes(1));
+    act(() => push("T0xE"));
+    expect(await screen.findByRole("img", { name: "Live view of Ana's browser" })).toHaveAttribute("src", "data:image/jpeg;base64,T0xE");
+
+    const replaced = reduceAll(first, [ev("browser.session.opened", { member_id: "m1", session_id: "s2" })]);
+    rerender(<BrowserView runId="r1" run={replaced} live />);
+    await waitFor(() => expect(frames.followFrames).toHaveBeenCalledTimes(2));
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    expect(screen.queryByRole("img", { name: "Live view of Ana's browser" })).not.toBeInTheDocument();
+    expect(screen.getByText("Waiting for the first frame")).toBeInTheDocument();
+    act(() => push("TkVX"));
+    expect(await screen.findByRole("img", { name: "Live view of Ana's browser" })).toHaveAttribute("src", "data:image/jpeg;base64,TkVX");
   });
 });
 
@@ -192,6 +239,26 @@ describe("Browser tab", () => {
   });
 });
 
+describe("Artifacts inspector", () => {
+  it("shows a screenshot artifact as an image from a data: URL", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jpegResponse());
+    render(<ArtifactViewer runId="r1" path="browser/m1/1.jpg" />);
+    const img = await screen.findByRole("img", { name: "Preview of browser/m1/1.jpg" });
+    expect(img).toHaveAttribute("src", "data:image/jpeg;base64,/9j/2Q==");
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/v1/runs/r1/artifacts/download?path=" + encodeURIComponent("browser/m1/1.jpg"));
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/artifacts/content"))).toBe(false);
+    expect(screen.queryByText(/Binary/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says when the image could not be loaded", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => json({ error: { code: "not_found", message: "gone" } }, 404));
+    render(<ArtifactViewer runId="r1" path="browser/m1/1.png" />);
+    expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /^Preview of / })).not.toBeInTheDocument();
+  });
+});
+
 describe("Ledger", () => {
   it("offers Browser", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -201,6 +268,7 @@ describe("Ledger", () => {
     });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={qc}><MemoryRouter><Ledger /></MemoryRouter></QueryClientProvider>);
+    expect(await screen.findByText(/skill calls and live-browser actions/)).toBeInTheDocument();
     const group = await screen.findByRole("radiogroup", { name: "Protocol" });
     fireEvent.click(within(group).getByRole("radio", { name: "Browser" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("protocol=browser"), expect.anything()));

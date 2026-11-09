@@ -3,59 +3,68 @@
 // page); otherwise it replays the screenshots the run kept, in order, with the actions between them.
 
 import { Globe } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Badge, EmptyState } from "@/components/ui";
-import { auth, V1 } from "@/lib/api";
-import { openFrames } from "@/lib/frames";
+import { followFrames } from "@/lib/frames";
+import { artifactImage } from "@/lib/images";
 import type { BrowserTrail, RunState } from "@/stores/run";
 
 const LIVE_ACTIONS = 5;
 
-/** Stream the member's frames while mounted; the stream is aborted on unmount. */
-function useFrames(runId: string, memberId: string, enabled: boolean): string | null {
-  const [frame, setFrame] = useState<string | null>(null);
+/**
+ * Follow the member's frames while `enabled`; the stream is aborted on unmount, when the session closes
+ * and when it is replaced (a new session id reconnects, and the old session's last frame is dropped).
+ */
+function useFrames(runId: string, memberId: string, sessionId: string, enabled: boolean): string | null {
+  const [frame, setFrame] = useState<{ key: string; src: string } | null>(null);
+  const key = `${runId}/${memberId}/${sessionId}`;
   useEffect(() => {
     if (!enabled) return;
     const ctl = new AbortController();
-    void openFrames(runId, memberId, (b64) => setFrame(`data:image/jpeg;base64,${b64}`), ctl.signal).catch(() => undefined);
+    const onFrame = (b64: string) => setFrame({ key, src: `data:image/jpeg;base64,${b64}` });
+    void followFrames(runId, memberId, onFrame, ctl.signal).catch(() => undefined);
     return () => ctl.abort();
-  }, [runId, memberId, enabled]);
-  return enabled ? frame : null;
+  }, [runId, memberId, key, enabled]);
+  return enabled && frame?.key === key ? frame.src : null;
 }
 
-/** Saved screenshots as object URLs (an <img src> cannot send the bearer token); revoked on unmount. */
+/**
+ * Saved screenshots as data: URLs, by path (the CSP allows no blob: images, and an <img> cannot send
+ * the bearer token). When the list grows only the new shots are fetched; a failed one is retried on
+ * the next change. Entries for paths no longer listed (or another run's) are never returned.
+ */
 function useShots(runId: string, shots: BrowserTrail["shots"], enabled: boolean): Record<string, string> {
-  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState<{ runId: string; urls: Record<string, string> }>({ runId, urls: {} });
+  const fetching = useRef<{ runId: string; ctl: AbortController; paths: Set<string> } | null>(null);
   const key = shots.map((s) => s.path).join("|");
   useEffect(() => {
-    if (!enabled) return;
-    let stopped = false;
-    const made: string[] = [];
-    for (const shot of shots) {
-      void (async () => {
-        try {
-          const resp = await fetch(`${V1}/runs/${runId}/artifacts/download?path=${encodeURIComponent(shot.path)}`, {
-            headers: { Authorization: `Bearer ${auth.token ?? ""}` },
-          });
-          if (!resp.ok) return;
-          const url = URL.createObjectURL(await resp.blob());
-          if (stopped) return void URL.revokeObjectURL(url);
-          made.push(url);
-          setUrls((u) => ({ ...u, [shot.path]: url }));
-        } catch {
-          /* the screenshot stays a placeholder */
-        }
-      })();
+    if (!enabled || !key) return;
+    let cur = fetching.current;
+    if (!cur || cur.runId !== runId) {
+      cur?.ctl.abort();
+      cur = fetching.current = { runId, ctl: new AbortController(), paths: new Set() };
     }
-    return () => {
-      stopped = true;
-      made.forEach((u) => URL.revokeObjectURL(u));
-    };
-    // `key` stands for the list of paths.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const { ctl, paths } = cur;
+    for (const path of key.split("|")) {
+      if (paths.has(path)) continue; // loaded or on its way
+      paths.add(path);
+      void artifactImage(runId, path, ctl.signal)
+        .then((src) => {
+          if (ctl.signal.aborted) return;
+          if (!src) return void paths.delete(path);
+          setLoaded((l) => ({ runId, urls: { ...(l.runId === runId ? l.urls : {}), [path]: src } }));
+        })
+        .catch(() => paths.delete(path)); // the screenshot stays a placeholder
+    }
   }, [runId, key, enabled]);
-  return urls;
+  useEffect(() => () => {
+    fetching.current?.ctl.abort();
+    fetching.current = null;
+  }, []);
+  const out: Record<string, string> = {};
+  if (loaded.runId === runId) for (const s of shots) if (loaded.urls[s.path]) out[s.path] = loaded.urls[s.path]!;
+  return out;
 }
 
 function Actions({ name, actions }: { name: string; actions: BrowserTrail["actions"] }) {
@@ -74,7 +83,7 @@ function Actions({ name, actions }: { name: string; actions: BrowserTrail["actio
 
 function MemberBrowser({ runId, name, memberId, trail, live }: { runId: string; name: string; memberId: string; trail: BrowserTrail; live: boolean }) {
   const streaming = live && trail.open;
-  const frame = useFrames(runId, memberId, streaming);
+  const frame = useFrames(runId, memberId, trail.sessionId, streaming);
   const urls = useShots(runId, trail.shots, !streaming);
   return (
     <section aria-label={`${name}'s browser`} className="rounded-lg border border-border bg-surface p-3 flex flex-col gap-3">

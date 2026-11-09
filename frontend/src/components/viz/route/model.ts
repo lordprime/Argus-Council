@@ -1,6 +1,7 @@
 // Route milestones: plan steps form the trail from Start to the Deliverable (summit); intercepts,
 // approvals, votes, sub-councils, protocol calls and corrections become pins along it.
 
+import { TOOL_PROTOCOLS } from "@/features/viz/comms";
 import { isTerminal, type RunState, type TimelineItem } from "@/stores/run";
 
 import { actorNode, ms, orderedItems, type CommEventLike, type RunWithViz, type SubCouncilLike } from "../heatmap/comms";
@@ -123,7 +124,7 @@ export function buildRoute(run: RunState): RouteModel {
 
   for (const c of comms) {
     if (c.kind !== "protocol" && c.kind !== "subcouncil") continue;
-    if (c.ledger?.protocol === "http") continue; // the agents' web requests: tool calls, not milestones
+    if (TOOL_PROTOCOLS.has(c.ledger?.protocol ?? "")) continue; // web, browser and skill traffic: tool calls, not milestones
     const t = ms(c.ts);
     const item = run.items[c.id];
     const sid = item && "stepId" in item ? item.stepId : undefined;

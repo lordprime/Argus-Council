@@ -147,7 +147,7 @@ export default function Ledger() {
 
   return (
     <ConnectionsPage title="Protocol ledger"
-      description="A tamper-evident, hash-chained record of every MCP and A2A call in and out of Argus, and of the agents' outbound web requests.">
+      description="A tamper-evident, hash-chained record of every MCP and A2A call in and out of Argus, and of the agents' outbound web requests, skill calls and live-browser actions.">
       <div className="flex flex-col gap-4">
         <VerifyPanel />
         <FilterBar label="Filter ledger entries" canClear={filtered}

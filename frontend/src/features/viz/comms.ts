@@ -74,6 +74,9 @@ export function toolTarget(tool: string, args: unknown, parent?: string): NodeRe
   return { kind: "tool", id: `${ns}tool:${tool}`, label: tool, parent };
 }
 
+/** Ledger protocols that are an agent's own tool traffic: drawn on the tool's node, never a milestone. */
+export const TOOL_PROTOCOLS: ReadonlySet<string> = new Set(["http", "browser", "skill"]);
+
 function protocolTarget(d: Record<string, unknown>, parent?: string): NodeRef {
   const ns = parent ? `${parent}:` : "";
   const detail = (d.detail ?? {}) as Record<string, unknown>;
@@ -81,9 +84,11 @@ function protocolTarget(d: Record<string, unknown>, parent?: string): NodeRef {
     const server = String(detail.server ?? d.peer ?? "mcp");
     return { kind: "mcp", id: `${ns}mcp:${server}`, label: server, parent };
   }
-  // An agent tool's own web request (web_fetch, web_search...): it belongs to that tool's node, not
-  // to a remote agent per website.
+  // An agent tool's own traffic belongs to that tool's node, not to a remote agent per peer: a web
+  // request (web_fetch, web_search...), a page read in the live browser, a skill call.
   if (d.protocol === "http") return toolTarget(String(detail.tool ?? d.method ?? "web"), null, parent);
+  if (d.protocol === "browser") return toolTarget("browse", null, parent);
+  if (d.protocol === "skill") return toolTarget(d.method === "skill_read" ? "skill_read" : "use_skill", null, parent);
   const agent = String(detail.agent ?? d.peer ?? "remote");
   return { kind: "remote", id: `${ns}remote:${agent}`, label: agent, role: String(d.protocol ?? ""), parent };
 }

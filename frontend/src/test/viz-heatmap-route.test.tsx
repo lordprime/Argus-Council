@@ -83,6 +83,20 @@ describe("heatmap model", () => {
   });
 });
 
+describe("route milestones skip tool traffic", () => {
+  it("does not pin web, browser or skill ledger rows", () => {
+    const run = makeRun() as RunState & { comms: unknown[] };
+    const proto = (id: string, protocol: string, to: string) => ({
+      id, seq: 1, ts: at(1), kind: "protocol", from: { kind: "member", id: "m2", label: "Coder" }, to: { kind: "tool", id: `tool:${to}`, label: to },
+      ledger: { id, hash: `hash-${id}`, protocol, latencyMs: 5, method: to },
+    });
+    run.comms = [proto("p1", "http", "web_fetch"), proto("p2", "browser", "browse"), proto("p3", "skill", "use_skill"), {
+      ...proto("p4", "a2a", "peer"), to: { kind: "remote", id: "remote:peer", label: "peer" } }] as unknown as RunState["comms"];
+    const pins = buildRoute(run).milestones.filter((m) => m.kind === "protocol");
+    expect(pins.map((m) => m.hash)).toEqual(["hash-p4"]);
+  });
+});
+
 describe("CommsHeatmap", () => {
   it("renders rows, legend, status and is accessible", async () => {
     const { container } = render(<CommsHeatmap run={makeRun()} />);

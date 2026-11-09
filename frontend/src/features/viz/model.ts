@@ -3,7 +3,7 @@
 
 import type { PlanStep, RunState } from "@/stores/run";
 
-import { COUNCIL_NODE, USER_NODE, actorRef, memberRef } from "./comms";
+import { COUNCIL_NODE, TOOL_PROTOCOLS, USER_NODE, actorRef, memberRef } from "./comms";
 import type { CommEvent, CommGraph, CommKind, NodeRef } from "./types";
 
 const ms = (ts: string | undefined) => (ts ? Date.parse(ts) : NaN);
@@ -294,8 +294,9 @@ export function routeMilestones(run: RunState): RouteMilestones {
   // Sub-council internals and approval resolutions fold into their parent pins.
   for (const c of run.comms as CommEvent[]) {
     if (!PIN_KINDS.has(c.kind)) continue;
-    // Web requests are ordinary tool calls; a pin for each would bury the notable exchanges.
-    if (c.kind === "protocol" && c.ledger?.protocol === "http") continue;
+    // Web requests, browser actions and skill calls are ordinary tool calls; a pin for each would bury
+    // the notable exchanges.
+    if (c.kind === "protocol" && TOOL_PROTOCOLS.has(c.ledger?.protocol ?? "")) continue;
     if (c.childRunId && c.kind !== "subcouncil") continue;
     if (c.kind === "subcouncil" && c.to.id !== c.childRunId) continue;
     if (c.kind === "approval" && c.from.kind === "user") continue;

@@ -149,6 +149,28 @@ describe("comms reducer", () => {
     expect(routeMilestones(s).all.filter((p) => p.kind === "protocol")).toEqual([]);
   });
 
+  it("draws browser actions on the browse node and skill calls on the skill tool's node, never as remote agents or route pins", () => {
+    seq = 0;
+    const s = reduceAll(emptyRun("r", MEMBERS), [
+      ev("run.plan", { version: 1, steps: [{ id: "s1", title: "Research", assignee_member_id: "coder", status: "running" }] }, 0, { actor: A("chair") }),
+      ev("tool.call.started", { tool_call_id: "b1", tool: "browse", source: "browser", args: { action: "open", url: "https://ex.com/" } }, 1, { step_id: "s1" }),
+      ev("protocol.call", { ledger_id: 8, hash: "h8", protocol: "browser", direction: "outbound", peer: "ex.com", method: "open",
+        status: "ok", latency_ms: 300, tool_call_id: "b1", detail: { session_id: "x", url: "https://ex.com/" } }, 2, { step_id: "s1" }),
+      ev("protocol.call", { ledger_id: 9, hash: "h9", protocol: "browser", direction: "outbound", peer: "other.org", method: "click",
+        status: "ok", latency_ms: 300, tool_call_id: "b1", detail: { session_id: "x" } }, 3, { step_id: "s1" }),
+      ev("protocol.call", { ledger_id: 10, hash: "h10", protocol: "skill", direction: "internal", peer: "brief@1.0.0", method: "use_skill",
+        status: "ok", latency_ms: 2, tool_call_id: "k1" }, 4, { step_id: "s1" }),
+      ev("protocol.call", { ledger_id: 11, hash: "h11", protocol: "skill", direction: "internal", peer: "brief@1.0.0", method: "skill_read",
+        status: "ok", latency_ms: 2, tool_call_id: "k2" }, 5, { step_id: "s1" }),
+    ]);
+    const proto = s.comms.filter((c) => c.kind === "protocol");
+    expect(proto.map((c) => c.to.id)).toEqual(["tool:browse", "tool:browse", "tool:use_skill", "tool:skill_read"]);
+    expect(proto.every((c) => c.to.kind === "tool")).toBe(true);
+    expect(s.comms.some((c) => c.to.kind === "remote" || c.from.kind === "remote")).toBe(false);
+    expect(buildGraph(s).nodes.some((n) => n.kind === "remote")).toBe(false);
+    expect(routeMilestones(s).all.filter((p) => p.kind === "protocol")).toEqual([]);
+  });
+
   it("caps the comm log and ignores duplicate events", () => {
     seq = 0;
     const s = emptyRun("r", MEMBERS);

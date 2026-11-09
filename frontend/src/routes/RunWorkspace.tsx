@@ -30,6 +30,7 @@ import { Markdown } from "@/components/ui/Markdown";
 import { api, auth, errorMessage, V1 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { clock, compact, duration, usd } from "@/lib/format";
+import { artifactImage, isImagePath } from "@/lib/images";
 import { RESUMABLE } from "@/features/runs/queries";
 import { keys, useArtifacts, useRunDetail } from "@/lib/queries";
 import { openRunStream } from "@/lib/stream";
@@ -305,15 +306,26 @@ function Timeline({ runId, density, focus, onSelect, selected, reveal, onReveale
   );
 }
 
-function ArtifactViewer({ runId, path }: { runId: string; path: string }) {
+export function ArtifactViewer({ runId, path }: { runId: string; path: string }) {
   const [content, setContent] = useState<string | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const binary = /\.(pdf|docx)$/i.test(path);
+  const image = isImagePath(path);
   useEffect(() => {
     if (binary) return;
     setContent(null);
+    setErr(null);
+    if (image) {
+      // Shown from a data: URL: the CSP allows no blob: images and an <img> cannot send the token.
+      const ctl = new AbortController();
+      artifactImage(runId, path, ctl.signal).then(
+        (src) => !ctl.signal.aborted && (src ? setContent(src) : setErr(new Error("The image could not be loaded."))),
+        (e: unknown) => !ctl.signal.aborted && setErr(e),
+      );
+      return () => ctl.abort();
+    }
     api.get<string>(`${V1}/runs/${runId}/artifacts/content?path=${encodeURIComponent(path)}`).then(setContent, setErr);
-  }, [runId, path, binary]);
+  }, [runId, path, binary, image]);
   const download = async () => {
     const resp = await fetch(`${V1}/runs/${runId}/artifacts/download?path=${encodeURIComponent(path)}`, {
       headers: { Authorization: `Bearer ${auth.token ?? ""}` },
@@ -335,6 +347,7 @@ function ArtifactViewer({ runId, path }: { runId: string; path: string }) {
       {binary ? <p className="text-sm text-fg-muted">Binary file. Download to view.</p>
         : err ? <ErrorState error={err} />
         : content == null ? <Skeleton className="h-40" />
+        : image ? <img src={content} alt={`Preview of ${path}`} className="max-w-full max-h-[70vh] object-contain rounded-md border border-border self-start" />
         : path.endsWith(".md") ? <Markdown>{content}</Markdown>
         : <pre tabIndex={0} role="region" aria-label={`Contents of ${path}`} className="font-mono text-xs whitespace-pre overflow-auto bg-surface-2 rounded-md p-3 max-h-[70vh]">{content}</pre>}
     </div>
