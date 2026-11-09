@@ -879,29 +879,26 @@ var HL = (() => {
 /**
  * Council: the Argus mark as a room at work. Five members sit round a table
  * (the iris) inside the almond of the eye; the pupil is a dot on the table.
- * Four members have two helpers at small desks; the fifth seat, turned askew,
- * holds a ring: the devil's advocate. A member: tasks fan out to its helpers,
- * it claims, a member across challenges. The advocate: a ring (proof?) goes to
- * every member and their helpers fetch evidence. The table: all co-sign.
- * Phases are scheduled in the one loop; hits are by radius and angle on a
- * fixed plane. The read-out names the phase; the slider is the pace, in ms.
+ * Four members have two helpers; the askew fifth seat is the devil's advocate.
+ * While watched (a hand, or play) the council works one flowing lap of eased,
+ * overlapping moves whose end is its start. A hand also picks a member: it and
+ * its helpers go bright and the pupil turns to it. The slider is the lap, in s.
  */
 const {
-  Cam, clamp, disposer, facing, fit, flatDot, mk, place, pointer, poly, prism, proj,
-  put, rad, reducedMotion, register, rrect, seg, solid, tdone, tset, tval, tween, unproj,
+  Cam, bezier, disposer, facing, fit, flatDot, lerp, mk, place, pointer, poly, prism, proj, put, rad,
+  reducedMotion, register, rrect, seg, solid, spring, stepS, tdone, tset, tval, tween, unproj,
 } = HL;
 
 const N = 5, ADV = 4, TABLE = 5, S = 2.06, OFF = 9, R = 18, TH = 11, RP = 12.5, RS = 31, RH = 47, SPLAY = 15;
-const OUT = [1, 0, 2.5, 0.5, 3.5], SKEW = 34, CH = [2, 3, 0, 0], STAG = 60, ARC = 15, LOOK = 3.5;
-const EL = 75, EH = 55, h2 = Math.SQRT1_2;
+const OUT = [1, 0, 2.5, 0.5, 3.5], SKEW = 34, JAB = [3, 2, 0, 1], ARC = 15, LOOK = 3.5, GRACE = 4000;
+const EL = 75, EH = 55, h2 = Math.SQRT1_2, ease = bezier(0.65, 0, 0.35, 1);
+const PHASES = [[0.1, "claim"], [0.26, "challenge"], [0.44, "proof?"], [0.56, "evidence"], [0.72, "co-sign"], [0.92, "fan out"]];
+const phase = (u) => PHASES.reduce((name, [at, n]) => (u >= at ? n : name), "fan out");
 
 /** The world [x, y] of a point (or, with dir, a direction) in a seat's frame: u out from the table, v along it, turned by sk. */
 function frame(th, rr, sk = 0) {
   const c = Math.cos(th), s = Math.sin(th), c2 = Math.cos(rad(sk)), s2 = Math.sin(rad(sk));
-  return (u, v, dir) => {
-    const a = u * c2 - v * s2 + (dir ? 0 : rr), b = u * s2 + v * c2;
-    return [a * c - b * s, a * s + b * c];
-  };
+  return (u, v, dir) => { const a = u * c2 - v * s2 + (dir ? 0 : rr), b = u * s2 + v * c2; return [a * c - b * s, a * s + b * c]; };
 }
 /** A rounded box in a seat's frame, as a world ring. */
 function turned(box, r, th, rr, sk) {
@@ -917,10 +914,23 @@ function almond(P) {
   }
   return poly(pts);
 }
+/** A cyclic track: moves [start, length, value] on a lap of 1, each eased in and out from the move before it, so the lap's end is its start. */
+function track(moves) {
+  const ms = moves.map(([a, d, v]) => [((a % 1) + 1) % 1, d, v]).sort((p, q) => p[0] - q[0]);
+  return (u) => {
+    let held = null, gap = 2;
+    for (let i = 0; i < ms.length; i++) {
+      const [a, d, v] = ms[i], t = (((u - a) % 1) + 1) % 1;
+      if (t < d) { const from = ms[(i + ms.length - 1) % ms.length][2], k = ease(t / d); return v.map((x, j) => lerp(from[j], x, k)); }
+      if (t - d < gap) { gap = t - d; held = v; }
+    }
+    return held;
+  };
+}
 
 function mount({ stage, svg, read }, value) {
   const bag = disposer();
-  let pace = value;
+  let lap = value;
   const C = Cam(45, 0.5, S);
   fit(C, [[EL * h2, -EL * h2, 0], [-EL * h2, EL * h2, 0], [EH * h2, EH * h2, 0], [-(RH + 5) * h2, -(RH + 5) * h2, 13]], 200, 168);
   const P = proj(C), front = facing(C);
@@ -965,113 +975,105 @@ function mount({ stage, svg, read }, value) {
 
   const g = mk("g", {}, svg);
   mk("path", { d: almond(P), class: "nf lo" }, g);
-  let ex, pupil, guide, tableSil;
+  let ex, pupil, tableSil;
   for (const it of items) {
     if (!it.table) { it.draw(mk("g", {}, g)); continue; }
     const t = solid(g), circle = (r) => rrect(-r, -r, r, r, r, 14);
     put(t, prism(P, front, circle(R), circle(R - 1.6), 0, TH));
     t.sil.classList.add("sil"); tableSil = t.sil;
     // what lies on the table top goes just after the table, so the near members still cover it
-    ex = mk("g", {}, g); guide = mk("path", { class: "nf dash" }, ex); pupil = flatDot(ex, C, 2.8, "dot");
+    ex = mk("g", {}, g); pupil = flatDot(ex, C, 2.8, "dot");
   }
   const top = mk("g", {}, g);
 
-  // the tokens: each member's voice (claim, challenge, signature), the advocate's rings, the helpers' tasks
-  const spot = (i) => polar(seats[i].th, RP), pos = (v) => ({ x: tween(v[0]), y: tween(v[1]) });
-  const voices = seats.map((s) => ({ ...pos(spot(s.i)), el: flatDot(ex, C, 1.3, "dot off") }));
-  const rings = seats.map((s) => ({ ...pos(spot(ADV)), el: flatDot(ex, C, 2.6, "nf lo"), to: s.i }));
+  // the lap. Members are staggered round the table by d; each token has a rest place and a cyclic track.
+  const spot = (i) => polar(seats[i].th, RP), claim = (m) => polar(seats[m].th, 9.5), sign = (i) => polar(seats[i].th, 5.2);
+  const dir = (i, r) => polar(ang(i), r), d = (m) => m * 0.025;
+  const jabAt = (m) => { const [x, y] = claim(JAB[m]), [cx, cy] = claim(m), k = 3.2 / Math.hypot(cx - x, cy - y); return [x + (cx - x) * k, y + (cy - y) * k]; };
+  const tether = () => mk("path", { class: "nf dash" }, ex);
+  const voices = seats.map((s) => ({ owner: s.i, home: spot(s.i), line: tether(), el: flatDot(ex, C, 1.3, "dot off"), at: s.i === ADV
+    ? track([[0.74, 0.1, sign(ADV)], [0.88, 0.1, spot(ADV)]])
+    : track([[0.06 + d(s.i), 0.12, claim(s.i)], [0.28 + s.i * 0.03, 0.07, jabAt(s.i)], [0.36 + s.i * 0.03, 0.07, claim(s.i)],
+      [0.72 + d(s.i), 0.1, sign(s.i)], [0.86 + d(s.i), 0.1, spot(s.i)]]) }));
+  const rd = (m) => Math.min(Math.abs(m - ADV), N - Math.abs(m - ADV)) * 0.025;
+  const rings = [0, 1, 2, 3].map((m) => ({ owner: m, home: spot(ADV), line: tether(), el: flatDot(ex, C, 2.6, "nf lo"), at: track([[0.42 + rd(m), 0.1, claim(m)], [0.66 + rd(m), 0.1, spot(ADV)]]) }));
   const tasks = [];
   seats.forEach((s) => s.helpers.forEach((hl, k) => {
-    const tg = mk("g", {}, ex);
-    tasks.push({ seat: s.i, k, hl, near: s.near, tg, s: tween(0), up: false, el: flatDot(tg, C, 1.1, "dot off") });
+    const tg = mk("g", {}, ex), a = d(s.i) + k * 0.012;
+    tasks.push({ owner: s.i, hl, near: s.near, tg, up: false, home: [0], el: flatDot(tg, C, 1.1, "dot off"), at: track([[0.94 + a, 0.12, [1]], [0.55 + a, 0.12, [0]]]) });
   }));
-  const look = pos([Math.cos(ang(ADV)) * 2, Math.sin(ang(ADV)) * 2]);
-  const go = (tok, xy, now, delay) => { tset(tok.x, xy[0], now, delay); tset(tok.y, xy[1], now, delay); };
-  // the phases, on the loop's own clock: [at, fn]
-  let queue = [], lines = [];
-  const run = (now) => { queue = queue.filter(([t, fn]) => (t <= now ? (fn(t), false) : true)); };
+  const rest = dir(ADV, 2);
+  const gaze = track([[0.02, 0.08, dir(0, 3)], [0.16, 0.1, dir(2, 3)], [0.3, 0.1, dir(1, 3)], [0.44, 0.1, dir(ADV, LOOK)], [0.58, 0.1, dir(3, 3)], [0.72, 0.1, [0, 0]]]);
+  const look = { x: spring(rest[0]), y: spring(rest[1]) };
 
-  const B = register(stage, (_dt, now) => {
-    run(now);
-    let moving = queue.length > 0;
-    const busy = (...tw) => tw.forEach((t) => { moving = moving || !tdone(t, now); });
-    for (const v of [...voices, ...rings]) { place(v.el, P(tval(v.x, now), tval(v.y, now), TH)); busy(v.x, v.y); }
+  // who is watching: a hand (with the seat it picks), or play: the unseen pointer, which never leaves until play stops
+  let u = 0, hand = false, pick = -1, play = false, handOff = -1, shown = "", marked = "";
+  const w = tween(0);
+  const mix = (tok, uu, k) => { const v = tok.at(uu); return v.map((x, j) => lerp(tok.home[j], x, k)); };
+
+  const B = register(stage, (dt, now) => {
+    if (play && handOff >= 0 && now - handOff > GRACE) play = false; // play was stopped while a hand held it
+    const on = hand || play, still = reducedMotion();
+    if (on + "" + pick !== marked) { marked = on + "" + pick; mark(on); }
+    tset(w, on ? 1 : 0, now, 0);
+    const k = tval(w, now);
+    if (!still) u = (u + (dt / lap) * k) % 1;
+    const uu = still ? 0.5 : u; // without motion, the lap is shown held at its debate
+    for (const tok of [...voices, ...rings]) {
+      const [x, y] = mix(tok, uu, k), [hx, hy] = tok.home, far = Math.hypot(x - hx, y - hy) > 1.2;
+      place(tok.el, P(x, y, TH));
+      if (far) tok.line.setAttribute("d", seg(P(hx, hy, TH), P(x, y, TH))); else tok.line.removeAttribute("d");
+    }
     for (const t of tasks) {
-      const s = tval(t.s, now), [x0, y0] = spot(t.seat), [x1, y1] = t.hl.desk;
-      place(t.el, P(x0 + (x1 - x0) * s, y0 + (y1 - y0) * s, TH + (5.5 - TH) * s + ARC * Math.sin(Math.PI * s)));
+      const s = mix(t, uu, k)[0], [x0, y0] = spot(t.owner), [x1, y1] = t.hl.desk;
+      place(t.el, P(lerp(x0, x1, s), lerp(y0, y1, s), TH + (5.5 - TH) * s + ARC * Math.sin(Math.PI * s)));
       // a near member's task, once past the member, is nearer than everything: it moves to the top layer
       const up = t.near && s > 0.5;
       if (up !== t.up) { t.up = up; (up ? top : ex).append(t.tg); }
-      busy(t.s);
     }
-    place(pupil, P(tval(look.x, now), tval(look.y, now), TH)); busy(look.x, look.y);
-    return moving;
+    const want = pick >= 0 && pick < N ? dir(pick, LOOK) : pick === TABLE ? [0, 0] : gaze(uu).map((x, j) => lerp(rest[j], x, k));
+    look.x.t = want[0]; look.y.t = want[1];
+    const mv = stepS(look.x, dt) | stepS(look.y, dt);
+    place(pupil, P(look.x.x, look.y.x, TH));
+    const name = on ? phase(uu) : "rest";
+    if (name !== shown) read.textContent = shown = name;
+    return (on && !still) || !tdone(w, now) || !!mv;
   });
   bag.add(B.unregister);
 
-  const line = (a, b) => { lines.push(seg(P(a[0], a[1], TH), P(b[0], b[1], TH))); guide.setAttribute("d", lines.join("")); };
-  const claimAt = (m) => polar(seats[m].th, 9.5);
-
-  let act = -1;
-  function setActive(a) {
-    if (a === act) return;
-    const now = performance.now(), from = a >= 0 && a < N ? a : act >= 0 && act < N ? act : ADV;
-    const ring = (i) => Math.min(Math.abs(i - from), N - Math.abs(i - from)) * STAG;
-    act = a; queue = []; lines = []; guide.removeAttribute("d");
-    // everything goes home first, staggered by ring distance; the choice's own phases then move what they move
-    voices.forEach((v, i) => go(v, spot(i), now, ring(i)));
-    rings.forEach((r) => go(r, spot(ADV), now, ring(r.to)));
-    tasks.forEach((t) => tset(t.s, 0, now, ring(t.seat) + t.k * STAG));
-    const th = ang(a >= 0 && a < N ? a : ADV), reach = a === TABLE ? 0 : a < 0 ? 2 : LOOK;
-    go(look, [Math.cos(th) * reach, Math.sin(th) * reach], now, 0);
-    for (const s of seats) for (const el of [...s.sils, ...s.helpers.flatMap((hl) => hl.sils)]) el.classList.toggle("hi", s.i === a);
-    tableSil.classList.toggle("hi", a === TABLE);
-    pupil.setAttribute("class", a < 0 || a === TABLE ? "dot" : "dot m");
-    voices.forEach((v, i) => v.el.setAttribute("class", a === TABLE || i === a || (a >= 0 && a < ADV && i === CH[a]) ? "dot m" : "dot off"));
-    rings.forEach((r) => r.el.setAttribute("class", a === ADV ? "nf" : "nf lo"));
-    tasks.forEach((t) => t.el.setAttribute("class", t.seat === a || a === ADV ? "dot m" : "dot off"));
-    const step = (k, name, fn) => queue.push([now + k * pace, (t) => { read.textContent = name; fn(t); }]);
-
-    if (a < 0) read.textContent = "rest";
-    else if (a < ADV) {
-      const c = CH[a], [x, y] = claimAt(a), [cx, cy] = claimAt(c), d = Math.hypot(cx - x, cy - y);
-      const to = [x + ((cx - x) / d) * 3.2, y + ((cy - y) / d) * 3.2];
-      step(0, "fan out", (t) => tasks.forEach((k) => { if (k.seat === a) tset(k.s, 1, t, k.k * STAG); }));
-      step(1, "claim", (t) => { go(voices[a], claimAt(a), t, 0); line(spot(a), claimAt(a)); });
-      step(2, "challenge", (t) => { go(voices[c], to, t, 0); line(spot(c), to); });
-    } else if (a === ADV) {
-      step(0, "proof?", (t) => rings.forEach((r) => { go(r, spot(r.to), t, ring(r.to)); if (r.to !== ADV) line(spot(ADV), spot(r.to)); }));
-      step(1, "evidence", (t) => tasks.forEach((k) => tset(k.s, 1, t, ring(k.seat) + k.k * STAG)));
-      step(2, "evidence", (t) => tasks.forEach((k) => tset(k.s, 0, t, ring(k.seat) + k.k * STAG)));
-    } else {
-      step(0, "co-sign", (t) => voices.forEach((v, i) => { const to = polar(seats[i].th, 5.2); go(v, to, t, ring(i)); line(spot(i), to); }));
-    }
-    if (reducedMotion()) run(Infinity);
-    B.wake();
+  /** The classes: what the hand picks is bright; tokens are lit while the council works. */
+  function mark(on) {
+    for (const s of seats) for (const el of [...s.sils, ...s.helpers.flatMap((hl) => hl.sils)]) el.classList.toggle("hi", s.i === pick);
+    tableSil.classList.toggle("hi", pick === TABLE);
+    pupil.setAttribute("class", pick >= 0 && pick < N ? "dot m" : "dot");
+    const lit = (o) => (o === pick ? "dot" : on ? "dot m" : "dot off");
+    for (const t of [...voices, ...tasks]) t.el.setAttribute("class", lit(t.owner));
+    for (const r of rings) r.el.setAttribute("class", r.owner === pick || pick === ADV ? "nf hi" : on ? "nf" : "nf lo");
+    for (const t of [...voices, ...rings]) t.line.setAttribute("class", t.owner === pick || (pick === ADV && rings.includes(t)) ? "nf dash hi" : "nf dash");
   }
 
   /** The seat under a screen point: by radius and angle on a fixed plane at seat height, which nothing moves. */
   function hit([sx, sy]) {
-    const [x, y] = unproj(C, sx, sy, 6), r = Math.hypot(x, y);
-    if (r < R + 2) return TABLE;
-    if (r > RH + 10) return -1;
-    const k = Math.round((Math.atan2(y, x) / rad(1) - OFF) / 72);
-    return ((k % N) + N) % N;
+    const [x, y] = unproj(C, sx, sy, 6), r = Math.hypot(x, y), k = Math.round((Math.atan2(y, x) / rad(1) - OFF) / 72);
+    return r < R + 2 ? TABLE : r > RH + 10 ? -1 : ((k % N) + N) % N;
   }
 
-  bag.add(pointer(stage, { move: (p) => setActive(hit(p)), leave: () => setActive(-1) }));
+  const ghost = (e) => e && e.pointerType === "ghost";
+  bag.add(pointer(stage, {
+    move: (p, e) => { if (ghost(e)) { play = true; handOff = -1; } else { hand = true; pick = hit(p); } B.wake(); },
+    leave: (e) => { if (ghost(e)) play = false; else { hand = false; pick = -1; if (play) handOff = performance.now(); } B.wake(); }, // play resumes after a hand
+  }));
   bag.add(() => svg.replaceChildren());
   read.textContent = "rest";
-
-  return { set: (v) => { pace = clamp(v, 300, 1400); }, destroy: bag.dispose };
+  return { set: (v) => { lap = v; }, destroy: bag.dispose };
 }
 
 hairline({
   name: "council",
-  means: "Members hand tasks to helpers, claim and challenge across the table; the askew seat asks for proof; then all co-sign at the pupil.",
+  means: "One flowing lap: helpers take tasks, claims cross the table and are challenged, the askew seat asks for proof, and all co-sign.",
   rules: [1, 2, 4, 5],
-  range: [450, 700, 1000],
-  tour: [[239, 196], [258, 210], [264, 157], [285, 153], [200, 166], null],
+  range: [9, 12, 16],
+  tour: [[200, 166], [239, 196], [264, 157]],
   mount,
 });
 </script>
