@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from argus.browser.client import BrowserBusy, RemoteBrowser, SessionLost
+from argus.browser.client import ActionRejected, BrowserBusy, RemoteBrowser, SessionLost
 from argus.core.logging import get_logger
 from argus.runtime.events import Actor
 from argus.tools.base import Tool, ToolCallContext, ToolResult
@@ -39,6 +39,10 @@ log = get_logger(__name__)
 
 _URL = re.compile(_URL_SHAPE, re.IGNORECASE)
 MAX_SNAPSHOT_CHARS = 30_000
+
+
+class SessionRestarted(Exception):
+    """A lost session was replaced; the action it was meant for was not repeated."""
 
 
 class Browse(Tool):
@@ -96,7 +100,7 @@ class Browse(Tool):
                 response={"error": detail.get("error")} if detail.get("error") else {},
                 latency_ms=int((time.monotonic() - t0) * 1000),
                 detail={
-                    "member_id": ctx.member_id,
+                    "member_id": detail.get("member_id") or ctx.member_id,
                     "session_id": detail.get("session_id"),
                     "url": detail.get("url"),
                     "title": detail.get("title"),
@@ -116,12 +120,16 @@ class Browse(Tool):
 
         async def close() -> None:
             sessions = dict(extra.get("browser_sessions", {}))
+            t0 = time.monotonic()
             try:
                 await self.browser.close_run(str(ctx.run.run_id))
             finally:
                 for member_id, session_id in sessions.items():
                     await self._emit(
                         ctx, "browser.session.closed", {"member_id": member_id, "session_id": session_id}
+                    )
+                    await self._ledger(
+                        ctx, "session.close", "browser", "ok", t0, session_id=session_id, member_id=member_id
                     )
                 extra.get("browser_sessions", {}).clear()
 
@@ -147,19 +155,95 @@ class Browse(Tool):
         # The browser never reaches private addresses (egress's rule), so block them here too.
         await check_url(url, policy.allow_domains, True, self.resolver)
 
+    async def _drop(self, ctx: ToolCallContext, session_id: str, t0: float) -> None:
+        """Forget the member's session: maps, closed event and ledger row."""
+        ctx.run.extra.get("browser_sessions", {}).pop(ctx.member_id, None)
+        ctx.run.extra.get("browser_urls", {}).pop(ctx.member_id, None)
+        await self._emit(
+            ctx, "browser.session.closed", {"member_id": ctx.member_id, "session_id": session_id}
+        )
+        await self._ledger(ctx, "session.close", "browser", "ok", t0, session_id=session_id)
+
+    async def _kill(self, ctx: ToolCallContext, session_id: str) -> None:
+        """Close a session we can no longer vouch for, and forget it."""
+        t0 = time.monotonic()
+        try:
+            await self.browser.close_session(session_id)
+        except Exception as exc:
+            log.warning("browser.close_failed", error=type(exc).__name__)
+        await self._drop(ctx, session_id, t0)
+
     async def _act(self, ctx: ToolCallContext, action: str, args: dict[str, Any]) -> dict[str, Any]:
-        """The action, on the member's session; a lost session is reopened once."""
+        """The action, on the member's session. A lost session is replaced once; only ``open`` is
+        then run on the fresh one (any other action would act on a blank page)."""
         session_id = await self._session(ctx)
         try:
             return await self.browser.act(session_id, action, args)
         except SessionLost:
-            await self._emit(
-                ctx, "browser.session.closed", {"member_id": ctx.member_id, "session_id": session_id}
-            )
-            ctx.run.extra.get("browser_sessions", {}).pop(ctx.member_id, None)
-            ctx.run.extra.get("browser_urls", {}).pop(ctx.member_id, None)
+            await self._drop(ctx, session_id, time.monotonic())
             session_id = await self._open_session(ctx)
+            if action != "open":
+                raise SessionRestarted() from None
             return await self.browser.act(session_id, action, args)
+
+    async def _report(
+        self,
+        ctx: ToolCallContext,
+        t0: float,
+        *,
+        action: str,
+        target: str | None,
+        res: dict[str, Any],
+        ok: bool,
+        err: str | None,
+    ) -> None:
+        session_id = ctx.run.extra.get("browser_sessions", {}).get(ctx.member_id)
+        url, title = res.get("url") or "", res.get("title") or ""
+        host = urlparse(url).hostname or "browser"
+        await self._emit(
+            ctx,
+            "browser.action",
+            {
+                "member_id": ctx.member_id,
+                "session_id": session_id,
+                "action": action,
+                "target": target,
+                "url": url,
+                "title": title,
+                "ok": ok,
+                "error": err,
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
+        await self._ledger(
+            ctx, action, host, "ok" if ok else "error", t0,
+            session_id=session_id, url=url, title=title, error=err,
+        )  # fmt: skip
+
+    async def _step_back(self, ctx: ToolCallContext) -> bool:
+        """Leave a page the run may not read. False when the session could not be made safe (it is
+        then closed): the back failed, or it landed on yet another disallowed page."""
+        session_id = ctx.run.extra.get("browser_sessions", {}).get(ctx.member_id)
+        if session_id is None:
+            return False
+        t0 = time.monotonic()
+        try:
+            back = await self.browser.act(session_id, "back", {})
+        except Exception as exc:
+            log.warning("browser.back_failed", error=type(exc).__name__)
+            await self._kill(ctx, session_id)
+            return False
+        await self._report(
+            ctx, t0, action="back", target=None, res=back, ok=not back.get("error"), err=back.get("error")
+        )
+        landed = back.get("url") or ""
+        if landed.lower().startswith(("http://", "https://")):
+            try:
+                await self._check(ctx, landed)
+            except FetchBlocked:
+                await self._kill(ctx, session_id)
+                return False
+        return True
 
     async def _capture(self, ctx: ToolCallContext, url: str, title: str, text: str) -> None:
         from argus.knowledge.service import capture_source
@@ -234,6 +318,10 @@ class Browse(Tool):
             res = await self._act(ctx, action, service_args)
         except BrowserBusy:
             return ToolResult.error("browser busy, use web_fetch or try later")
+        except ActionRejected as exc:
+            return ToolResult.error(f"Browser action refused: {exc}")
+        except SessionRestarted:
+            return ToolResult.error("The browser session was restarted; open the page again.")
         except SessionLost:
             return ToolResult.error("The browser session was lost again; try web_fetch instead")
         except Exception as exc:
@@ -246,46 +334,28 @@ class Browse(Tool):
         title = res.get("title") or ""
         snapshot = (res.get("snapshot") or "")[:MAX_SNAPSHOT_CHARS]
         error = res.get("error")
-        session_id = ctx.run.extra.get("browser_sessions", {}).get(ctx.member_id)
         host = urlparse(url).hostname or (urlparse(args.url).hostname if args.url else None) or "browser"
-        latency = int((time.monotonic() - t0) * 1000)
 
         async def report(ok: bool, err: str | None) -> None:
-            await self._emit(
-                ctx,
-                "browser.action",
-                {
-                    "member_id": ctx.member_id,
-                    "session_id": session_id,
-                    "action": action,
-                    "target": target,
-                    "url": url,
-                    "title": title,
-                    "ok": ok,
-                    "error": err,
-                    "latency_ms": latency,
-                },
-            )
-            await self._ledger(
-                ctx, action, host, "ok" if ok else "error", t0,
-                session_id=session_id, url=url, title=title, error=err,
-            )  # fmt: skip
+            await self._report(ctx, t0, action=action, target=target, res=res, ok=ok, err=err)
+
+        # Fail closed: nothing from a page whose URL is unknown or not allowed is returned or cited.
+        if not url.lower().startswith(("http://", "https://")):
+            # about:blank, chrome-error://, or no page yet
+            msg = f"Browser error: {error}" if error else "No page is open; use action open."
+            await report(False, msg[:300])
+            return ToolResult(msg, is_error=True, data={"url": url, "peer": host})
+        try:
+            await self._check(ctx, url)
+        except FetchBlocked as exc:
+            msg = blocked_message(exc, url)
+            await report(False, msg[:300])
+            await self._step_back(ctx)
+            return ToolResult(msg, is_error=True, data={"url": url, "peer": host})
 
         if error:
             await report(False, str(error)[:300])
             return ToolResult(f"Browser error: {error}", is_error=True, data={"url": url, "peer": host})
-
-        if url:
-            try:
-                await self._check(ctx, url)
-            except FetchBlocked as exc:
-                try:
-                    await self._act(ctx, "back", {})
-                except Exception as back_exc:
-                    log.warning("browser.back_failed", error=type(back_exc).__name__)
-                msg = blocked_message(exc, url)
-                await report(False, msg[:300])
-                return ToolResult(msg, is_error=True, data={"url": url, "peer": host})
 
         if looks_like_challenge(title, snapshot, snapshot):
             msg = blocked_message(HTTPStatusBlocked(403, host, challenge=True), url)

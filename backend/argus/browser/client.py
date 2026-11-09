@@ -9,12 +9,26 @@ from typing import Any
 import httpx
 
 
+def _detail(resp: httpx.Response) -> str:
+    try:
+        detail = resp.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    if isinstance(detail, list):
+        detail = "; ".join(str(d.get("msg", d)) if isinstance(d, dict) else str(d) for d in detail)
+    return str(detail or resp.text or "the action was refused")[:300]
+
+
 class BrowserBusy(Exception):
     """The service has no free session slot."""
 
 
 class SessionLost(Exception):
     """The service does not know the session (it restarted, or closed it as idle)."""
+
+
+class ActionRejected(Exception):
+    """The service refused the action or its arguments (HTTP 422); the message is its explanation."""
 
 
 class RemoteBrowser:
@@ -64,6 +78,8 @@ class RemoteBrowser:
         )
         if resp.status_code == 404:
             raise SessionLost()
+        if resp.status_code == 422:
+            raise ActionRejected(_detail(resp))
         if resp.status_code != 200:
             raise RuntimeError(f"Browser service returned HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()

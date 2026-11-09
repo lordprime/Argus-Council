@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from argus.browser.client import BrowserBusy, RemoteBrowser, SessionLost
+from argus.browser.client import ActionRejected, BrowserBusy, RemoteBrowser, SessionLost
 from argus.core.config import Settings
 from argus.runtime.guardrails import GuardrailEngine, Guardrails
 from argus.tools import browser as browser_mod
@@ -129,6 +129,101 @@ async def test_click_that_leaves_allowed_domains_goes_back():
     res = await tool.invoke({"action": "click", "ref": "@e1"}, ctx)
     assert res.is_error and "Domain 'x.com' is not in the allowed domains" in res.content
     assert fake.calls[-1][1] == "back"
+
+
+async def opened(tool, ctx):
+    await tool.invoke({"action": "open", "url": "https://a.gov/"}, ctx)
+
+
+async def test_error_result_on_disallowed_url_goes_back_with_domain_error():
+    fake = FakeBrowser(
+        [
+            page("https://a.gov/", "A", "x"),
+            page("https://x.com/p", "X", "", error="boom"),
+            page("https://a.gov/"),
+        ]
+    )
+    tool, _ = make(fake)
+    ctx = Ctx(["*.gov"])
+    await opened(tool, ctx)
+    res = await tool.invoke({"action": "click", "ref": "@e1"}, ctx)
+    assert res.is_error and "Domain 'x.com' is not in the allowed domains" in res.content
+    assert fake.calls[-1][1] == "back"
+    assert any(t == "browser.action" and d["action"] == "back" for t, d in ctx.events)
+
+
+async def test_empty_url_with_snapshot_is_an_error_and_not_cited():
+    fake = FakeBrowser([page("", "T", "secret page text")])
+    tool, _ = make(fake)
+    ctx = Ctx()
+    res = await tool.invoke({"action": "snapshot"}, ctx)
+    assert res.is_error and "secret" not in res.content
+    assert ctx.run.sources == {}
+    assert not [c for c in fake.calls if len(c) == 3 and c[1] == "back"]
+
+
+async def _closed_session_case(second):
+    fake = FakeBrowser([page("https://a.gov/"), page("https://x.com/p")])
+    if second != "raise":
+        fake.results.append(page("https://y.com/"))
+    tool, _ = make(fake)
+    ctx = Ctx(["*.gov"])
+    await opened(tool, ctx)
+    if second == "raise":
+        orig = fake.act
+
+        async def act(session_id, action, args):
+            if action == "back":
+                raise RuntimeError("down")
+            return await orig(session_id, action, args)
+
+        fake.act = act
+    res = await tool.invoke({"action": "click", "ref": "@e1"}, ctx)
+    assert res.is_error and "not in the allowed domains" in res.content
+    assert ("close_session", "sess-1") in fake.calls
+    assert "m1" not in ctx.run.extra["browser_sessions"]
+    assert "m1" not in ctx.run.extra.get("browser_urls", {})
+    assert ("browser.session.closed", {"member_id": "m1", "session_id": "sess-1"}) in ctx.events
+    assert any(r["method"] == "session.close" for r in ctx.ledger)
+
+
+async def test_back_raising_closes_the_session():
+    await _closed_session_case("raise")
+
+
+async def test_back_landing_on_another_disallowed_page_closes_the_session():
+    await _closed_session_case("again")
+
+
+async def test_run_end_closer_writes_session_close_ledger_row():
+    tool, _ = make()
+    ctx = Ctx()
+    await tool.invoke({"action": "open", "url": "https://example.com/"}, ctx)
+    await ctx.run.extra["closers"][0]()
+    closes = [r for r in ctx.ledger if r["method"] == "session.close"]
+    assert closes and closes[0]["detail"]["member_id"] == "m1"
+
+
+async def test_lost_session_only_reopens_for_open_actions():
+    fake = FakeBrowser()
+    tool, _ = make(fake)
+    ctx = Ctx()
+    await tool.invoke({"action": "open", "url": "https://example.com/"}, ctx)
+    fake.raise_next = [SessionLost()]
+    res = await tool.invoke({"action": "click", "ref": "e1"}, ctx)
+    assert res.is_error and res.content == "The browser session was restarted; open the page again."
+    assert fake.opened == ["m1", "m1"]
+    assert not any(len(c) == 3 and c[1] == "click" and c[0] == "sess-2" for c in fake.calls)
+    assert any(r["method"] == "session.close" for r in ctx.ledger)
+
+
+@pytest.mark.parametrize("url", ["about:blank", "chrome-error://chromewebdata/", ""])
+async def test_no_page_open(url):
+    fake = FakeBrowser([page(url, "", "")])
+    tool, _ = make(fake)
+    res = await tool.invoke({"action": "back"}, Ctx())
+    assert res.is_error and res.content == "No page is open; use action open."
+    assert [c for c in fake.calls if len(c) == 3 and c[1] == "back"] == [("sess-1", "back", {})]
 
 
 async def test_one_session_per_member_and_closer_registered():
@@ -264,3 +359,20 @@ async def test_client_maps_requests_and_statuses():
     busy = RemoteBrowser("http://browser", "tok", busy_http)
     with pytest.raises(BrowserBusy):
         await busy.open_session("r1", "m1")
+
+
+async def test_rejected_action_detail_reaches_the_model():
+    def handler(req):
+        return httpx.Response(422, json={"detail": "click needs a ref"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ActionRejected, match="click needs a ref"):
+        await RemoteBrowser("http://browser", "t", http).act("s", "click", {})
+
+    class Rejecting(FakeBrowser):
+        async def act(self, session_id, action, args):
+            raise ActionRejected("scroll needs a direction")
+
+    tool, _ = make(Rejecting())
+    res = await tool.invoke({"action": "scroll"}, Ctx())
+    assert res.is_error and "scroll needs a direction" in res.content
