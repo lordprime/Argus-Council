@@ -132,14 +132,17 @@ jobs:
           tags: argus-council/runner:ci
           cache-from: type=gha,scope=runner
           cache-to: type=gha,mode=max,scope=runner
-      - name: Agent runner smoke test (CLI versions, non-root, deny-all Gemini policy)
+      - name: Agent runner smoke test (CLI versions, non-root, root-owned tool policies)
         run: |
-          for cli in claude codex gemini; do
+          for cli in claude codex gemini copilot kiro-cli qwen opencode goose vibe; do
             docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp --cap-drop ALL --security-opt no-new-privileges:true \
               --network none argus-council/runner:ci "$cli" --version
           done
           test "$(docker run --rm argus-council/runner:ci id -u)" = 10002
-          docker run --rm argus-council/runner:ci python -c "import os,stat; p='/etc/gemini-cli/policies/argus-deny-all.toml'; s=os.stat(p); assert s.st_uid == 0 and not s.st_mode & stat.S_IWOTH; print(open(p).read())"
+          for p in /etc/gemini-cli/policies/argus-deny-all.toml /etc/kiro/managed-settings.json \
+                   /etc/qwen-code/settings.json /etc/opencode/opencode.json; do
+            docker run --rm argus-council/runner:ci python -c "import os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert s.st_uid == 0 and not s.st_mode & (stat.S_IWOTH | stat.S_IWGRP), p; print(p, 'ok')" "$p"
+          done
       - name: Build browser image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
