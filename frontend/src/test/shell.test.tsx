@@ -261,8 +261,9 @@ describe("Register page", () => {
     expect(screen.getByLabelText("Password")).toHaveAttribute("aria-invalid", "true");
 
     await userEvent.type(email, "ada@example.com");
-    expect(email).not.toHaveAttribute("aria-invalid");
-    expect(screen.getByText("Fix 1 problem to create your account")).toBeInTheDocument();
+    // Re-validation lands with the next render; on a slow runner that is after `type` resolves.
+    await waitFor(() => expect(email).not.toHaveAttribute("aria-invalid"));
+    expect(await screen.findByText("Fix 1 problem to create your account")).toBeInTheDocument();
     await noAxeViolations(container);
   });
 

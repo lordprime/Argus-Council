@@ -10,5 +10,8 @@
     "@openai/codex": "0.163.0",
     "@qwen-code/qwen-code": "0.27.1",
     "opencode-ai": "1.19.5"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
   }
 }
