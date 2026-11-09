@@ -123,6 +123,69 @@ async def test_slow_viewer_drops_frames_not_memory():
     await asyncio.sleep(0.2)
 
 
+class EndlessBrowser(FakeBrowser):
+    async def frames(self, session_id, max_fps):
+        self.calls += 1
+        try:
+            while True:
+                yield b"f"
+                await asyncio.sleep(0.01)
+        finally:
+            self.closed += 1
+
+
+class FailingBrowser(FakeBrowser):
+    async def frames(self, session_id, max_fps):
+        self.calls += 1
+        yield b"a"
+        raise SessionLost()
+
+
+async def test_hub_shutdown_ends_a_stream_that_is_receiving_frames(app, client, auth):
+    rid = await _run_row(app, client, auth)
+    _go_live(app, rid, {"m1": "s1"})
+    app.state.frame_relay = FrameRelay(EndlessBrowser(), 4, grace_s=0.05)
+    # The test transport returns only once the body is complete, so shutdown comes from a timer while
+    # frames are flowing; the stream must then end by itself.
+    asyncio.get_running_loop().call_later(0.3, app.state.sse.shutdown)
+    events = await asyncio.wait_for(_read(client, rid, auth), 5)
+    assert events.count("event: frame") >= 3
+    assert events[-2:] == ["event: end", "data: {}"]
+
+
+async def test_relay_shutdown_cancels_pumps_and_closes_upstreams():
+    fake = EndlessBrowser()
+    relay = FrameRelay(fake, 4, grace_s=60)
+    async with relay.watch("s1") as v:
+        assert await v.get(1) == b"f"
+        await relay.shutdown()
+        # viewers are released, the upstream iterator is closed
+        while await v.get(1) is not None:
+            pass
+    assert fake.closed == 1 and relay.active() == 0
+
+
+async def test_upstream_failure_ends_the_stream(app, client, auth):
+    rid = await _run_row(app, client, auth)
+    _go_live(app, rid, {"m1": "s1"})
+    app.state.frame_relay = FrameRelay(FailingBrowser(), 4, grace_s=0.05)
+    events = await asyncio.wait_for(_read(client, rid, auth), 5)
+    assert events[-2:] == ["event: end", "data: {}"]
+
+
+async def test_ticket_is_single_use_and_bound_to_its_run(app, client, auth):
+    rid = await _run_row(app, client, auth)
+    other_rid = await _run_row(app, client, auth)
+    _go_live(app, rid, {"m1": "s1"})
+    app.state.frame_relay = FrameRelay(FakeBrowser([b"a"]), 4, grace_s=0.05)
+    url = f"{API}/{rid}/browser/m1/frames"
+    t = (await client.post(f"{API}/{rid}/stream-ticket", headers=auth)).json()["ticket"]
+    assert (await client.get(url, params={"ticket": t})).status_code == 200
+    assert (await client.get(url, params={"ticket": t})).status_code == 401
+    t2 = (await client.post(f"{API}/{other_rid}/stream-ticket", headers=auth)).json()["ticket"]
+    assert (await client.get(url, params={"ticket": t2})).status_code == 401
+
+
 async def test_client_ignores_keepalive_comments_and_404_is_session_lost():
     body = b": keepalive\n\ndata: " + base64.b64encode(b"jpg") + b"\n\n: keepalive\n\n"
 

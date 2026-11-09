@@ -37,6 +37,7 @@ from argus.api.v1 import (
     templates,
     webhooks,
 )
+from argus.browser.relay import relay_factory
 from argus.cache.store import RedisBackend, build_cache, redis_client
 from argus.core.config import Settings, get_settings
 from argus.core.errors import error_response, install_error_handlers
@@ -158,6 +159,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # is not held up by them and the run finalisation below gets to run.
         app.state.sse = SseHub()
         restore_signals = chain_shutdown_signals(app.state.sse.shutdown)
+        # Live browser frames: one upstream per watched session (None when no browser service is set).
+        app.state.frame_relay = relay_factory(settings)()
         app.state.webhooks = WebhookDispatcher(settings, app.state.db.sessionmaker)
         app.state.webhooks.start()  # resumes deliveries left in the outbox by a previous process
         app.state.runs = RunManager(
@@ -176,6 +179,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             app.state.sse.shutdown()
             restore_signals()
+            if app.state.frame_relay is not None:
+                await app.state.frame_relay.shutdown()
             for task in app.state.periodic:
                 task.cancel()
             await asyncio.gather(*app.state.periodic, return_exceptions=True)

@@ -557,31 +557,25 @@ async def stream(
     )
 
 
-def _frame_relay(request: Request, settings):
-    """The process-wide relay to the browser service (None when no browser service is configured)."""
-    state = request.app.state
-    relay = getattr(state, "frame_relay", None)
-    if relay is None:
-        from argus.browser.relay import relay_factory
-
-        relay = state.frame_relay = relay_factory(settings)()
-    return relay
-
-
 async def _browser_frames(request: Request, relay, live, member_id: str, session_id: str):
-    async with relay.watch(session_id) as viewer:
-        while True:
-            frame = await viewer.get(wait_s=1.0)
-            if frame is not None:
-                yield b"event: frame\ndata: %s\n\n" % base64.b64encode(frame)
-                continue
-            if viewer.ended or await request.is_disconnected():
-                break
-            # Quiet second: stop if the run ended or the member's session was replaced.
-            if live.ctx.run_id not in _manager(request).live:
-                break
-            if live.ctx.extra.get("browser_sessions", {}).get(member_id) != session_id:
-                break
+    hub: SseHub = request.app.state.sse
+    gate = hub.open()  # lets server shutdown end this stream even while frames are flowing
+    try:
+        async with relay.watch(session_id) as viewer:
+            while not gate.ended:
+                frame = await viewer.get(wait_s=1.0)
+                if frame is not None:
+                    yield b"event: frame\ndata: %s\n\n" % base64.b64encode(frame)
+                    continue
+                if viewer.ended or await request.is_disconnected():
+                    break
+                # Quiet second: stop if the run ended or the member's session was replaced.
+                if live.ctx.run_id not in _manager(request).live:
+                    break
+                if live.ctx.extra.get("browser_sessions", {}).get(member_id) != session_id:
+                    break
+    finally:
+        hub.release(gate)
     yield b"event: end\ndata: {}\n\n"
 
 
@@ -611,7 +605,7 @@ async def browser_frames(
     await db.close()  # don't hold a pooled connection for the life of the stream
     live = _manager(request).live.get(run_id)
     session_id = live.ctx.extra.get("browser_sessions", {}).get(member_id) if live else None
-    relay = _frame_relay(request, settings) if session_id else None
+    relay = getattr(request.app.state, "frame_relay", None) if session_id else None
     if not session_id or relay is None:
         raise NotFound("No live browser for this member")
     return StreamingResponse(
