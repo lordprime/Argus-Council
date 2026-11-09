@@ -73,13 +73,17 @@ for the settings and [Security](security-overview.md#the-live-browser) for what 
   host: it builds the `browser` and `api` images, starts `browser`, `egress` and two local test
   sites under their own compose project (`argus-browser-test`, its own networks and volumes, so a
   deployed stack is not touched), and runs `backend/tests/integration/test_browser_real.py`
-  against them. It proves that a public site loads and can be clicked through, that form
-  submissions (including through a service worker), downloads and `file:`/`chrome:` URLs are
-  refused, that a page cannot reach a private address that egress could route to, and that frames
-  stream. Expect a few minutes, most of it the first image build. Options: `--no-build` uses images
+  against them. The sites are local: `site.argus.test` (a public-range address on a network only
+  `egress` shares, served over http and https with a throwaway CA that only the test browser
+  trusts) and `canary.argus.test` (a private address `egress` could route to, which must never be
+  reached). It proves that a page loads and can be read and followed, that form submissions
+  (including through a service worker) never reach the site, that a download leaves no file, that
+  write actions are refused by the service and by agent-browser's policy, that the private canary
+  and loopback services in the browser container are unreachable, and that frames stream. Expect a
+  few minutes, most of it the first image build. Options: `--no-build` uses images
   already built, `--keep` leaves the stack up, and arguments after `--` go to pytest. It removes
   the stack, volumes and temp directory on exit, and prints the browser and egress logs when it
-  fails. It needs internet access, `uv` and Docker with Compose v2, and is not part of the normal
+  fails. It needs `uv`, Docker with Compose v2 and internet access only to pull base images and build, and is not part of the normal
   test run.
 
 To build images only:

@@ -94,9 +94,11 @@ the members of a council are recorded as protocol `a2a` with direction `internal
 the ledger browser). Every `use_skill` and `skill_read` call is recorded as protocol `skill`,
 direction `internal` (*Skill* in the ledger browser): the peer is `<name>@<version>` (`<name>@unknown`
 for a skill that does not exist), the method is `use_skill` or `skill_read`, and the detail holds the
-member and the file path. Browser use is recorded as protocol `browser`, direction `outbound`: the peer is the page's host, the method is the action (`open`, `click`,
-`snapshot`, ... plus `session.open` and `session.close`), and the detail holds the member, the
-session id, the page URL and its title. The `browse` tool is not also recorded as `http`. Each entry
+member and the file path. Browser use is recorded as protocol `browser`, direction `outbound`
+(*Browser* in the ledger browser): the peer is the page's host, the method is the action (`open`,
+`click`, `snapshot`, ... plus `session.open` and `session.close`), and the detail holds the
+member, the session id, the page URL and its title. The `browse` tool is not also recorded as
+`http`. Each entry
 holds the peer, protocol, direction, method, status, latency, run id and SHA-256 digests of the
 request and response (not the payloads themselves), and is chained to the previous entry:
 

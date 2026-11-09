@@ -1,10 +1,10 @@
 # Run Views
 
-The run workspace (`/runs/:runId`) shows a live or finished run in up to eight views, switched from the
+The run workspace (`/runs/:runId`) shows a live or finished run in eight views (the Browser one only once a member has opened a browser), switched from the
 toolbar. Five of them read one communication log derived from the run's event stream: who sent
 what to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
 `protocol.call`s. The **Debate** view reads the debate's record, and the **Skills** view reads the skill events
-(`skill.loaded`, `skill.read`), both from the same stream. Selecting an
+(`skill.loaded`, `skill.read`), and the **Browser** view reads the `browser.*` events and the kept screenshots, all from the same stream. Selecting an
 item in any view jumps to it in the timeline.
 
 ```mermaid
@@ -89,7 +89,7 @@ it until the run ends. The agent filter narrows the list to one member.
 In the timeline, a skill load or read expands to show exactly the text the agent received. It says
 "Content not saved" when the text could not be kept (see
 [Events](concepts/runs.md#skill-events)). Tool-call rows show a chip for each skill in effect.
-The ledger browser has a *Skill* filter.
+The ledger browser has *Skill* and *Browser* filters.
 
 ## The Browser view
 
