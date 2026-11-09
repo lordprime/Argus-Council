@@ -145,10 +145,22 @@ async def test_hub_shutdown_ends_a_stream_that_is_receiving_frames(app, client, 
     rid = await _run_row(app, client, auth)
     _go_live(app, rid, {"m1": "s1"})
     app.state.frame_relay = FrameRelay(EndlessBrowser(), 4, grace_s=0.05)
-    # The test transport returns only once the body is complete, so shutdown comes from a timer while
-    # frames are flowing; the stream must then end by itself.
-    asyncio.get_running_loop().call_later(0.3, app.state.sse.shutdown)
+    # The test transport returns only once the body is complete, so shutdown comes from a task while
+    # frames are flowing; the stream must then end by itself. It waits for the stream to be open
+    # first: a fixed timer raced the request on a slow CI runner and shut the hub down before it.
+    hub = app.state.sse
+
+    async def shut_down_once_streaming() -> None:
+        for _ in range(400):  # up to 4 s for the stream to open
+            if hub.buffers:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.3)
+        hub.shutdown()
+
+    stopper = asyncio.create_task(shut_down_once_streaming())
     events = await asyncio.wait_for(_read(client, rid, auth), 5)
+    await stopper
     assert events.count("event: frame") >= 3
     assert events[-2:] == ["event: end", "data: {}"]
 

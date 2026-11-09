@@ -420,6 +420,11 @@ async def collect_process(proc: asyncio.subprocess.Process, limit_s: float) -> P
             await proc.wait()
     finally:
         answer.cancel()
+        # A daemon may still hold the pipes: close our ends now, not when the transport is
+        # garbage-collected (possibly after its event loop has closed).
+        transport = getattr(proc, "_transport", None)
+        if transport is not None and proc.returncode is not None:
+            transport.close()
     return ProcessRun(bytes(out), bytes(err), proc.returncode, timed_out, loop.time() - started)
 
 
