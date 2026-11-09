@@ -1,14 +1,17 @@
-// Connections > CLI agents: the vendors' official CLIs (Claude Code, Codex, Gemini CLI) as council
-// seats that run with the user's own vendor account or a per-user CLI API key.
+// Connections > CLI agents: the vendors' official CLIs (Claude Code, Codex, Gemini CLI, Copilot, Kiro,
+// Qwen Code, opencode, Goose, Vibe) as council seats that run with the user's own vendor account or
+// a per-user CLI API key. One compact row per CLI; sign-in and keys open behind "Set up".
 
-import { KeyRound, RefreshCw, Terminal, UserCheck } from "lucide-react";
+import { ChevronDown, ChevronUp, KeyRound, RefreshCw, Terminal, UserCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
 import { CopyBlock } from "@/components/connections/CopyBlock";
-import { CardSkeletons, Meta, SectionTitle } from "@/components/connections/parts";
-import { Badge, Button, Callout, Card, EmptyState, ErrorState, PasswordField, SelectField } from "@/components/ui";
-import { useCliAgents, useCliSessions, useDeleteCliKey, useSetCliKey } from "@/features/connections/cliAgents";
+import { CardSkeletons, SectionTitle } from "@/components/connections/parts";
+import { Badge, Button, Callout, Card, EmptyState, ErrorState, PasswordField, SelectField, TagList } from "@/components/ui";
+import {
+  LOGIN_ACTIVE, useCliAgents, useCliLogin, useCliSessions, useDeleteCliKey, useSetCliKey,
+} from "@/features/connections/cliAgents";
 import { errorMessage } from "@/lib/api";
 import type { CliAgentInfo } from "@/lib/types";
 import { CliSignIn } from "@/routes/connections/CliSignIn";
@@ -20,7 +23,7 @@ function loginState(c: CliAgentInfo): { tone: "success" | "warning" | "neutral";
     return { tone: "success", text: c.login_verified ? `Signed in${how}` : `Sign-in found${how}, not yet verified` };
   }
   if (c.logged_in === false) return { tone: "warning", text: "Not signed in" };
-  return { tone: "neutral", text: "Unknown" };
+  return { tone: "neutral", text: "Sign-in not checked" };
 }
 
 /** Model providers a harness CLI's key can be for (labels for the key form). */
@@ -76,40 +79,102 @@ function KeyForm({ c }: { c: CliAgentInfo }) {
   );
 }
 
-function CliCard({ c, allowSubscription }: { c: CliAgentInfo; allowSubscription: boolean }) {
-  const state = loginState(c);
+/** The one-line status of a CLI for this user (badge text and tone). */
+function rowStatus(c: CliAgentInfo, runnerDown: boolean): { tone: "success" | "warning" | "neutral" | "danger"; text: string } {
+  if (runnerDown) return { tone: "danger", text: "Runner not running" };
+  if (c.installed === false) return { tone: "danger", text: "Not installed" };
+  if (c.logged_in === true) return loginState(c);
+  if (c.has_api_key) return { tone: "success", text: "Uses your API key" };
+  if (c.login_flow === null) return { tone: "warning", text: "Needs an API key" };
+  return loginState(c);
+}
+
+/** One CLI: a compact summary row; sign-in, key and server command behind "Set up". */
+function CliRow({ c, allowSubscription, runnerDown }: { c: CliAgentInfo; allowSubscription: boolean; runnerDown: boolean }) {
   const headingId = `cli-${c.cli}`;
+  const panelId = `cli-${c.cli}-panel`;
+  const canSignIn = allowSubscription && c.login_flow !== null;
+  const login = useCliLogin(c.cli, canSignIn && !runnerDown);
+  const signingIn = LOGIN_ACTIVE.has(login.data?.state ?? "none");
+  const [open, setOpen] = useState(false);
+  const expanded = open || signingIn;
+  const status = rowStatus(c, runnerDown);
+  const version = runnerDown ? null : c.version;
   return (
-    <Card as="article" aria-labelledby={headingId} className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Terminal className="size-4 text-fg-muted" aria-hidden />
-        <h3 id={headingId} className="font-semibold">{c.label}</h3>
-        {!c.enabled && <Badge>Disabled on this instance</Badge>}
-        {c.enabled && <Badge tone={state.tone}>{state.text}</Badge>}
-        {c.has_api_key && <Badge tone="info">API key</Badge>}
-      </div>
-      <dl className="grid gap-3 sm:grid-cols-3">
-        <Meta label="Seat provider" mono>{c.provider}</Meta>
-        <Meta label="Installed version" mono>{c.version ?? (c.installed === false ? "Not installed" : "Unknown")}</Meta>
-        <Meta label="Models">{c.suggested_models.join(", ")}</Meta>
-      </dl>
-      {c.status_detail && <p className="text-xs text-fg-subtle">{c.status_detail}</p>}
-      {c.enabled && allowSubscription && c.login_flow !== null && (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-fg-muted">
-            Sign in with your own account. The CLI signs itself in inside your private runner home; Argus shows you its link
-            and code and never sees the resulting login.
-          </p>
-          <CliSignIn c={c} />
-          <details className="text-sm">
-            <summary className="cursor-pointer text-fg-muted">Sign in from the server instead</summary>
-            <p className="text-xs text-fg-subtle my-2">An operator runs this on the server; you then complete the CLI's own sign-in.</p>
-            <CopyBlock label={`${c.label} sign-in command`} value={c.login_command.replace("<your-email>", "you@example.com")} />
-          </details>
+    <li>
+      <article aria-labelledby={headingId} className="flex flex-col gap-3 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Terminal className="size-4 shrink-0 text-fg-muted" aria-hidden />
+          <h3 id={headingId} className="font-semibold">{c.label}</h3>
+          <Badge tone={status.tone}>{status.text}</Badge>
+          {c.has_api_key && c.logged_in === true && <Badge tone="info">API key</Badge>}
+          <span className="font-mono text-xs text-fg-subtle">{c.provider}</span>
+          {version && <span className="font-mono text-xs text-fg-subtle truncate max-w-48" title={version}>{version}</span>}
+          <Button size="sm" variant="ghost" className="ml-auto" icon={expanded ? ChevronUp : ChevronDown}
+            aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpen(!expanded)} disabled={signingIn}>
+            {expanded ? "Close" : c.logged_in || c.has_api_key ? "Manage" : "Set up"}
+          </Button>
         </div>
-      )}
-      {c.enabled && <KeyForm c={c} />}
-    </Card>
+        <TagList items={c.suggested_models} label={`${c.label} models`} max={3} className="pl-7" />
+        {expanded && (
+          <div id={panelId} className="grid gap-4 pl-7 lg:grid-cols-2">
+            {canSignIn && (
+              <section aria-label={`${c.label} account`} className="flex flex-col gap-2 min-w-0">
+                <h4 className="text-sm font-medium">Your account</h4>
+                {runnerDown ? (
+                  <p className="text-sm text-fg-muted">Signing in needs the agent runner, which is not running.</p>
+                ) : (
+                  <>
+                    <p className="text-xs text-fg-subtle">
+                      The CLI signs itself in inside your private runner home. Argus shows you its link and code and never sees the login.
+                    </p>
+                    <CliSignIn c={c} />
+                  </>
+                )}
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-fg-muted">Sign in from the server instead</summary>
+                  <p className="text-xs text-fg-subtle my-2">An operator runs this on the server; you then complete the CLI's own sign-in.</p>
+                  <CopyBlock label={`${c.label} sign-in command`} value={c.login_command.replace("<your-email>", "you@example.com")} />
+                </details>
+              </section>
+            )}
+            <section aria-label={`${c.label} API key`} className="flex flex-col gap-2 min-w-0">
+              <h4 className="text-sm font-medium">API key</h4>
+              <KeyForm c={c} />
+            </section>
+            {c.suggested_models.length > 3 && (
+              <div className="lg:col-span-2 min-w-0">
+                <p className="text-xs text-fg-subtle mb-1">All suggested models</p>
+                <TagList items={c.suggested_models} label={`All ${c.label} models`} />
+              </div>
+            )}
+            {c.status_detail && !runnerDown && <p className="lg:col-span-2 text-xs text-fg-subtle">{c.status_detail}</p>}
+          </div>
+        )}
+      </article>
+    </li>
+  );
+}
+
+/** CLIs the operator has not offered on this instance, with how to offer them. */
+function DisabledClis({ clis, enabled }: { clis: CliAgentInfo[]; enabled: CliAgentInfo[] }) {
+  if (!clis.length) return null;
+  const example = [...enabled, ...clis.slice(0, 1)].map((c) => c.cli).join(",");
+  return (
+    <section aria-labelledby="cli-off-h">
+      <SectionTitle id="cli-off-h" count={clis.length}
+        description="Installed in the runner but not offered on this instance.">Not offered on this instance</SectionTitle>
+      <Card className="flex flex-col gap-3">
+        <TagList items={clis.map((c) => c.label)} label="CLIs not offered" />
+        <p className="text-sm text-fg-muted">
+          An operator offers a CLI by adding its name to <code className="font-mono text-xs">ARGUS_CLI_AGENTS_ALLOWED</code> in{" "}
+          <code className="font-mono text-xs">deploy/.env</code>, for example{" "}
+          <code className="font-mono text-xs break-all">ARGUS_CLI_AGENTS_ALLOWED={example}</code>, then runs{" "}
+          <code className="font-mono text-xs">./scripts/deploy.sh</code>. The CLIs added in 0.1.4 are off until then
+          (see docs/cli-agents.md).
+        </p>
+      </Card>
+    </section>
   );
 }
 
@@ -140,9 +205,12 @@ function Sessions() {
 export default function CliAgents() {
   const q = useCliAgents();
   const data = q.data;
+  const runnerDown = Boolean(data?.runner_error);
+  const offered = data?.clis.filter((c) => c.enabled) ?? [];
+  const notOffered = data?.clis.filter((c) => !c.enabled) ?? [];
   return (
     <ConnectionsPage title="CLI agents"
-      description="Seat Claude Code, the Codex CLI or the Gemini CLI on a council, signed in with your own account or a CLI API key."
+      description="Seat a vendor's coding CLI (Claude Code, Codex, Gemini CLI and more) on a council, signed in with your own account or a CLI API key."
       actions={<Button icon={RefreshCw} onClick={() => void q.refetch()} loading={q.isFetching}>Refresh status</Button>}>
       <div className="flex flex-col gap-6">
         <Callout tone="warning" title="Use within each vendor's terms">
@@ -164,21 +232,27 @@ export default function CliAgents() {
           </Card>
         ) : (
           <>
-            {data.runner_error && (
-              <Callout tone="danger" title="The agent runner is unreachable">{data.runner_error}</Callout>
+            {runnerDown && (
+              <Callout tone="danger" title="The agent runner is not running">
+                Sign-in, status and CLI seats need it; saved API keys are kept. An operator starts it with{" "}
+                <code className="font-mono text-xs">./scripts/deploy.sh --with cli-agents</code>. ({data.runner_error})
+              </Callout>
             )}
             {!data.allow_subscription && (
               <Callout tone="info" title="API keys only">This instance runs CLI agents with each user's own API key; account sign-ins are disabled.</Callout>
             )}
             <section aria-labelledby="cli-list-h">
-              <SectionTitle id="cli-list-h"
+              <SectionTitle id="cli-list-h" count={offered.length}
                 description="Seats on a CLI agent show an Account badge. Give them a fallback route (for example the same vendor's API key provider) for when the account hits its usage limit.">
                 Available CLIs
               </SectionTitle>
-              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
-                {data.clis.map((c) => <CliCard key={c.cli} c={c} allowSubscription={data.allow_subscription} />)}
-              </div>
+              <Card className="p-0">
+                <ul className="flex flex-col divide-y divide-border">
+                  {offered.map((c) => <CliRow key={c.cli} c={c} allowSubscription={data.allow_subscription} runnerDown={runnerDown} />)}
+                </ul>
+              </Card>
             </section>
+            <DisabledClis clis={notOffered} enabled={offered} />
             <Sessions />
           </>
         )}

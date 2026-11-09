@@ -80,13 +80,16 @@ describe("Connections > CLI agents", () => {
     const { container } = renderAt("/connections/cli-agents", <main><CliAgents /></main>);
     const claude = await screen.findByRole("article", { name: "Claude Code" });
     expect(within(claude).getByText("Signed in (claude.ai)")).toBeInTheDocument();
+    await openRow(claude);
     expect(within(claude).getByRole("region", { name: "Claude Code sign-in command" })).toHaveTextContent(
       "./scripts/agent-login.sh you@example.com claude");
     const codex = screen.getByRole("article", { name: "OpenAI Codex CLI" });
-    expect(within(codex).getByText("Not signed in")).toBeInTheDocument();
+    expect(within(codex).getByText("Uses your API key")).toBeInTheDocument();
+    await openRow(codex);
     expect(within(codex).getByText(/Stored · write-only · sk-…wxyz/)).toBeInTheDocument();
 
     const gemini = screen.getByRole("article", { name: "Gemini CLI" });
+    await openRow(gemini);
     await userEvent.type(within(gemini).getByLabelText("GEMINI_API_KEY for this CLI"), "AIzaSyTestKey000001234");
     await userEvent.click(within(gemini).getByRole("button", { name: "Save key" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([u, i]) => String(u) === "/api/v1/cli-agents/gemini/key" && i?.method === "PUT")).toBe(true));
@@ -97,9 +100,58 @@ describe("Connections > CLI agents", () => {
   });
 });
 
+/** Rows are compact; their sign-in and key controls open behind "Set up" / "Manage". */
+async function openRow(card: HTMLElement) {
+  await userEvent.click(within(card).getByRole("button", { name: /^(Set up|Manage)$/ }));
+}
+
 const loginState = (over: Partial<CliLoginState>): CliLoginState => ({
   cli: "claude", state: "none", flow: "paste_code", method: null, verification_url: null, user_code: null, needs_code: false,
   retry: false, expires_at: null, error: null, message: "", ...over,
+});
+
+describe("Connections > CLI agents: layout states", () => {
+  it("shows a stopped runner once, and lists CLIs the operator has not offered with how to offer them", async () => {
+    const copilot = cli({ cli: "copilot", provider: "copilot-cli", label: "GitHub Copilot CLI", enabled: false, logged_in: null,
+      suggested_models: ["default", "claude-sonnet-5.5", "gpt-6.1-sol", "gemini-4-argon", "grok-4.7"], login_flow: "device_code" });
+    mockFetch((url) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, runner_error: "runner unreachable: ConnectError", clis: [...ENABLED.clis, copilot] });
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      return undefined;
+    });
+    const { container } = renderAt("/connections/cli-agents", <main><CliAgents /></main>);
+    expect(await screen.findByText("The agent runner is not running")).toBeInTheDocument();
+    expect(screen.getByText("./scripts/deploy.sh --with cli-agents")).toBeInTheDocument();
+    const available = screen.getByRole("region", { name: /Available CLIs/ });
+    expect(within(available).getAllByText("Runner not running")).toHaveLength(3);
+    expect(within(available).queryByRole("article", { name: "GitHub Copilot CLI" })).toBeNull();
+    const claude = within(available).getByRole("article", { name: "Claude Code" });
+    await openRow(claude);
+    expect(within(claude).queryByRole("button", { name: /Sign in with/ })).toBeNull();
+    expect(within(claude).getByText("Signing in needs the agent runner, which is not running.")).toBeInTheDocument();
+    const off = screen.getByRole("region", { name: /Not offered on this instance/ });
+    expect(within(off).getByText("GitHub Copilot CLI")).toBeInTheDocument();
+    expect(within(off).getByText("ARGUS_CLI_AGENTS_ALLOWED=claude,codex,gemini,copilot")).toBeInTheDocument();
+    expect((await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations.map((v) => v.id)).toEqual([]);
+  });
+
+  it("summarises long model lists as the first three plus a count", async () => {
+    const many = cli({ cli: "opencode", provider: "opencode-cli", label: "opencode", login_flow: "device_code",
+      suggested_models: ["default", "anthropic/claude-sonnet-5", "openai/gpt-6.1-sol", "google/gemini-4-argon", "mistral/devstral-3"] });
+    mockFetch((url) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, clis: [many] });
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      if (url.endsWith("/login")) return json(loginState({ cli: "opencode", flow: "device_code" }));
+      return undefined;
+    });
+    renderAt("/connections/cli-agents", <CliAgents />);
+    const row = await screen.findByRole("article", { name: "opencode" });
+    const summary = within(row).getByRole("list", { name: "opencode models" });
+    expect(within(summary).getAllByRole("listitem")).toHaveLength(4);
+    expect(summary).toHaveTextContent("+2 more");
+    await openRow(row);
+    expect(within(within(row).getByRole("list", { name: "All opencode models" })).getAllByRole("listitem")).toHaveLength(5);
+  });
 });
 
 describe("Connections > CLI agents: harness CLI keys", () => {
@@ -114,6 +166,8 @@ describe("Connections > CLI agents: harness CLI keys", () => {
     });
     renderAt("/connections/cli-agents", <CliAgents />);
     const card = await screen.findByRole("article", { name: "Goose" });
+    expect(within(card).getByText("Needs an API key")).toBeInTheDocument();
+    await openRow(card);
     expect(within(card).queryByRole("button", { name: /Sign in/ })).toBeNull();
     await userEvent.selectOptions(within(card).getByLabelText("Key is for"), "openrouter");
     await userEvent.type(within(card).getByLabelText("API key for this CLI"), "sk-or-v1-abcdabcd");
@@ -143,6 +197,7 @@ describe("Connections > CLI agents: in-app sign-in", () => {
     });
     const { container } = renderAt("/connections/cli-agents", <main><CliAgents /></main>);
     const card = await screen.findByRole("article", { name: "Claude Code" });
+    await openRow(card);
     await userEvent.click(within(card).getByRole("button", { name: "Sign in with your Claude account" }));
     const panel = await within(card).findByRole("group", { name: "Claude Code sign-in" });
     const link = within(panel).getByRole("link", { name: /Open claude\.com/ });
@@ -176,6 +231,7 @@ describe("Connections > CLI agents: in-app sign-in", () => {
     });
     renderAt("/connections/cli-agents", <CliAgents />);
     const card = await screen.findByRole("article", { name: "OpenAI Codex CLI" });
+    await openRow(card);
     await userEvent.click(within(card).getByRole("button", { name: "Sign in with your ChatGPT account" }));
     const panel = await within(card).findByRole("group", { name: "OpenAI Codex CLI sign-in" });
     expect(within(panel).getByRole("region", { name: "One-time code" })).toHaveTextContent("8Y19-DW049");
@@ -198,6 +254,7 @@ describe("Connections > CLI agents: in-app sign-in", () => {
     });
     const view = renderAt("/connections/cli-agents", <CliAgents />);
     const card = await screen.findByRole("article", { name: "Claude Code" });
+    await openRow(card);
     await userEvent.click(within(card).getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/v1/cli-agents/claude/logout")).toBe(true));
     view.unmount();
@@ -210,6 +267,7 @@ describe("Connections > CLI agents: in-app sign-in", () => {
     });
     renderAt("/connections/cli-agents", <CliAgents />);
     const claude = await screen.findByRole("article", { name: "Claude Code" });
+    await openRow(claude);
     expect(within(claude).queryByRole("button", { name: /Sign in/ })).toBeNull();
     expect(screen.getByText("API keys only")).toBeInTheDocument();
   });
