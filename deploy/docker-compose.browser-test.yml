@@ -5,6 +5,7 @@
 #
 #   site.argus.test    on test_site, an internal network with a public-range subnet that only
 #                      egress shares: reachable through egress exactly like a site on the internet.
+#                      Also answers as frames.argus-other.test (another site, for the cross-site iframe test).
 #   canary.argus.test  on test_canary, an ordinary private network egress is also attached to:
 #                      egress must refuse it, so it never logs a request.
 services:
@@ -37,7 +38,7 @@ services:
       - "${ARGUS_TEST_DIR:?}/tls:/tls:ro,z"
     networks:
       test_site:
-        aliases: [site.argus.test]
+        aliases: [site.argus.test, frames.argus-other.test]
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 80), timeout=4).close()"]
       interval: 5s

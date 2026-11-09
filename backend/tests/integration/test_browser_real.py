@@ -10,6 +10,8 @@ the stack (browser, egress and two test sites) and sets everything below; from `
 - ``ARGUS_TEST_SITE_URL`` / ``ARGUS_TEST_SITE_LOG``: a site reachable through egress (over https,
   so a request the browser sends is never stopped by egress's GET-only rule for plain http) and
   the directory where it logs every request it receives.
+- ``ARGUS_TEST_OTHER_SITE_URL``: the same site under another registrable domain (so another *site*
+  to Chrome), logging to ``ARGUS_TEST_SITE_LOG`` too; the cross-site iframe test embeds it.
 - ``ARGUS_TEST_CANARY_URL`` / ``ARGUS_TEST_CANARY_LOG``: a site on a private address that egress
   can route to and must refuse.
 - ``ARGUS_TEST_BROWSER_EXEC``: a command prefix that runs a command in the browser container
@@ -45,6 +47,7 @@ BROWSER_URL = os.environ.get("ARGUS_TEST_BROWSER_URL", "")
 BROWSER_TOKEN = os.environ.get("ARGUS_TEST_BROWSER_TOKEN", "")
 SITE_URL = os.environ.get("ARGUS_TEST_SITE_URL", "").rstrip("/")
 SITE_LOG = os.environ.get("ARGUS_TEST_SITE_LOG", "")
+OTHER_SITE_URL = os.environ.get("ARGUS_TEST_OTHER_SITE_URL", "").rstrip("/")
 CANARY_URL = os.environ.get("ARGUS_TEST_CANARY_URL", "").rstrip("/")
 CANARY_LOG = os.environ.get("ARGUS_TEST_CANARY_LOG", "")
 EXEC = shlex.split(os.environ.get("ARGUS_TEST_BROWSER_EXEC", ""))
@@ -58,6 +61,9 @@ pytestmark = [
 
 needs_site = pytest.mark.skipif(
     not (SITE_URL and SITE_LOG), reason="needs ARGUS_TEST_SITE_URL and ARGUS_TEST_SITE_LOG (test site)"
+)
+needs_other_site = pytest.mark.skipif(
+    not OTHER_SITE_URL, reason="needs ARGUS_TEST_OTHER_SITE_URL (the test site under another domain)"
 )
 needs_exec = pytest.mark.skipif(
     not EXEC,
@@ -381,6 +387,47 @@ async def test_service_worker_form_submit_does_not_post(
         f"{via_worker}): {seen}"
     )
     assert "POST RECEIVED" not in submitted["snapshot"]
+
+
+@needs_site
+@needs_other_site
+async def test_cross_site_iframe_runs_and_cannot_post_a_form(
+    browser: RemoteBrowser, session: str, site_log: SiteLog
+):
+    """A cross-site iframe is an out-of-process frame that Chrome starts paused for the CDP guard.
+    The guard must attach to it, put it under request interception and resume it (a frame left
+    paused would hang the page), and the frame's own form POST must still never reach the site."""
+    other_host = OTHER_SITE_URL.split("://", 1)[1]
+
+    def from_frame(prefix: str, method: str | None = None) -> list[dict[str, Any]]:
+        return [
+            e
+            for e in site_log.since(mark)
+            if e["host"] == other_host and e["path"].startswith(prefix) and method in (None, e["method"])
+        ]
+
+    mark = site_log.mark()
+    page = await browser.act(session, "open", {"url": f"{SITE_URL}/frame-parent.html"})
+    assert not page["error"], f"the page with a cross-site iframe did not load: {page['error']}"
+    assert page["title"] == "Framed page", page["title"]
+    assert from_frame("/frame-child.html"), f"the iframe was never requested: {site_log.since(mark)}"
+
+    # The frame's script ran, so it was resumed; and a script POST from it gets through (control:
+    # without it, "the site saw no form POST" below would prove nothing).
+    assert await poll(lambda: from_frame("/frame-ran"), 15), (
+        f"the iframe's script never ran (left paused?): {site_log.since(mark)}"
+    )
+    assert await poll(lambda: from_frame("/frame-control-post", "POST"), 10), (
+        f"the iframe's control POST never reached the site: {site_log.since(mark)}"
+    )
+    await asyncio.sleep(3)  # the frame submits its form right after the control POST
+    sent = [e for e in site_log.since(mark) if e["path"].startswith("/frame-submit")]
+    assert not sent, f"the iframe's form was sent: {sent}"
+
+    # The page and the session are still usable.
+    again = await browser.act(session, "snapshot", {})
+    assert not again["error"], again["error"]
+    assert again["title"] == "Framed page"
 
 
 async def test_service_refuses_write_actions(browser: RemoteBrowser, session: str):

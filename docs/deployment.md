@@ -77,7 +77,8 @@ for the settings and [Security](security-overview.md#the-live-browser) for what 
   `egress` shares, served over http and https with a throwaway CA that only the test browser
   trusts) and `canary.argus.test` (a private address `egress` could route to, which must never be
   reached). It proves that a page loads and can be read and followed, that form submissions
-  (including through a service worker) never reach the site, that a download leaves no file, that
+  (including through a service worker, and from inside a cross-site iframe, which must still load
+  and run) never reach the site, that a download leaves no file, that
   write actions are refused by the service and by agent-browser's policy, that the private canary
   and loopback services in the browser container are unreachable, and that frames stream. Expect a
   few minutes, most of it the first image build. Options: `--no-build` uses images

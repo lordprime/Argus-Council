@@ -23,6 +23,9 @@ LOG_DIR = Path(os.environ.get("SITE_LOG_DIR", "/log"))
 TLS_DIR = Path(os.environ.get("SITE_TLS_DIR", "/tls"))
 # The download test looks for these on the browser's disk: the file name and a body-only token.
 DOWNLOAD = {"filename": f"argus-dl-{secrets.token_hex(8)}.bin", "body_token": secrets.token_hex(16)}
+# Another *site* (a different registrable domain, so Chrome puts its frames in their own process)
+# served by this same server under a second name: the cross-site iframe test embeds it.
+OTHER_ORIGIN = os.environ.get("SITE_OTHER_ORIGIN", "https://frames.argus-other.test")
 _lock = threading.Lock()
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455
 
@@ -67,6 +70,23 @@ if (!('serviceWorker' in navigator)) {
     show();
   }).catch((err) => { status.textContent = 'sw: failed ' + err; });
 }
+</script>""",
+    # A page that embeds a cross-site iframe. The iframe's page runs a script (a GET beacon, then a
+    # control script POST) and then submits its prefilled POST form by itself: the guard must let
+    # the out-of-process frame run, and must still fail its form's document request.
+    "/frame-parent.html": f"""<!doctype html><title>Framed page</title>
+<h1>Framed page</h1>
+<iframe src="{OTHER_ORIGIN}/frame-child.html" title="Other site" width="600" height="200"></iframe>""",
+    "/frame-child.html": """<!doctype html><title>Framed form</title>
+<form id="f" method="post" action="/frame-submit">
+  <input type="hidden" name="secret" value="prefilled-secret">
+  <button type="submit">Send framed form</button>
+</form>
+<script>
+const send = () => document.getElementById('f').requestSubmit();
+fetch('/frame-ran')
+  .then(() => fetch('/frame-control-post', {method: 'POST', body: 'x'}))
+  .then(send, send);
 </script>""",
     "/download.html": """<!doctype html><title>Download</title>
 <h1>Download</h1><p><a href="/files/report.bin">Download report</a></p>""",

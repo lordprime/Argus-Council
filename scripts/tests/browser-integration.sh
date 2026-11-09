@@ -12,7 +12,8 @@
 # installs openssl and certutil to make the test CA). The stack runs as compose project
 # `argus-browser-test`, separate from a deployed `argus` stack, with its own networks and volumes:
 #   - `site.argus.test` (a public-range address on an internal network that only egress shares),
-#     served over http and https with a throwaway CA that only the test browser trusts;
+#     served over http and https with a throwaway CA that only the test browser trusts, and also
+#     as `frames.argus-other.test` (another site, embedded in a cross-site iframe);
 #   - `canary.argus.test` (a private address egress can route to): it must never be reached.
 # The test reaches the browser service over its Unix socket (bind-mounted from a temp dir) and runs
 # commands in the browser container (download and agent-browser policy checks) with `exec`.
@@ -82,7 +83,7 @@ docker run --rm -e HOST_UID="$ARGUS_TEST_UID" -e HOST_GID="$ARGUS_TEST_GID" \
       -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
       -keyout ca-key.pem -out ca.pem 2>/dev/null
     openssl req -newkey rsa:2048 -nodes -subj "/CN=site.argus.test" -keyout site-key.pem -out site.csr 2>/dev/null
-    printf "%s\n" "subjectAltName=DNS:site.argus.test,DNS:canary.argus.test" \
+    printf "%s\n" "subjectAltName=DNS:site.argus.test,DNS:frames.argus-other.test,DNS:canary.argus.test" \
       "extendedKeyUsage=serverAuth" "basicConstraints=CA:FALSE" >ext.cnf
     openssl x509 -req -in site.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -days 2 \
       -extfile ext.cnf -out site.pem 2>/dev/null
@@ -111,6 +112,7 @@ cd "$ROOT/backend" || exit 1
 ARGUS_TEST_BROWSER_URL="unix:$TEST_DIR/sock/browser.sock" \
 ARGUS_TEST_BROWSER_TOKEN="$ARGUS_BROWSER_TOKEN" \
 ARGUS_TEST_SITE_URL="https://site.argus.test" \
+ARGUS_TEST_OTHER_SITE_URL="https://frames.argus-other.test" \
 ARGUS_TEST_SITE_LOG="$TEST_DIR/site" \
 ARGUS_TEST_CANARY_URL="https://canary.argus.test" \
 ARGUS_TEST_CANARY_LOG="$TEST_DIR/canary" \
