@@ -1,9 +1,10 @@
 # Run Views
 
 The run workspace (`/runs/:runId`) shows a live or finished run in seven views, switched from the
-toolbar. Six of them read one communication log derived from the run's event stream: who sent
+toolbar. Five of them read one communication log derived from the run's event stream: who sent
 what to whom, including relayed [sub-council](concepts/sub-councils.md) traffic and ledgered
-`protocol.call`s. The **Debate** view reads the debate's record from the same stream. Selecting an
+`protocol.call`s. The **Debate** view reads the debate's record, and the **Skills** view reads the skill events
+(`skill.loaded`, `skill.read`), both from the same stream. Selecting an
 item in any view jumps to it in the timeline.
 
 ```mermaid
@@ -11,6 +12,8 @@ flowchart LR
     S[Event stream<br/>SSE, resumable] --> ST[Run store]
     ST --> DB[Debate record<br/>claims, challenges,<br/>positions, signatures]
     DB --> D[Debate]
+    ST --> SK[Skill list<br/>loads, reads,<br/>tool calls]
+    SK --> SV[Skills]
     ST --> CL[Communication log<br/>sender, receiver, kind, time,<br/>tokens, cost, errors]
     CL --> T[Timeline]
     CL --> M[Map]
