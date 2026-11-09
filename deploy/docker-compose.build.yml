@@ -13,3 +13,11 @@ services:
     build:
       context: ../backend
       dockerfile: docker/runner.Dockerfile
+  browser:
+    build:
+      context: ../backend
+      dockerfile: docker/browser.Dockerfile
+  # The egress proxy runs the API image; this lets `up --build browser egress` build it too.
+  egress:
+    build:
+      context: ../backend

@@ -148,25 +148,37 @@ wait_healthy() {
 
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
-# cli_agents_on: the opt-in agent runner (CLI agents) is part of this deployment, i.e.
-# COMPOSE_PROFILES (deploy/.env or the environment) lists the cli-agents profile.
-cli_agents_on() {
+# profile_on PROFILE: COMPOSE_PROFILES (the environment, else deploy/.env) lists PROFILE.
+profile_on() {
   case ",${COMPOSE_PROFILES:-$(envval COMPOSE_PROFILES '')}," in
-    *,cli-agents,*) return 0 ;;
+    *,"$1",*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-# image_services: the services built from this repository: api (also runs the sandbox), web, and
-# runner when CLI agents are enabled.
+# cli_agents_on: the opt-in agent runner (CLI agents) is part of this deployment.
+cli_agents_on() { profile_on cli-agents; }
+
+# browser_on: the opt-in live browser (browser and egress services) is part of this deployment.
+browser_on() { profile_on browser; }
+
+# image_services: the services built from this repository: api (also runs the sandbox and the
+# browser's egress proxy), web, runner when CLI agents are enabled, and browser when the live
+# browser is.
 image_services() {
-  if cli_agents_on; then printf '%s\n' api web runner; else printf '%s\n' api web; fi
+  printf '%s\n' api web
+  if cli_agents_on; then printf '%s\n' runner; fi
+  if browser_on; then printf '%s\n' browser; fi
 }
+
+# optional_service SERVICE: an image that is only there when its profile is on (runner, browser).
+optional_service() { [ "$1" = runner ] || [ "$1" = browser ]; }
 
 # snapshot_images VERSION: give the images that run now (or, when none run, the ones tagged
 # VERSION) a new tag rollback-<UTC time>, and print that tag. Rolling back to it starts exactly
 # these images even after a rebuild has moved VERSION to new ones. Prints VERSION when there is
-# nothing to snapshot. api and web are required; the optional runner is kept when it exists.
+# nothing to snapshot. api and web are required; the optional runner and browser are kept when
+# they exist.
 snapshot_images() {
   local version="$1" base tag n=1 svc cid img i svcs=() imgs=()
   while IFS= read -r svc; do
@@ -177,8 +189,8 @@ snapshot_images() {
       img="argus-council/$svc:$version"
     fi
     if [ -z "$img" ]; then
-      if [ "$svc" = runner ]; then
-        warn "no runner image to keep for a rollback (CLI agents were just enabled?)"
+      if optional_service "$svc"; then
+        warn "no $svc image to keep for a rollback (its profile was just enabled?)"
         continue
       fi
       warn "no $svc image to keep for a rollback; the rollback target stays $version"
@@ -204,7 +216,7 @@ snapshot_images() {
 prune_snapshots() {
   local keep="${ARGUS_SNAPSHOT_KEEP:-3}" svc tag n in_use
   in_use=" $(current_version) $(cat "$PREV_FILE" 2>/dev/null || true) $(stateval version) "
-  for svc in api web runner; do
+  for svc in api web runner browser; do
     n=0
     while IFS= read -r tag; do
       n=$((n + 1))

@@ -13,7 +13,8 @@
 #   ./scripts/deploy.sh --ca FILE   # with --local: trust an extra CA while building
 #
 # On first run it copies deploy/.env.example to deploy/.env and generates any empty secret
-# (ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, ARGUS_SANDBOX_TOKEN). Add provider keys there.
+# (ARGUS_SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD and the sandbox, runner and browser
+# tokens). Add provider keys there.
 # On an existing deployment it hands over to update.sh: backup, pull or build, migrate, start, and
 # an automatic rollback (schema included) if the new version does not become ready.
 
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
     --no-backup) backup_flag=(--no-backup); shift ;;
     --ca) ca_args=(--ca "${2:?--ca needs a file}"); shift 2 ;;
     --release) release="${2:?--release needs a version}"; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -50,7 +51,8 @@ if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT/deploy/.env.example" "$ENV_FILE"
 fi
 chmod 600 "$ENV_FILE"
-for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN ARGUS_RUNNER_TOKEN; do
+for key in ARGUS_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD ARGUS_SANDBOX_TOKEN ARGUS_RUNNER_TOKEN \
+  ARGUS_BROWSER_TOKEN; do
   if [ -z "$(envval "$key" "")" ]; then
     log "generating $key"
     if grep -qE "^$key=" "$ENV_FILE"; then

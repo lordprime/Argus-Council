@@ -47,7 +47,7 @@ setup() {
   echo v1 >"$R/deploy/.version"
   unset STUB_BUILD_HEAD STUB_BUILD_HEALTHY STUB_BUILD_FAIL STUB_PGDUMP_FAIL STUB_TAR_FAIL \
     STUB_FORCE_UNHEALTHY STUB_DOWNGRADE_FAIL STUB_MIGRATE_FAIL STUB_PULL_FAIL STUB_PULL_VERSION \
-    ARGUS_RELEASE_REPO ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT
+    ARGUS_RELEASE_REPO ARGUS_BACKUP_DIR ARGUS_BACKUP_KEEP ARGUS_READY_TIMEOUT COMPOSE_PROFILES
   export ARGUS_READY_TIMEOUT=20 # a broken version is given up on after 20 polls, not 240
 }
 
@@ -641,6 +641,80 @@ if begin deploy_default_follows_argus_version_in_env; then
   check "deploy.sh succeeds" ok run deploy.sh
   check "the pinned release was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/api:0.1.4"
   check "the pinned version is recorded" eq "$(cat "$R/deploy/.version")" 0.1.4
+  end
+fi
+
+# ---------------------------------------------------------------- live browser (browser profile)
+
+if begin build_includes_the_browser_only_with_the_browser_profile; then
+  check "build.sh succeeds" ok run build.sh --version v2
+  check "no browser image without the profile" fails test -f "$STUB_STATE/tags/argus-council_browser_v2"
+  printf '%s\n' COMPOSE_PROFILES=cli-agents,browser >>"$R/deploy/.env"
+  check "build.sh succeeds" ok run build.sh --version v3
+  check "the browser image is built" test -f "$STUB_STATE/tags/argus-council_browser_v3"
+  check "from the browser Dockerfile" contains "$STUB_STATE/calls.log" "backend/docker/browser.Dockerfile"
+  check "with the runner too (both profiles)" test -f "$STUB_STATE/tags/argus-council_runner_v3"
+  check "build.sh browser builds only it" ok run build.sh --version v4 browser
+  check "the browser image is tagged v4" test -f "$STUB_STATE/tags/argus-council_browser_v4"
+  check "and nothing else" fails test -f "$STUB_STATE/tags/argus-council_api_v4"
+  end
+fi
+
+if begin deploy_local_builds_the_browser_with_the_profile; then
+  export STUB_BUILD_HEAD=2 COMPOSE_PROFILES=browser
+  check "deploy.sh --local succeeds" ok run deploy.sh --local
+  next="$(cat "$R/deploy/.built-version")"
+  check "the browser image is built" test -f "$STUB_STATE/tags/argus-council_browser_$next"
+  check "from the browser Dockerfile" contains "$STUB_STATE/calls.log" "-f $R/backend/docker/browser.Dockerfile"
+  check "in the backend context" contains "$STUB_STATE/calls.log" "argus-council/browser:latest $R/backend"
+  check "nothing was pulled from the registry" lacks "$STUB_STATE/calls.log" "pull -q"
+  end
+fi
+
+if begin deploy_release_pulls_the_browser_with_the_profile; then
+  export STUB_BUILD_HEAD=2 COMPOSE_PROFILES=browser
+  echo ARGUS_VERSION=0.1.4 >>"$R/deploy/.env"
+  check "deploy.sh succeeds" ok run deploy.sh
+  check "the browser image was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/browser:0.1.4"
+  check "under the local name" eq "$(tag_id argus-council/browser:0.1.4)" "$(tag_id ghcr.io/lordprime/argus-council/browser:0.1.4)"
+  check "nothing was built" lacks "$STUB_STATE/calls.log" "docker build"
+  end
+fi
+
+if begin release_without_the_profile_pulls_no_browser; then
+  export STUB_BUILD_HEAD=2
+  check "update.sh --release succeeds" ok run update.sh --release 0.1.4
+  check "the api was pulled" contains "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/api:0.1.4"
+  check "no browser image was pulled" lacks "$STUB_STATE/calls.log" "pull -q ghcr.io/lordprime/argus-council/browser"
+  end
+fi
+
+if begin snapshot_keeps_the_browser_image_for_rollback; then
+  printf '%s\n' COMPOSE_PROFILES=browser >>"$R/deploy/.env"
+  printf 'head=1\nhealthy=1\n' >"$STUB_STATE/ids/sha256:v1-browser"
+  echo sha256:v1-browser >"$STUB_STATE/tags/argus-council_browser_v1"
+  echo sha256:v1-browser >"$STUB_STATE/ct/browser"
+  tag="$(cd "$R" && PATH="$HERE/stubs:$PATH" bash -c 'source scripts/lib.sh; snapshot_images v1' 2>"$T/out")"
+  check "a rollback tag is printed" ok grep -q '^rollback-' <<<"$tag"
+  check "the browser is in the snapshot" eq "$(tag_id "argus-council/browser:$tag")" sha256:v1-browser
+  check "the api is in the snapshot" eq "$(tag_id "argus-council/api:$tag")" sha256:v1-api
+  end
+fi
+
+if begin snapshot_without_a_browser_image_still_keeps_the_rest; then
+  printf '%s\n' COMPOSE_PROFILES=browser >>"$R/deploy/.env"
+  tag="$(cd "$R" && PATH="$HERE/stubs:$PATH" bash -c 'source scripts/lib.sh; snapshot_images v1' 2>"$T/out")"
+  check "a rollback tag is printed" ok grep -q '^rollback-' <<<"$tag"
+  check "the api is in the snapshot" eq "$(tag_id "argus-council/api:$tag")" sha256:v1-api
+  check "it warns about the browser" contains "$T/out" "no browser image to keep for a rollback"
+  end
+fi
+
+if begin deploy_generates_the_browser_token; then
+  export STUB_BUILD_HEAD=2
+  check "deploy.sh succeeds" ok run deploy.sh --release 0.1.4
+  token="$(grep -E '^ARGUS_BROWSER_TOKEN=' "$R/deploy/.env" | tail -n1 | cut -d= -f2-)"
+  check "a browser token was generated" eq "${#token}" 64
   end
 fi
 

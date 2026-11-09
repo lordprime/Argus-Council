@@ -1,0 +1,70 @@
+# Real-browser integration test stack: the production browser and egress services plus two test
+# sites. Not for deployments; ./scripts/tests/browser-integration.sh runs it (with
+# docker-compose.yml and docker-compose.build.yml, as project argus-browser-test) and sets
+# ARGUS_TEST_DIR, ARGUS_TEST_UID and ARGUS_TEST_GID.
+#
+#   site.argus.test    on test_site, an internal network with a public-range subnet that only
+#                      egress shares: reachable through egress exactly like a site on the internet.
+#   canary.argus.test  on test_canary, an ordinary private network egress is also attached to:
+#                      egress must refuse it, so it never logs a request.
+services:
+  browser:
+    volumes:
+      # Replaces the browsersock volume (same target): the test connects to the socket from the host.
+      - "${ARGUS_TEST_DIR:?run scripts/tests/browser-integration.sh}/sock:/run/argus-browser:z"
+      # The throwaway CA's NSS database, copied into Chrome's $HOME by the script.
+      - "${ARGUS_TEST_DIR:?}/tls:/argus-test-tls:ro,z"
+
+  egress:
+    networks: [browser_net, browser_egress, test_site, test_canary]
+
+  site: &site
+    profiles: ["browser"]
+    image: python:3.12-slim-bookworm
+    user: "${ARGUS_TEST_UID:-1000}:${ARGUS_TEST_GID:-1000}"
+    command: ["python", "/srv/server.py"]
+    read_only: true
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    environment:
+      SITE_NAME: site
+      SITE_LOG_DIR: /log
+      SITE_TLS_DIR: /tls
+    volumes:
+      - "../scripts/tests/browser-site:/srv:ro,z"
+      - "${ARGUS_TEST_DIR:?}/site:/log:z"
+      - "${ARGUS_TEST_DIR:?}/tls:/tls:ro,z"
+    networks:
+      test_site:
+        aliases: [site.argus.test]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 80), timeout=4).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  canary:
+    <<: *site
+    environment:
+      SITE_NAME: canary
+      SITE_LOG_DIR: /log
+      SITE_TLS_DIR: /tls
+    volumes:
+      - "../scripts/tests/browser-site:/srv:ro,z"
+      - "${ARGUS_TEST_DIR:?}/canary:/log:z"
+      - "${ARGUS_TEST_DIR:?}/tls:/tls:ro,z"
+    networks:
+      test_canary:
+        aliases: [canary.argus.test]
+
+networks:
+  test_site:
+    internal: true
+    ipam:
+      # Globally routable on purpose (egress refuses anything else). Nothing on the internet is
+      # reachable at these addresses from this test stack anyway: the network is internal.
+      config:
+        - subnet: "${ARGUS_TEST_SITE_SUBNET:-11.222.33.0/24}"
+  test_canary:
+    internal: true

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the Argus Council images (api, which also runs the sandbox, web, and the CLI agents
-# runner when COMPOSE_PROFILES includes cli-agents).
+# Build the Argus Council images (api, which also runs the sandbox and the egress proxy, web, the
+# CLI agents runner when COMPOSE_PROFILES includes cli-agents, and the live browser when it
+# includes browser).
 #
 #   ./scripts/build.sh                     # tag with the current commit and :latest
 #   ./scripts/build.sh --version 1.2.0     # explicit tag
@@ -11,7 +12,8 @@
 #
 # Options: --version TAG, --ca FILE (or ARGUS_EXTRA_CA), --no-cache, --pull, --from-images TAG,
 # --release VERSION (from ARGUS_RELEASE_REPO, default ghcr.io/lordprime/argus-council), and the
-# services to build (api, web, runner; default api and web, plus runner with CLI agents).
+# services to build (api, web, runner, browser; default api and web, plus runner with CLI agents
+# and browser with the live browser).
 
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -24,8 +26,8 @@ while [ $# -gt 0 ]; do
     --from-images) from="${2:?--from-images needs a tag}"; shift 2 ;;
     --release) release="${2:?--release needs a version}"; shift 2 ;;
     --no-cache | --pull) opts+=("$1"); shift ;;
-    api | web | runner) services+=("$1"); shift ;;
-    -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    api | web | runner | browser) services+=("$1"); shift ;;
+    -h | --help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -101,6 +103,7 @@ for svc in "${services[@]}"; do
     # Never reuse a cached runtime stage: its `apk upgrade` would replay an old run and miss OS fixes.
     web) context="$ROOT/frontend" dockerfile=(--no-cache-filter runtime) ;;
     runner) context="$ROOT/backend" dockerfile=(-f "$ROOT/backend/docker/runner.Dockerfile") ;;
+    browser) context="$ROOT/backend" dockerfile=(-f "$ROOT/backend/docker/browser.Dockerfile") ;;
   esac
   log "building argus-council/$svc:$version"
   # Retry: base-image pulls fail transiently (registry rate limits, network blips).

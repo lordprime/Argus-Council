@@ -109,6 +109,11 @@ services:
       # Unix socket on a shared volume, like the sandbox: the API needs no network route to the runner.
       ARGUS_RUNNER_URL: unix:/run/argus-runner/runner.sock
       ARGUS_RUNNER_TOKEN: ${ARGUS_RUNNER_TOKEN:-}
+      # Live browser (the browse tool). Off unless set; to opt in set COMPOSE_PROFILES=browser and
+      # ARGUS_BROWSER_URL=unix:/run/argus-browser/browser.sock (deploy.sh fills ARGUS_BROWSER_TOKEN).
+      # A Unix socket on a shared volume again: the browser has no network route to the API.
+      ARGUS_BROWSER_URL: ${ARGUS_BROWSER_URL:-}
+      ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
       # Only the web proxy (and localhost) reach the API, so trust its X-Forwarded-For for client IPs.
       FORWARDED_ALLOW_IPS: "*"
       # System-wide LLM providers (users can also add their own in the UI)
@@ -121,7 +126,11 @@ services:
       ARGUS_OLLAMA_BASE_URL: ${ARGUS_OLLAMA_BASE_URL:-}
       ARGUS_VLLM_BASE_URL: ${ARGUS_VLLM_BASE_URL:-}
       ARGUS_LMSTUDIO_BASE_URL: ${ARGUS_LMSTUDIO_BASE_URL:-}
-    volumes: ["argusdata:/data", "sandboxsock:/run/argus-sandbox", "runnersock:/run/argus-runner"]
+    volumes:
+      - "argusdata:/data"
+      - "sandboxsock:/run/argus-sandbox"
+      - "runnersock:/run/argus-runner"
+      - "browsersock:/run/argus-browser"
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -213,6 +222,66 @@ services:
       resources:
         limits: { cpus: "2", memory: 4g, pids: 512 }
 
+  # Live browser: read-only browsing sessions for council agents (agent-browser and Chrome for
+  # Testing). Opt-in: COMPOSE_PROFILES=browser plus ARGUS_BROWSER_URL (see the api service).
+  browser:
+    <<: *hardening
+    profiles: ["browser"]
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/browser:${ARGUS_VERSION:-latest}
+    # Control API on a Unix socket in the shared browsersock volume (token-authenticated).
+    command: ["uvicorn", "argus.browser.server:app", "--uds", "/run/argus-browser/browser.sock", "--no-server-header"]
+    stop_grace_period: 20s
+    read_only: true
+    # Chrome profiles, agent-browser's sockets and screenshots; all gone when the container stops.
+    tmpfs: ["/tmp:size=1g,nosuid,nodev"]
+    shm_size: 1g
+    environment:
+      ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
+      ARGUS_BROWSER_MAX_SESSIONS: ${ARGUS_BROWSER_MAX_SESSIONS:-4}
+      ARGUS_BROWSER_SESSIONS_PER_RUN: ${ARGUS_BROWSER_SESSIONS_PER_RUN:-2}
+      ARGUS_BROWSER_IDLE_TIMEOUT_S: ${ARGUS_BROWSER_IDLE_TIMEOUT_S:-300}
+      # The only way out. The service refuses to start a browser without a proxy.
+      ARGUS_BROWSER_PROXY: http://egress:3128
+      # Chrome's own sandbox needs user namespaces, which the default seccomp profile refuses (and
+      # no-new-privileges rules out its setuid fallback): the container is the sandbox instead.
+      ARGUS_BROWSER_CHROME_EXTRA_ARGS: "--no-sandbox"
+    volumes: ["browsersock:/run/argus-browser"]
+    # browser_net is internal: no route to the internet, the API, the database, the cache, the
+    # sandbox or the runner. Pages load only through egress, which refuses private addresses.
+    networks: [browser_net]
+    depends_on:
+      egress: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect("/run/argus-browser/browser.sock"); s.sendall(b"GET /health HTTP/1.0\r\nHost: browser\r\n\r\n"); sys.exit(0 if b" 200 " in s.recv(64) else 1)']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 3g, pids: 512 }
+
+  # The browser's only route out: a forward proxy that resolves every host itself, refuses
+  # private, loopback, link-local and reserved addresses (no switch), pins the checked address,
+  # and serves only CONNECT to ports 80/443 and plain http GETs on port 80 (argus/egress/proxy.py).
+  egress:
+    <<: *hardening
+    profiles: ["browser"]
+    image: ${ARGUS_IMAGE_REPO:-ghcr.io/lordprime/argus-council}/api:${ARGUS_VERSION:-latest}
+    command: ["python", "-m", "argus.egress.proxy"]
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    environment:
+      ARGUS_RUN_MIGRATIONS: "false"
+    networks: [browser_net, browser_egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 3128), timeout=4).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m, pids: 256 }
+
 volumes:
   pgdata:
   redisdata:
@@ -220,9 +289,13 @@ volumes:
   sandboxsock:
   runnerhomes:
   runnersock:
+  browsersock:
 
 networks:
   backend:
     internal: true # no egress: database and cache only
   frontend:
   runner_egress: # the runner's route to the vendor APIs (and nothing else)
+  browser_net:
+    internal: true # browser <-> egress only: the browser has no other way out
+  browser_egress: # egress -> the internet (private addresses are refused by the proxy itself)

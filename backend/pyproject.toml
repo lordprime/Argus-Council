@@ -33,6 +33,8 @@ dependencies = [
     "openpyxl>=3.1.5",
     "defusedxml>=0.7.1",
     "trafilatura>=2.0",
+    # Browser service: CDP guard and live-frame relay (websockets.asyncio, connect(proxy=...) needs 15+).
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +65,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning:passlib.*"]
+markers = [
+    "browser: real-browser integration tests; need a running browser service (ARGUS_TEST_BROWSER_URL), see scripts/tests/browser-integration.sh",
+]
 
 [tool.ruff]
 line-length = 110

@@ -1,13 +1,13 @@
 name: Release
 
-# Publishes the api, web and runner images to the GitHub Container Registry and creates the GitHub
+# Publishes the api, web, runner and browser images to the GitHub Container Registry and creates the GitHub
 # release, with a docker-compose.yml pinned to that version and the .env example attached.
 #
 #   git tag v0.1.4 && git push origin v0.1.4        # release the tagged commit
 #   Actions > Release > Run workflow, version 0.1.4  # same, from the UI (tags `ref` if v0.1.4 is new)
 #   ... with "move_tag" ticked                       # re-release: move an existing tag to `ref`
 #
-# Images: ghcr.io/<owner>/argus-council/{api,web,runner}:<version>, :<major>.<minor>, and :latest
+# Images: ghcr.io/<owner>/argus-council/{api,web,runner,browser}:<version>, :<major>.<minor>, and :latest
 # when this is the highest stable version. Pre-releases (0.2.0-rc.1) get only their own tag.
 # The version must match backend/pyproject.toml and frontend/package.json at the released commit.
 
@@ -126,7 +126,7 @@ jobs:
             echo "latest=$latest"
             echo "prerelease=$prerelease"
           } >>"$GITHUB_OUTPUT"
-          echo "Releasing $tag from $sha as $image/{api,web,runner}: $tags" >>"$GITHUB_STEP_SUMMARY"
+          echo "Releasing $tag from $sha as $image/{api,web,runner,browser}: $tags" >>"$GITHUB_STEP_SUMMARY"
 
   images:
     needs: prepare
@@ -153,6 +153,11 @@ jobs:
             file: backend/docker/runner.Dockerfile
             cache: runner
             scan: false
+          - service: browser
+            context: backend
+            file: backend/docker/browser.Dockerfile
+            cache: browser
+            scan: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -213,11 +218,12 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           # A compose file that runs exactly this release from the registry: only an .env is needed.
+          # Six image references: api, web, sandbox (api), runner, browser, egress (api).
           sed -e "s|\${ARGUS_IMAGE_REPO:-[^}]*}|\${ARGUS_IMAGE_REPO:-$IMAGE}|g" \
               -e "s|\${ARGUS_VERSION:-latest}|\${ARGUS_VERSION:-$VERSION}|g" \
               deploy/docker-compose.yml >dist/docker-compose.yml
-          [ "$(grep -cF "{ARGUS_IMAGE_REPO:-$IMAGE}/" dist/docker-compose.yml)" -eq 4 ] \
-            && [ "$(grep -cF "{ARGUS_VERSION:-$VERSION}" dist/docker-compose.yml)" -eq 4 ] \
+          [ "$(grep -cF "{ARGUS_IMAGE_REPO:-$IMAGE}/" dist/docker-compose.yml)" -eq 6 ] \
+            && [ "$(grep -cF "{ARGUS_VERSION:-$VERSION}" dist/docker-compose.yml)" -eq 6 ] \
             || { echo "::error::could not pin the image versions in docker-compose.yml"; exit 1; }
           cp deploy/.env.example dist/env.example
 
@@ -236,7 +242,7 @@ jobs:
           docker compose --env-file .env up -d
           \`\`\`
 
-          Images: \`$IMAGE/api:$VERSION\`, \`$IMAGE/web:$VERSION\`, \`$IMAGE/runner:$VERSION\`.
+          Images: \`$IMAGE/api:$VERSION\`, \`$IMAGE/web:$VERSION\`, \`$IMAGE/runner:$VERSION\`, \`$IMAGE/browser:$VERSION\`.
           EOF
       - name: Create or update the GitHub release
         env:
