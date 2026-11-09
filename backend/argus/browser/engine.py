@@ -54,14 +54,17 @@ _GUARDED_TARGETS = frozenset({"page", "iframe"})
 # A service worker can answer a navigation itself (and pass a form POST through); pages bypass
 # service workers, and the workers' own document requests are held to GET/HEAD as well.
 _GUARDED_WORKERS = frozenset({"service_worker", "shared_worker"})
+# The guard ignores Network events and never reads bodies: keep Chrome's per-session buffers small.
+_NETWORK_ENABLE = {"maxTotalBufferSize": 1_000_000, "maxResourceBufferSize": 100_000}
 # The only Chrome flags an operator may add (the container needs some of them). Anything else
 # could take Chrome off the proxy or loosen the debugging port, so it is refused at startup.
 ALLOWED_CHROME_EXTRA_ARGS = frozenset(
     {"--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-software-rasterizer"}
 )
 # What Chrome and agent-browser inherit: never the service token or the rest of our environment.
-_CHILD_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
-_CHILD_ENV_PREFIX = "AGENT_BROWSER_"
+# An exact list, with no ``AGENT_BROWSER_*`` passthrough: operator env cannot pin one stream port
+# for every session or put another action policy ahead of the service's own flags.
+_CHILD_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "AGENT_BROWSER_SOCKET_DIR")
 
 _REF = re.compile(r"^@?(e\d{1,6})$")
 _TAB_ID = re.compile(r"^t(\d{1,6})$")
@@ -174,9 +177,7 @@ def check_chrome_extra_args(extra: Sequence[str]) -> tuple[str, ...]:
 def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:
     """A minimal environment for Chrome and agent-browser (no service token, no API settings)."""
     environ = dict(os.environ if environ is None else environ)
-    env = {k: environ[k] for k in _CHILD_ENV_KEYS if k in environ}
-    env.update({k: v for k, v in environ.items() if k.startswith(_CHILD_ENV_PREFIX)})
-    return env
+    return {k: environ[k] for k in _CHILD_ENV_KEYS if k in environ}
 
 
 def chrome_argv(
@@ -340,7 +341,10 @@ def parse_tab_ids(data: Any) -> list[str]:
     return [tab_id for _, tab_id in sorted(ids)]
 
 
-_DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[A-Za-z0-9-]{1,64}$")
+# The full GUID form only: a torn read of DevToolsActivePort (a truncated GUID) is retried.
+_DEVTOOLS_PATH = re.compile(
+    r"^/devtools/browser/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def parse_devtools_active_port(text: str) -> tuple[int, str] | None:
@@ -357,9 +361,10 @@ def parse_devtools_active_port(text: str) -> tuple[int, str] | None:
 def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], str | None]]:
     """CDP commands ``(method, params, session_id)`` the guard sends in answer to one event.
 
-    - A page (or out-of-process iframe) attaches paused: intercept its document requests, bypass
-      service workers (a worker answering a navigation would skip the page's interception), ask
-      to attach its own children the same way, then let it run.
+    - A page (or out-of-process iframe) attaches paused: intercept its document requests, turn the
+      Network domain on and bypass service workers (a worker answering a navigation would skip
+      the page's interception; the bypass needs Network enabled), ask to attach its own children
+      the same way, then let it run.
     - A service or shared worker attaches paused: intercept its document requests, then run.
       Other targets just run.
     - A paused document request: ``GET``/``HEAD`` continue; any other method fails, so a form
@@ -377,6 +382,7 @@ def guard_commands(message: dict[str, Any]) -> list[tuple[str, dict[str, Any], s
         if kind in _GUARDED_TARGETS:
             return [
                 ("Fetch.enable", {"patterns": DOCUMENT_PATTERNS}, sid),
+                ("Network.enable", dict(_NETWORK_ENABLE), sid),
                 ("Network.setBypassServiceWorker", {"bypass": True}, sid),
                 ("Target.setAutoAttach", dict(_AUTO_ATTACH), sid),
                 ("Runtime.runIfWaitingForDebugger", {}, sid),

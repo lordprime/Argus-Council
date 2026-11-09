@@ -524,6 +524,8 @@ def test_guard_blocks_non_get_documents():
     }
     page_sequence = [
         ("Fetch.enable", {"patterns": [{"resourceType": "Document", "requestStage": "Request"}]}, "S1"),
+        # The bypass only takes effect with Network on: enable it first, with small buffers.
+        ("Network.enable", {"maxTotalBufferSize": 1_000_000, "maxResourceBufferSize": 100_000}, "S1"),
         ("Network.setBypassServiceWorker", {"bypass": True}, "S1"),
         ("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}, "S1"),
         ("Runtime.runIfWaitingForDebugger", {}, "S1"),
@@ -634,8 +636,9 @@ async def test_cdp_guard_against_a_fake_chrome():
     assert received[0]["params"] == {"behavior": "deny"}
     assert received[1]["params"] == {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
     order = [m for m, s in methods if s == "S1"]
-    assert order[:4] == [
+    assert order[:5] == [
         "Fetch.enable",
+        "Network.enable",
         "Network.setBypassServiceWorker",
         "Target.setAutoAttach",
         "Runtime.runIfWaitingForDebugger",
@@ -644,6 +647,42 @@ async def test_cdp_guard_against_a_fake_chrome():
     assert [f["params"] for f in fails] == [{"requestId": "R1", "errorReason": "BlockedByClient"}]
     conts = [m for m in received if m["method"] == "Fetch.continueRequest"]
     assert [c["params"] for c in conts] == [{"requestId": "R2"}]
+
+
+async def test_cdp_guard_leaves_a_page_paused_when_a_step_fails():
+    """If Chrome refuses Network.enable, the bypass and the resume are never sent: fail closed."""
+    received: list[str] = []
+    refused = asyncio.Event()
+
+    async def chrome(ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            received.append(msg["method"])
+            if msg["method"] == "Network.enable":
+                await ws.send(json.dumps({"id": msg["id"], "error": {"code": -32000, "message": "no"}}))
+                refused.set()
+                continue
+            await ws.send(json.dumps({"id": msg["id"], "result": {}}))
+            if msg["method"] == "Target.setAutoAttach" and "sessionId" not in msg:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "method": "Target.attachedToTarget",
+                            "params": {"sessionId": "S1", "targetInfo": {"type": "page"}},
+                        }
+                    )
+                )
+
+    async with serve(chrome, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        guard = CdpGuard(f"ws://127.0.0.1:{port}/")
+        await guard.start()
+        await asyncio.wait_for(refused.wait(), 3)
+        await asyncio.sleep(0.1)
+        await guard.close()
+
+    assert "Network.setBypassServiceWorker" not in received
+    assert "Runtime.runIfWaitingForDebugger" not in received
 
 
 async def test_cdp_guard_reports_a_dropped_connection():
@@ -954,6 +993,8 @@ async def test_agent_browser_cli_runs_and_times_out(tmp_path, monkeypatch):
     monkeypatch.setenv("ARGUS_BROWSER_TOKEN", "service-secret")
     monkeypatch.setenv("ARGUS_SECRET_KEY", "api-secret")
     monkeypatch.setenv("AGENT_BROWSER_SOCKET_DIR", "/tmp/ab")
+    monkeypatch.setenv("AGENT_BROWSER_STREAM_PORT", "9223")
+    monkeypatch.setenv("AGENT_BROWSER_ACTION_POLICY", "/tmp/allow-everything.json")
     script = tmp_path / "fake-agent-browser"
     script.write_text(
         "#!/usr/bin/env python3\n"
@@ -968,6 +1009,7 @@ async def test_agent_browser_cli_runs_and_times_out(tmp_path, monkeypatch):
     env = reply.data["env"]
     assert "ARGUS_BROWSER_TOKEN" not in env and "ARGUS_SECRET_KEY" not in env
     assert env["AGENT_BROWSER_SOCKET_DIR"] == "/tmp/ab" and "PATH" in env
+    assert "AGENT_BROWSER_STREAM_PORT" not in env and "AGENT_BROWSER_ACTION_POLICY" not in env
     argv = reply.data["argv"]
     assert argv[:5] == ["--cdp", "9333", "--session", "s1", "--json"]
     policy = argv[argv.index("--action-policy") + 1]
@@ -993,14 +1035,19 @@ def test_child_env_keeps_only_what_the_children_need():
             "ARGUS_BROWSER_TOKEN": "secret",
             "ARGUS_BROWSER_PROXY": "http://egress:3128",
             "AWS_SECRET_ACCESS_KEY": "nope",
-            "AGENT_BROWSER_HOME": "/tmp/ab",
+            "AGENT_BROWSER_SOCKET_DIR": "/tmp/ab",
+            # Operator config channels into agent-browser stay closed:
+            "AGENT_BROWSER_STREAM_PORT": "9223",  # one stream port shared by every session
+            "AGENT_BROWSER_ACTION_POLICY": "/tmp/allow-everything.json",
+            "AGENT_BROWSER_ALLOWED_DOMAINS": "*",
+            "AGENT_BROWSER_HOME": "/tmp/x",
         }
     )
     assert env == {
         "PATH": "/usr/bin",
         "HOME": "/home/browser",
         "TMPDIR": "/tmp",
-        "AGENT_BROWSER_HOME": "/tmp/ab",
+        "AGENT_BROWSER_SOCKET_DIR": "/tmp/ab",
     }
 
 
@@ -1019,6 +1066,14 @@ def test_parse_devtools_active_port():
         "40123\n/devtools/page/x",
         "40123\n/devtools/browser/x?y=1",
         "40123\nws://evil:1/devtools/browser/x",
+        # Torn reads: Chrome is still writing the GUID, so the engine must retry.
+        "40123\n/devtools/browser/0b7c9e1a-77b2-4c3e-9a1d-3f1e2a4b5c",
+        "40123\n/devtools/browser/0b7c9e1a-77b2",
+        "40123\n/devtools/browser/0b7c9e1a",
+        "40123\n/devtools/browser/",
+        "40123\n/devtools/browser/0b7c9e1a-77b2-4c3e-9a1d-3f1e2a4b5c6d0",  # too long
+        "40123\n/devtools/browser/0b7c9e1a77b24c3e9a1d3f1e2a4b5c6d",  # not the dashed form
+        "40123\n/devtools/browser/zb7c9e1a-77b2-4c3e-9a1d-3f1e2a4b5c6d",  # not hex
     ):
         assert parse_devtools_active_port(bad) is None, bad
 
@@ -1093,7 +1148,7 @@ async def main():
         os.makedirs(profile, exist_ok=True)
         log()
         with open(os.path.join(profile, "DevToolsActivePort"), "w") as fh:
-            fh.write(f"{port}\\n/devtools/browser/abc-123\\n")
+            fh.write(f"{port}\\n/devtools/browser/0b7c9e1a-77b2-4c3e-9a1d-3f1e2a4b5c6d\\n")
         drop = asyncio.Event()
         asyncio.get_running_loop().add_signal_handler(signal.SIGUSR1, drop.set)
         await drop.wait()
@@ -1123,7 +1178,7 @@ async def test_agent_browser_start_with_a_fake_chrome(tmp_path, monkeypatch):
     session = engine._sessions["s1"]
     try:
         assert session.guard.alive and session.chrome.returncode is None
-        assert session.guard.ws_url.endswith("/devtools/browser/abc-123")
+        assert session.guard.ws_url.endswith("/devtools/browser/0b7c9e1a-77b2-4c3e-9a1d-3f1e2a4b5c6d")
         log = json.loads(_read(str(session.workdir / "fake-chrome.json")))
         assert "--remote-debugging-port=0" in log["argv"]
         assert "ARGUS_BROWSER_TOKEN" not in log["env"]
