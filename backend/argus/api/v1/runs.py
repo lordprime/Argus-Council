@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import secrets
 import uuid
@@ -551,6 +552,70 @@ async def stream(
     await db.close()  # don't hold a pooled connection for the life of the stream
     return StreamingResponse(
         _sse(request, run_id, after_seq),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _frame_relay(request: Request, settings):
+    """The process-wide relay to the browser service (None when no browser service is configured)."""
+    state = request.app.state
+    relay = getattr(state, "frame_relay", None)
+    if relay is None:
+        from argus.browser.relay import relay_factory
+
+        relay = state.frame_relay = relay_factory(settings)()
+    return relay
+
+
+async def _browser_frames(request: Request, relay, live, member_id: str, session_id: str):
+    async with relay.watch(session_id) as viewer:
+        while True:
+            frame = await viewer.get(wait_s=1.0)
+            if frame is not None:
+                yield b"event: frame\ndata: %s\n\n" % base64.b64encode(frame)
+                continue
+            if viewer.ended or await request.is_disconnected():
+                break
+            # Quiet second: stop if the run ended or the member's session was replaced.
+            if live.ctx.run_id not in _manager(request).live:
+                break
+            if live.ctx.extra.get("browser_sessions", {}).get(member_id) != session_id:
+                break
+    yield b"event: end\ndata: {}\n\n"
+
+
+@router.get("/{run_id}/browser/{member_id}/frames")
+async def browser_frames(
+    run_id: uuid.UUID,
+    member_id: str,
+    request: Request,
+    db: DbDep,
+    cache: CacheDep,
+    settings: SettingsDep,
+    ticket: str | None = None,
+):
+    if ticket:
+        key = cache.key("ticket", ticket)
+        claim = await cache.get(key)
+        await cache.delete(key)  # single use
+        if not claim or claim.get("run") != str(run_id):
+            raise Unauthorized("Invalid or expired stream ticket")
+        owner = uuid.UUID(claim["user"])
+    else:
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            raise Unauthorized("Authentication required")
+        owner = (await resolve_principal(db, settings, auth[7:].strip(), cache)).id
+    await _own_run(db, owner, run_id)
+    await db.close()  # don't hold a pooled connection for the life of the stream
+    live = _manager(request).live.get(run_id)
+    session_id = live.ctx.extra.get("browser_sessions", {}).get(member_id) if live else None
+    relay = _frame_relay(request, settings) if session_id else None
+    if not session_id or relay is None:
+        raise NotFound("No live browser for this member")
+    return StreamingResponse(
+        _browser_frames(request, relay, live, member_id, session_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
