@@ -64,6 +64,9 @@ RUNNER_CATEGORIES: dict[str, Category] = {
     "timeout": "unavailable",
     "output_too_large": "error",
     "invalid_user": "invalid",
+    "invalid_request": "invalid",
+    # The CLI started with tools of its own: a configuration fault, never silently retried elsewhere.
+    "tools_not_disabled": "error",
 }
 
 _PATTERNS: list[tuple[re.Pattern[str], Category]] = [

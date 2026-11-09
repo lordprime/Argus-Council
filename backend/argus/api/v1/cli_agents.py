@@ -1,7 +1,8 @@
-"""CLI agents: status, per-user CLI API keys and the caller's own CLI sessions.
+"""CLI agents: status, sign-in, per-user CLI API keys and the caller's own CLI sessions.
 
 Every route works on the signed-in user's own data only; there is no admin variant, so an admin
-can never use, inspect or reset another user's CLI login or sessions.
+can never use, inspect, sign in or reset another user's CLI login or sessions. Sign-in and sign-out
+need an interactive session (not an API key), like other account management.
 """
 
 from __future__ import annotations
@@ -13,14 +14,14 @@ from typing import Literal
 from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, Field, field_validator
 
-from argus.api.deps import CurrentPrincipal, DbDep, write_scope
-from argus.core.errors import NotFound
+from argus.api.deps import CacheDep, CurrentPrincipal, DbDep, SessionPrincipal, write_scope
+from argus.core.errors import NotFound, RateLimited
 from argus.db.models import CliSession
 from argus.services.cli_agents import CLIAgents, CLIAgentsDisabled
 
 router = APIRouter(tags=["cli-agents"], dependencies=[write_scope("providers:write")])
 
-CliName = Literal["claude", "codex", "gemini"]
+CliName = Literal["claude", "codex", "gemini", "copilot", "kiro", "qwen", "opencode", "goose", "vibe"]
 
 
 def _svc(request: Request) -> CLIAgents:
@@ -29,6 +30,8 @@ def _svc(request: Request) -> CLIAgents:
 
 class CliKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=512)
+    # Harness CLIs (qwen, opencode, goose): which model provider the key is for.
+    provider: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_]+$")
 
     @field_validator("api_key")
     @classmethod
@@ -39,10 +42,27 @@ class CliKeyIn(BaseModel):
         return v
 
 
+class CliLoginStartIn(BaseModel):
+    method: str | None = Field(default=None, max_length=32, pattern=r"^[a-z_]+$")
+
+
+class CliLoginCodeIn(BaseModel):
+    code: str = Field(min_length=1, max_length=512)
+
+    @field_validator("code")
+    @classmethod
+    def _one_token(cls, v: str) -> str:
+        v = v.strip()
+        if not v or any(c.isspace() for c in v) or not v.isprintable():
+            raise ValueError("The code must be a single line without spaces")
+        return v
+
+
 class CliKeyOut(BaseModel):
     cli: str
     has_api_key: bool
     key_hint: str | None = None
+    provider: str | None = None
 
 
 class CliSessionOut(BaseModel):
@@ -71,8 +91,8 @@ async def set_key(cli: CliName, data: CliKeyIn, principal: CurrentPrincipal, db:
     svc = _svc(request)
     if not svc.allowed(cli):
         raise CLIAgentsDisabled(f"The {cli} CLI agent is disabled on this instance")
-    row = await svc.set_key(db, principal.id, cli, data.api_key)
-    return CliKeyOut(cli=cli, has_api_key=True, key_hint=row.key_hint)
+    row = await svc.set_key(db, principal.id, cli, data.api_key, data.provider)
+    return CliKeyOut(cli=cli, has_api_key=True, key_hint=row.key_hint, provider=row.provider)
 
 
 @router.delete("/cli-agents/{cli}/key", status_code=status.HTTP_204_NO_CONTENT)
@@ -98,3 +118,59 @@ async def rename_session(
     row.label = data.label.strip()
     await db.flush()
     return CliSessionOut.model_validate(row, from_attributes=True)
+
+
+# ---------------------------------------------------------------------------------------- sign-in
+LOGIN_STARTS_PER_10_MIN = 6
+LOGIN_CODES_PER_10_MIN = 10
+
+
+@router.get("/cli-agents/{cli}/login")
+async def login_state(cli: CliName, principal: SessionPrincipal, request: Request) -> dict:
+    """Your sign-in in progress for this CLI (``state: none`` when there is none)."""
+    return await _svc(request).login_state(principal.id, cli)
+
+
+@router.post("/cli-agents/{cli}/login")
+async def login_start(
+    cli: CliName, data: CliLoginStartIn, principal: SessionPrincipal, request: Request, cache: CacheDep
+) -> dict:
+    """Start the CLI's own sign-in in your runner home; returns the link (and code) to act on."""
+    request.state.audit_detail = {"cli": cli, "action": "login_start", "method": data.method}
+    if await cache.hit_rate_limit(f"cli-login:{principal.id}", LOGIN_STARTS_PER_10_MIN, 600):
+        raise RateLimited("Too many sign-in attempts; try again in a few minutes")
+    state = await _svc(request).login_start(principal.id, cli, data.method)
+    request.state.audit_detail["result"] = state.get("state")
+    return state
+
+
+@router.post("/cli-agents/{cli}/login/code")
+async def login_code(
+    cli: CliName, data: CliLoginCodeIn, principal: SessionPrincipal, request: Request, cache: CacheDep
+) -> dict:
+    """Pass the authorization code shown by the vendor to the CLI. Never stored or logged."""
+    request.state.audit_detail = {"cli": cli, "action": "login_code"}
+    if await cache.hit_rate_limit(f"cli-login-code:{principal.id}", LOGIN_CODES_PER_10_MIN, 600):
+        raise RateLimited("Too many codes entered; start the sign-in again in a few minutes")
+    state = await _svc(request).login_code(principal.id, cli, data.code)
+    request.state.audit_detail["result"] = state.get("state")
+    return state
+
+
+@router.delete("/cli-agents/{cli}/login")
+async def login_cancel(cli: CliName, principal: SessionPrincipal, request: Request) -> dict:
+    request.state.audit_detail = {"cli": cli, "action": "login_cancel"}
+    return await _svc(request).login_cancel(principal.id, cli)
+
+
+@router.post("/cli-agents/{cli}/logout")
+async def logout(cli: CliName, principal: SessionPrincipal, request: Request) -> dict:
+    """Sign this CLI out of your vendor account (the CLI's own sign-out)."""
+    request.state.audit_detail = {"cli": cli, "action": "logout"}
+    out = await _svc(request).logout(principal.id, cli)
+    status_ = out.get("status") or {}
+    return {
+        "ok": bool(out.get("ok")),
+        "logged_in": status_.get("logged_in"),
+        "login_method": status_.get("method"),
+    }

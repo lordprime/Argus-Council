@@ -152,6 +152,12 @@ const CLI_OPTION: Record<string, { label: string; models: string[] }> = {
   "claude-cli": { label: "Claude Code CLI (account)", models: ["sonnet", "opus", "haiku", "default"] },
   "codex-cli": { label: "Codex CLI (account)", models: ["default"] },
   "gemini-cli": { label: "Gemini CLI (account)", models: ["default", "gemini-2.5-pro", "gemini-2.5-flash"] },
+  "copilot-cli": { label: "GitHub Copilot CLI (account)", models: ["default"] },
+  "kiro-cli": { label: "Kiro CLI (account)", models: ["default"] },
+  "qwen-cli": { label: "Qwen Code (CLI key)", models: ["default"] },
+  "opencode-cli": { label: "opencode (account or key)", models: ["default"] },
+  "goose-cli": { label: "Goose (CLI key)", models: ["default"] },
+  "vibe-cli": { label: "Mistral Vibe (CLI key)", models: ["default"] },
 };
 
 /**

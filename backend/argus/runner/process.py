@@ -29,17 +29,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from argus.runner.clis import logout_spec_for, plugin
+from argus.runner.login import LoginManager
 from argus.runner.specs import (
     CLI_NAMES,
+    PLUGIN_CLIS,
     UUID_RE,
     Binaries,
     InvokeSpec,
+    TurnContext,
     build_command,
+    session_ok,
     status_argv,
     version_argv,
 )
 
 MAX_LINE_BYTES = 4 * 1024 * 1024
+MAX_RESULT_FILE_BYTES = 1024 * 1024
 STDERR_TAIL = 4000
 _PASSTHROUGH_ENV = (
     "HTTPS_PROXY",
@@ -102,6 +108,11 @@ def user_home(cfg: RunnerConfig, user_id: str, *, create: bool = True) -> Path:
     return home
 
 
+def _sid(session_id: str) -> str:
+    """UUIDs are compared lower-case; other ids (opencode's ses_...) are case-sensitive."""
+    return session_id.lower() if UUID_RE.match(session_id) else session_id
+
+
 class SessionIndex:
     """Sessions Argus created for one user; the allow-list for resuming."""
 
@@ -116,13 +127,13 @@ class SessionIndex:
         return data if isinstance(data, dict) else {}
 
     def get(self, cli: str, session_id: str) -> dict[str, Any] | None:
-        entry = self.load().get(cli, {}).get(session_id.lower())
+        entry = self.load().get(cli, {}).get(_sid(session_id))
         return entry if isinstance(entry, dict) else None
 
     def record(self, cli: str, session_id: str, cwd: Path) -> None:
         data = self.load()
         now = time.time()
-        entry = data.setdefault(cli, {}).setdefault(session_id.lower(), {"created": now})
+        entry = data.setdefault(cli, {}).setdefault(_sid(session_id), {"created": now})
         entry.update({"cwd": str(cwd), "last_used": now})
         tmp = self.path.with_suffix(f".{secrets.token_hex(4)}.tmp")
         tmp.write_text(json.dumps(data))
@@ -136,6 +147,44 @@ class SessionIndex:
             if isinstance(e, dict)
         ]
         return sorted(rows, key=lambda r: -(r["last_used"] or 0))
+
+
+class OutputTooLarge(Exception):
+    pass
+
+
+async def _json_lines(proc: asyncio.subprocess.Process, limit: int) -> AsyncIterator[dict[str, Any]]:
+    """The CLI's JSON events, one per line; banners and other non-JSON lines are skipped."""
+    assert proc.stdout is not None
+    total = 0
+    while True:
+        try:
+            line = await proc.stdout.readline()
+        except ValueError:  # one line above MAX_LINE_BYTES
+            continue
+        if not line:
+            return
+        total += len(line)
+        if total > limit:
+            raise OutputTooLarge
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def _read_result_file(home: Path, raw: str) -> Any:
+    path = Path(raw).resolve()
+    if home.resolve() not in path.parents:
+        return None
+    try:
+        if path.stat().st_size > MAX_RESULT_FILE_BYTES:
+            return None
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def _child_setup() -> None:  # runs in the child before exec
@@ -173,6 +222,12 @@ class Runner:
         self._per_user: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._versions: dict[str, str | None] | None = None
+        self.logins = LoginManager(
+            cfg.binaries,
+            home_for=lambda user_id: user_home(cfg, user_id),
+            base_env=_base_env,
+            child_setup=_child_setup,
+        )
 
     def _lock(self, user_id: str) -> asyncio.Lock:
         return self._locks.setdefault(user_id, asyncio.Lock())
@@ -207,15 +262,37 @@ class Runner:
             }
             return
         prompt_file: Path | None = None
-        if spec.system_prompt and spec.cli in ("claude", "gemini"):
+        if spec.system_prompt and (spec.cli in ("claude", "gemini") or spec.cli in PLUGIN_CLIS):
             prompt_file = home / ".argus" / "prompts" / f"{secrets.token_hex(8)}.md"
             prompt_file.write_text(spec.system_prompt)
             os.chmod(prompt_file, 0o600)
-        cmd = build_command(
-            spec, binaries=self.cfg.binaries, system_prompt_file=str(prompt_file) if prompt_file else None
-        )
+        turn_dir = home / ".argus" / "turns" / secrets.token_hex(8)
+        turn_dir.mkdir(mode=0o700, parents=True)
+        hooks = plugin(spec.cli) if spec.cli in PLUGIN_CLIS else None
+        try:
+            cmd = build_command(
+                spec,
+                binaries=self.cfg.binaries,
+                system_prompt_file=str(prompt_file) if prompt_file else None,
+                turn=TurnContext(
+                    home=str(home),
+                    cwd=str(cwd),
+                    turn_dir=str(turn_dir),
+                    system_prompt_file=str(prompt_file) if prompt_file else None,
+                ),
+            )
+            self._write_turn_files(home, cmd.files)
+        except (ValueError, OSError) as exc:
+            shutil.rmtree(turn_dir, ignore_errors=True)
+            if prompt_file is not None:
+                with contextlib.suppress(OSError):
+                    prompt_file.unlink()
+            yield {"type": "argus.exit", "ok": False, "error": "invalid_request", "detail": str(exc)[:300]}
+            return
         env = _base_env(home) | cmd.env
         key_values = [v for k, v in cmd.env.items() if k.endswith("_API_KEY")]
+        if spec.api_key is not None:
+            key_values.append(spec.api_key.get_secret_value())
         session_id = spec.session_id
         self._per_user[spec.user_id] = self._per_user.get(spec.user_id, 0) + 1
         started = time.monotonic()
@@ -242,15 +319,30 @@ class Runner:
                     return
                 assert proc.stdin and proc.stdout and proc.stderr
                 stderr_task = asyncio.create_task(proc.stderr.read(256 * 1024))
-                try:
-                    proc.stdin.write(cmd.stdin.encode())
-                    await proc.stdin.drain()
-                    proc.stdin.close()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                total = 0
+                source: AsyncIterator[dict[str, Any]]
+                if cmd.protocol == "acp":
+                    from argus.runner.acp import acp_turn
+
+                    source = acp_turn(
+                        proc,
+                        prompt=cmd.stdin,
+                        session_id=spec.session_id if spec.resume else None,
+                        resume=spec.resume,
+                        cwd=str(cwd),
+                        timeout_s=spec.timeout_s,
+                    )
+                else:
+                    try:
+                        proc.stdin.write(cmd.stdin.encode())
+                        await proc.stdin.drain()
+                        proc.stdin.close()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    source = _json_lines(proc, self.cfg.max_output_bytes)
                 timed_out = False
                 eof = False
+                failure: tuple[str, str] | None = None
+                acp_done = False  # the agent answered session/prompt (its exit code is secondary)
                 deadline = started + spec.timeout_s
                 try:
                     while True:
@@ -259,36 +351,30 @@ class Runner:
                             timed_out = True
                             break
                         try:
-                            line = await asyncio.wait_for(proc.stdout.readline(), remaining)
+                            event = await asyncio.wait_for(anext(source), remaining)
                         except TimeoutError:
                             timed_out = True
                             break
-                        except ValueError:  # one line above MAX_LINE_BYTES
-                            continue
-                        if not line:
+                        except StopAsyncIteration:
                             eof = True
                             break
-                        total += len(line)
-                        if total > self.cfg.max_output_bytes:
-                            yield {
-                                "type": "argus.exit",
-                                "ok": False,
-                                "error": "output_too_large",
-                                "detail": "CLI output exceeded the cap",
-                            }
-                            return
-                        try:
-                            event = json.loads(line)
-                        except ValueError:
-                            continue  # banners and warnings are not part of the protocol
-                        if not isinstance(event, dict):
-                            continue
-                        if spec.cli == "codex" and event.get("type") == "thread.started":
-                            tid = str(event.get("thread_id") or "")
-                            if UUID_RE.match(tid):
-                                session_id = tid.lower()
+                        except OutputTooLarge:
+                            failure = ("output_too_large", "CLI output exceeded the cap")
+                            break
+                        session_id = self._read_session(spec, hooks, event, session_id)
+                        if event.get("type") == "acp.result":
+                            acp_done = True
+                        if hooks is not None:
+                            tools = hooks.tools_reported(event)
+                            if tools:
+                                # The CLI started with tools of its own: never let it take a turn.
+                                detail = f"{spec.cli} reported {len(tools)} tools of its own"
+                                failure = ("tools_not_disabled", detail)
+                                break
                         yield event
                 finally:
+                    with contextlib.suppress(Exception):
+                        await source.aclose()  # type: ignore[attr-defined]
                     # After EOF give the CLI a moment to exit; on timeout, an output cap or a client
                     # that went away (generator closed), kill the whole process group at once.
                     if proc.returncode is None and eof:
@@ -303,17 +389,27 @@ class Runner:
                     with contextlib.suppress(Exception):
                         stderr = await asyncio.wait_for(stderr_task, 5)
                 code = proc.returncode
-                if spec.persist and session_id and code == 0:
+                if cmd.result_file and failure is None and not timed_out:
+                    result = _read_result_file(home, cmd.result_file)
+                    if result is not None:
+                        event = {"type": "argus.result_file", "data": result}
+                        session_id = self._read_session(spec, hooks, event, session_id)
+                        yield event
+                ok = (code == 0 or (cmd.protocol == "acp" and acp_done)) and not timed_out and failure is None
+                if spec.persist and session_id and ok:
                     async with self._lock(spec.user_id):
                         await asyncio.to_thread(index.record, spec.cli, session_id, cwd)
                 tail = redact(stderr.decode("utf-8", "replace")[-STDERR_TAIL:], key_values)
+                error = failure[0] if failure else None
+                if error is None and not ok:
+                    error = "timeout" if timed_out else "exit_status"
                 yield {
                     "type": "argus.exit",
-                    "ok": code == 0 and not timed_out,
+                    "ok": ok,
                     "exit_code": code,
                     "timed_out": timed_out,
-                    "error": "timeout" if timed_out else (None if code == 0 else "exit_status"),
-                    "detail": tail,
+                    "error": error,
+                    "detail": failure[1] if failure else tail,
                     "session_id": session_id if spec.persist else None,
                     "duration_ms": int((time.monotonic() - started) * 1000),
                 }
@@ -322,6 +418,32 @@ class Runner:
             if prompt_file is not None:
                 with contextlib.suppress(OSError):
                     prompt_file.unlink()
+            shutil.rmtree(turn_dir, ignore_errors=True)
+
+    @staticmethod
+    def _read_session(spec: InvokeSpec, hooks: Any, event: dict[str, Any], current: str | None) -> str | None:
+        """Session ids the CLI assigns itself, read from its output and checked before use."""
+        found: str | None = None
+        if spec.cli == "codex" and event.get("type") == "thread.started":
+            found = str(event.get("thread_id") or "")
+        elif hooks is not None:
+            found = hooks.session_from_event(event)
+        if found and session_ok(spec.cli, found):
+            return _sid(found)
+        return current
+
+    @staticmethod
+    def _write_turn_files(home: Path, files: dict[str, str]) -> None:
+        root = home.resolve()
+        for raw, content in files.items():
+            path = Path(raw).resolve()
+            if root not in path.parents:
+                raise ValueError("a turn file must be inside the user's home")
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+            tmp.write_text(content)
+            os.chmod(tmp, 0o600)
+            tmp.replace(path)
 
     def _safe_cwd(self, home: Path, recorded: Any) -> Path:
         work = (home / "work").resolve()
@@ -371,6 +493,8 @@ class Runner:
     async def status(self, user_id: str, cli: str) -> dict[str, Any]:
         """Login state for one user and CLI. Never returns account details or tokens."""
         home = user_home(self.cfg, user_id)
+        if cli in PLUGIN_CLIS:
+            return await self._plugin_status(cli, home)
         argv = status_argv(cli, self.cfg.binaries)
         if argv is None:  # gemini: no documented status command
             present = (home / ".gemini" / "oauth_creds.json").exists()
@@ -408,6 +532,45 @@ class Runner:
             "detail": "",
         }
 
+    async def _plugin_status(self, cli: str, home: Path) -> dict[str, Any]:
+        hooks = plugin(cli)
+        if hooks.status_args is not None and hooks.parse_status is not None:
+            code, out = await self._capture([self.cfg.binaries.for_cli(cli), *hooks.status_args], home, {})
+            if code is None:
+                return {"logged_in": None, "method": None, "verified": False, "detail": out}
+            data = hooks.parse_status(code, out)
+            return {
+                "logged_in": data.get("logged_in"),
+                "method": data.get("method"),
+                "verified": bool(data.get("verified")),
+                "detail": str(data.get("detail") or "")[:300],
+            }
+        if hooks.status_files:
+            present = any((home / rel).exists() for rel in hooks.status_files)
+            return {
+                "logged_in": True if present else None,
+                "method": "account" if present else None,
+                "verified": False,
+                "detail": "Sign-in state found (not verified until first use)."
+                if present
+                else "No sign-in found.",
+            }
+        return {"logged_in": None, "method": None, "verified": False, "detail": "Uses an API key."}
+
+    async def logout(self, user_id: str, cli: str) -> dict[str, Any]:
+        """Sign the CLI out with its own command (or remove its sign-in files), then report status."""
+        await self.logins.cancel(user_id, cli)
+        home = user_home(self.cfg, user_id)
+        args, files = logout_spec_for(cli)
+        ok = True
+        if args is not None:
+            code, _ = await self._capture([self.cfg.binaries.for_cli(cli), *args], home, {})
+            ok = code == 0
+        for rel in files:
+            with contextlib.suppress(FileNotFoundError):
+                (home / rel).unlink()
+        return {"ok": ok, "status": await self.status(user_id, cli)}
+
     def sessions(self, user_id: str, cli: str) -> list[dict[str, Any]]:
         return SessionIndex(user_home(self.cfg, user_id)).list(cli)
 
@@ -415,6 +578,7 @@ class Runner:
         return SessionIndex(user_home(self.cfg, user_id)).get(cli, session_id) is not None
 
     async def purge(self, user_id: str) -> bool:
+        await self.logins.cancel_user(user_id.lower())
         home = user_home(self.cfg, user_id, create=False)
         if not home.exists():
             return False

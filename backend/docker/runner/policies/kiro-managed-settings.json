@@ -1,0 +1,52 @@
+{
+  "rules": [
+    {
+      "capability": "fs_read",
+      "effect": "deny"
+    },
+    {
+      "capability": "fs_write",
+      "effect": "deny"
+    },
+    {
+      "capability": "shell",
+      "effect": "deny"
+    },
+    {
+      "capability": "web_fetch",
+      "effect": "deny"
+    },
+    {
+      "capability": "web_search",
+      "effect": "deny"
+    },
+    {
+      "capability": "mcp",
+      "effect": "deny"
+    },
+    {
+      "capability": "subagent",
+      "effect": "deny"
+    },
+    {
+      "capability": "skill",
+      "effect": "deny"
+    },
+    {
+      "capability": "power",
+      "effect": "deny"
+    },
+    {
+      "capability": "context",
+      "effect": "deny"
+    },
+    {
+      "capability": "diagnostics",
+      "effect": "deny"
+    },
+    {
+      "capability": "sandbox_network",
+      "effect": "deny"
+    }
+  ]
+}

@@ -5,7 +5,10 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.308",
+    "@github/copilot": "1.0.108",
     "@google/gemini-cli": "0.65.0",
-    "@openai/codex": "0.163.0"
+    "@openai/codex": "0.163.0",
+    "@qwen-code/qwen-code": "0.27.1",
+    "opencode-ai": "1.19.5"
   }
 }

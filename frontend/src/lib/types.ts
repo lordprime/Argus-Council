@@ -194,9 +194,9 @@ export interface ArtifactInfo {
   updated_at: string;
 }
 
-/** One vendor CLI (claude, codex, gemini) run as an account-authenticated council agent. */
+/** One vendor CLI (claude, codex, gemini, ...) run as an account-authenticated council agent. */
 export interface CliAgentInfo {
-  cli: "claude" | "codex" | "gemini";
+  cli: string;
   /** Provider name to use on a seat: "claude-cli", "codex-cli", "gemini-cli". */
   provider: string;
   label: string;
@@ -211,9 +211,35 @@ export interface CliAgentInfo {
   has_api_key: boolean;
   key_hint: string | null;
   key_env: string;
+  /** Harness CLIs (qwen, opencode, goose): which model providers a key can be for; empty: one kind of key. */
+  key_providers?: string[];
+  key_provider?: string | null;
   login_command: string;
-  cli_login_command: string;
+  cli_login_command: string | null;
+  /** How the in-app sign-in works for this CLI; null: no sign-in Argus can run (API key only). */
+  login_flow: "device_code" | "paste_code" | null;
+  /** Sign-in methods to choose from (e.g. Kiro: builder_id, google, github); empty: just one. */
+  login_methods: string[];
   suggested_models: string[];
+}
+
+export type CliLoginStatus = "none" | "starting" | "waiting" | "verifying" | "succeeded" | "failed" | "cancelled" | "expired";
+
+/** A sign-in in progress for the current user and one CLI. Only what the user has to act on. */
+export interface CliLoginState {
+  cli: string;
+  state: CliLoginStatus;
+  flow: "device_code" | "paste_code" | null;
+  method: string | null;
+  verification_url: string | null;
+  user_code: string | null;
+  needs_code: boolean;
+  /** The CLI rejected the last code and showed a new link. */
+  retry: boolean;
+  /** Unix seconds. */
+  expires_at: number | null;
+  error: string | null;
+  message: string;
 }
 
 export interface CliAgentsOverview {

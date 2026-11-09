@@ -7,10 +7,11 @@ import { useState, type FormEvent } from "react";
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
 import { CopyBlock } from "@/components/connections/CopyBlock";
 import { CardSkeletons, Meta, SectionTitle } from "@/components/connections/parts";
-import { Badge, Button, Callout, Card, EmptyState, ErrorState, PasswordField } from "@/components/ui";
+import { Badge, Button, Callout, Card, EmptyState, ErrorState, PasswordField, SelectField } from "@/components/ui";
 import { useCliAgents, useCliSessions, useDeleteCliKey, useSetCliKey } from "@/features/connections/cliAgents";
 import { errorMessage } from "@/lib/api";
 import type { CliAgentInfo } from "@/lib/types";
+import { CliSignIn } from "@/routes/connections/CliSignIn";
 import { toast } from "@/stores/toast";
 
 function loginState(c: CliAgentInfo): { tone: "success" | "warning" | "neutral"; text: string } {
@@ -22,15 +23,23 @@ function loginState(c: CliAgentInfo): { tone: "success" | "warning" | "neutral";
   return { tone: "neutral", text: "Unknown" };
 }
 
+/** Model providers a harness CLI's key can be for (labels for the key form). */
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic", openai: "OpenAI", google: "Google (Gemini API)", openrouter: "OpenRouter", mistral: "Mistral",
+  dashscope: "Alibaba Model Studio (DashScope, pay-as-you-go)",
+};
+
 function KeyForm({ c }: { c: CliAgentInfo }) {
   const setKey = useSetCliKey();
   const delKey = useDeleteCliKey();
   const [value, setValue] = useState("");
   const [editing, setEditing] = useState(false);
+  const providers = c.key_providers ?? [];
+  const [provider, setProvider] = useState(c.key_provider ?? providers[0] ?? "");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (value.trim().length < 8) return;
-    setKey.mutate({ cli: c.cli, apiKey: value.trim() }, {
+    setKey.mutate({ cli: c.cli, apiKey: value.trim(), provider: providers.length ? provider : null }, {
       onSuccess: () => { setValue(""); setEditing(false); toast({ tone: "success", title: `${c.label} key saved` }); },
       onError: (err) => toast({ tone: "danger", title: "Could not save the key", body: errorMessage(err) }),
     });
@@ -39,7 +48,7 @@ function KeyForm({ c }: { c: CliAgentInfo }) {
     return (
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-2 h-9 rounded-md border border-border bg-surface-2 px-3 text-sm text-fg-muted">
-          <KeyRound className="size-4" aria-hidden />Stored · write-only{c.key_hint ? ` · ${c.key_hint}` : ""}
+          <KeyRound className="size-4" aria-hidden />Stored · write-only{c.key_provider ? ` · ${PROVIDER_LABELS[c.key_provider] ?? c.key_provider}` : ""}{c.key_hint ? ` · ${c.key_hint}` : ""}
         </span>
         <Button size="sm" onClick={() => setEditing(true)}>Replace</Button>
         <Button size="sm" variant="danger-ghost" loading={delKey.isPending}
@@ -51,7 +60,12 @@ function KeyForm({ c }: { c: CliAgentInfo }) {
   }
   return (
     <form className="flex flex-col gap-2" onSubmit={submit} aria-label={`${c.label} API key`}>
-      <PasswordField label={`${c.key_env} for this CLI`} value={value} autoComplete="new-password" spellCheck={false}
+      {providers.length > 0 && (
+        <SelectField label="Key is for" value={provider} onChange={(e) => setProvider(e.target.value)}>
+          {providers.map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</option>)}
+        </SelectField>
+      )}
+      <PasswordField label={providers.length ? "API key for this CLI" : `${c.key_env} for this CLI`} value={value} autoComplete="new-password" spellCheck={false}
         hint="Optional. Used instead of your sign-in, only for your own runs. Stored encrypted, never shown again."
         onChange={(e) => setValue(e.target.value)} />
       <div className="flex gap-2">
@@ -80,13 +94,18 @@ function CliCard({ c, allowSubscription }: { c: CliAgentInfo; allowSubscription:
         <Meta label="Models">{c.suggested_models.join(", ")}</Meta>
       </dl>
       {c.status_detail && <p className="text-xs text-fg-subtle">{c.status_detail}</p>}
-      {c.enabled && allowSubscription && (
+      {c.enabled && allowSubscription && c.login_flow !== null && (
         <div className="flex flex-col gap-2">
           <p className="text-sm text-fg-muted">
-            Sign in with your own account: an operator runs this on the server, then you complete the CLI's own sign-in.
-            The login stays in your private runner home; Argus never sees the token.
+            Sign in with your own account. The CLI signs itself in inside your private runner home; Argus shows you its link
+            and code and never sees the resulting login.
           </p>
-          <CopyBlock label={`${c.label} sign-in command`} value={c.login_command.replace("<your-email>", "you@example.com")} />
+          <CliSignIn c={c} />
+          <details className="text-sm">
+            <summary className="cursor-pointer text-fg-muted">Sign in from the server instead</summary>
+            <p className="text-xs text-fg-subtle my-2">An operator runs this on the server; you then complete the CLI's own sign-in.</p>
+            <CopyBlock label={`${c.label} sign-in command`} value={c.login_command.replace("<your-email>", "you@example.com")} />
+          </details>
         </div>
       )}
       {c.enabled && <KeyForm c={c} />}

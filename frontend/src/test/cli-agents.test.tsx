@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FallbackChain, type Route } from "@/components/councils/FallbackChain";
 import { ModelPicker } from "@/components/councils/ModelPicker";
-import type { CliAgentInfo, CliAgentsOverview } from "@/lib/types";
+import type { CliAgentInfo, CliAgentsOverview, CliLoginState } from "@/lib/types";
 import CliAgents from "@/routes/connections/CliAgents";
 
 afterEach(() => vi.restoreAllMocks());
@@ -35,13 +35,13 @@ const cli = (over: Partial<CliAgentInfo>): CliAgentInfo => ({
   cli: "claude", provider: "claude-cli", label: "Claude Code", enabled: true, version: "2.1.308 (Claude Code)", installed: true,
   logged_in: true, login_method: "claude.ai", login_verified: true, status_detail: "", has_api_key: false, key_hint: null,
   key_env: "ANTHROPIC_API_KEY", login_command: "./scripts/agent-login.sh <your-email> claude", cli_login_command: "claude auth login",
-  suggested_models: ["sonnet", "opus"], ...over,
+  login_flow: "paste_code", login_methods: [], suggested_models: ["sonnet", "opus"], ...over,
 });
 const ENABLED: CliAgentsOverview = {
   enabled: true, allow_subscription: true, runner_error: null, notice: NOTICE,
   clis: [
     cli({}),
-    cli({ cli: "codex", provider: "codex-cli", label: "OpenAI Codex CLI", logged_in: false, login_method: null, has_api_key: true,
+    cli({ cli: "codex", provider: "codex-cli", label: "OpenAI Codex CLI", logged_in: false, login_method: null, has_api_key: true, login_flow: "device_code",
       key_hint: "sk-…wxyz", key_env: "CODEX_API_KEY", login_command: "./scripts/agent-login.sh <your-email> codex" }),
     cli({ cli: "gemini", provider: "gemini-cli", label: "Gemini CLI", logged_in: null, login_method: null, key_env: "GEMINI_API_KEY",
       login_command: "./scripts/agent-login.sh <your-email> gemini" }),
@@ -84,6 +84,124 @@ describe("Connections > CLI agents", () => {
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({ api_key: "AIzaSyTestKey000001234" });
     const results = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
     expect(results.violations.map((v) => v.id)).toEqual([]);
+  });
+});
+
+const loginState = (over: Partial<CliLoginState>): CliLoginState => ({
+  cli: "claude", state: "none", flow: "paste_code", method: null, verification_url: null, user_code: null, needs_code: false,
+  retry: false, expires_at: null, error: null, message: "", ...over,
+});
+
+describe("Connections > CLI agents: harness CLI keys", () => {
+  it("asks which provider a Goose key is for and sends it", async () => {
+    const goose = cli({ cli: "goose", provider: "goose-cli", label: "Goose", logged_in: null, login_method: null, login_flow: null,
+      key_env: "ANTHROPIC_API_KEY / OPENAI_API_KEY", key_providers: ["anthropic", "openai", "openrouter"], key_provider: null });
+    const fetchMock = mockFetch((url, init) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, clis: [goose] });
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      if (url === "/api/v1/cli-agents/goose/key" && init.method === "PUT") return json({ cli: "goose", has_api_key: true, key_hint: "sk-…abcd", provider: "openrouter" });
+      return undefined;
+    });
+    renderAt("/connections/cli-agents", <CliAgents />);
+    const card = await screen.findByRole("article", { name: "Goose" });
+    expect(within(card).queryByRole("button", { name: /Sign in/ })).toBeNull();
+    await userEvent.selectOptions(within(card).getByLabelText("Key is for"), "openrouter");
+    await userEvent.type(within(card).getByLabelText("API key for this CLI"), "sk-or-v1-abcdabcd");
+    await userEvent.click(within(card).getByRole("button", { name: "Save key" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u, i]) => String(u) === "/api/v1/cli-agents/goose/key" && i?.method === "PUT")).toBe(true));
+    const put = fetchMock.mock.calls.find(([u, i]) => String(u) === "/api/v1/cli-agents/goose/key" && i?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ api_key: "sk-or-v1-abcdabcd", provider: "openrouter" });
+  });
+});
+
+describe("Connections > CLI agents: in-app sign-in", () => {
+  it("walks a paste-code sign-in and passes the code only to the user's own endpoint", async () => {
+    let claude = loginState({});
+    const fetchMock = mockFetch((url, init) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, clis: [cli({ logged_in: false, login_method: null })] });
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      if (url === "/api/v1/cli-agents/claude/login" && init.method === "POST") {
+        claude = loginState({ state: "waiting", needs_code: true, verification_url: "https://claude.com/cai/oauth/authorize?code=true", expires_at: 1_900_000_000 });
+        return json(claude);
+      }
+      if (url === "/api/v1/cli-agents/claude/login/code") {
+        claude = loginState({ state: "succeeded" });
+        return json(loginState({ state: "verifying" }));
+      }
+      if (url === "/api/v1/cli-agents/claude/login") return json(claude);
+      return undefined;
+    });
+    const { container } = renderAt("/connections/cli-agents", <main><CliAgents /></main>);
+    const card = await screen.findByRole("article", { name: "Claude Code" });
+    await userEvent.click(within(card).getByRole("button", { name: "Sign in with your Claude account" }));
+    const panel = await within(card).findByRole("group", { name: "Claude Code sign-in" });
+    const link = within(panel).getByRole("link", { name: /Open claude\.com/ });
+    expect(link).toHaveAttribute("href", "https://claude.com/cai/oauth/authorize?code=true");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect((await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations.map((v) => v.id)).toEqual([]);
+    const field = within(panel).getByLabelText("Code shown after you sign in");
+    await userEvent.type(field, "abc123#state");
+    await userEvent.click(within(panel).getByRole("button", { name: "Finish sign-in" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/v1/cli-agents/claude/login/code")).toBe(true));
+    const sent = fetchMock.mock.calls.find(([u]) => String(u) === "/api/v1/cli-agents/claude/login/code");
+    expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ code: "abc123#state" });
+    expect(await within(card).findByText("Claude Code is signed in", {}, { timeout: 4000 })).toBeInTheDocument();
+  });
+
+  it("shows a device code, cancels, and reports failures and expiry", async () => {
+    let codex = loginState({ cli: "codex", flow: "device_code" });
+    const fetchMock = mockFetch((url, init) => {
+      if (url === "/api/v1/cli-agents") return json(ENABLED);
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      if (url === "/api/v1/cli-agents/codex/login" && init.method === "POST") {
+        codex = loginState({ cli: "codex", flow: "device_code", state: "waiting", verification_url: "https://auth.openai.com/codex/device", user_code: "8Y19-DW049" });
+        return json(codex);
+      }
+      if (url === "/api/v1/cli-agents/codex/login" && init.method === "DELETE") {
+        codex = loginState({ cli: "codex", flow: "device_code", state: "expired", error: "timed_out", message: "The sign-in was not completed in time." });
+        return json(codex);
+      }
+      if (url.endsWith("/login")) return json(url.includes("codex") ? codex : loginState({}));
+      return undefined;
+    });
+    renderAt("/connections/cli-agents", <CliAgents />);
+    const card = await screen.findByRole("article", { name: "OpenAI Codex CLI" });
+    await userEvent.click(within(card).getByRole("button", { name: "Sign in with your ChatGPT account" }));
+    const panel = await within(card).findByRole("group", { name: "OpenAI Codex CLI sign-in" });
+    expect(within(panel).getByRole("region", { name: "One-time code" })).toHaveTextContent("8Y19-DW049");
+    expect(within(panel).queryByLabelText("Code shown after you sign in")).toBeNull();
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(await within(card).findByText("The sign-in timed out")).toBeInTheDocument();
+    expect(within(card).getByText("The sign-in was not completed in time.")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Sign in with your ChatGPT account" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([u, i]) => String(u) === "/api/v1/cli-agents/codex/login" && i?.method === "DELETE")).toBe(true);
+  });
+
+  it("signs out after confirming, and hides sign-in when only API keys are allowed", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = mockFetch((url) => {
+      if (url === "/api/v1/cli-agents") return json(ENABLED);
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      if (url === "/api/v1/cli-agents/claude/logout") return json({ ok: true, logged_in: false, login_method: null });
+      if (url.endsWith("/login")) return json(loginState({}));
+      return undefined;
+    });
+    const view = renderAt("/connections/cli-agents", <CliAgents />);
+    const card = await screen.findByRole("article", { name: "Claude Code" });
+    await userEvent.click(within(card).getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/v1/cli-agents/claude/logout")).toBe(true));
+    view.unmount();
+
+    vi.restoreAllMocks();
+    mockFetch((url) => {
+      if (url === "/api/v1/cli-agents") return json({ ...ENABLED, allow_subscription: false });
+      if (url.startsWith("/api/v1/cli-agents/sessions")) return json([]);
+      return undefined;
+    });
+    renderAt("/connections/cli-agents", <CliAgents />);
+    const claude = await screen.findByRole("article", { name: "Claude Code" });
+    expect(within(claude).queryByRole("button", { name: /Sign in/ })).toBeNull();
+    expect(screen.getByText("API keys only")).toBeInTheDocument();
   });
 });
 

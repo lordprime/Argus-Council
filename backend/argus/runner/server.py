@@ -17,8 +17,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from argus.runner.login import LoginError
 from argus.runner.process import Runner, RunnerConfig, RunnerError
-from argus.runner.specs import UUID_RE, Binaries, CliName, InvokeSpec
+from argus.runner.specs import UUID_RE, Binaries, CliName, InvokeSpec, session_ok
 
 
 def _config_from_env() -> RunnerConfig:
@@ -28,6 +29,12 @@ def _config_from_env() -> RunnerConfig:
             claude=os.environ.get("ARGUS_RUNNER_CLAUDE_BIN", "claude"),
             codex=os.environ.get("ARGUS_RUNNER_CODEX_BIN", "codex"),
             gemini=os.environ.get("ARGUS_RUNNER_GEMINI_BIN", "gemini"),
+            copilot=os.environ.get("ARGUS_RUNNER_COPILOT_BIN", "copilot"),
+            kiro=os.environ.get("ARGUS_RUNNER_KIRO_BIN", "kiro-cli"),
+            qwen=os.environ.get("ARGUS_RUNNER_QWEN_BIN", "qwen"),
+            opencode=os.environ.get("ARGUS_RUNNER_OPENCODE_BIN", "opencode"),
+            goose=os.environ.get("ARGUS_RUNNER_GOOSE_BIN", "goose"),
+            vibe=os.environ.get("ARGUS_RUNNER_VIBE_BIN", "vibe"),
         ),
         max_concurrency=int(os.environ.get("ARGUS_RUNNER_MAX_CONCURRENCY", "8")),
         max_per_user=int(os.environ.get("ARGUS_RUNNER_MAX_PER_USER", "4")),
@@ -37,6 +44,14 @@ def _config_from_env() -> RunnerConfig:
 class StatusIn(BaseModel):
     user_id: str
     cli: CliName
+
+
+class LoginStartIn(StatusIn):
+    method: str | None = Field(default=None, max_length=32, pattern=r"^[a-z_]+$")
+
+
+class LoginCodeIn(StatusIn):
+    code: str = Field(max_length=600)
 
 
 class SessionIn(BaseModel):
@@ -49,6 +64,11 @@ def create_app(token: str | None = None, runner: Runner | None = None) -> FastAP
     app = FastAPI(title="Argus agent runner", docs_url=None, redoc_url=None, openapi_url=None)
     secret = token if token is not None else os.environ.get("ARGUS_RUNNER_TOKEN", "")
     app.state.runner = runner or Runner(_config_from_env())
+
+    async def _stop_logins() -> None:
+        await app.state.runner.logins.close()
+
+    app.router.on_shutdown.append(_stop_logins)
 
     def auth(authorization: str = Header(default="")) -> None:
         # Refuse everything when no token is configured, and compare in constant time.
@@ -73,10 +93,48 @@ def create_app(token: str | None = None, runner: Runner | None = None) -> FastAP
         user_id = _user(data.user_id)
         return await app.state.runner.status(user_id, data.cli)
 
+    def _refused(exc: LoginError) -> HTTPException:
+        status = 429 if exc.code == "busy" else 409
+        return HTTPException(status_code=status, detail={"error": exc.code, "message": exc.message})
+
+    @app.post("/v1/login/start", dependencies=[Depends(auth)])
+    async def login_start(data: LoginStartIn) -> dict:
+        try:
+            return await app.state.runner.logins.start(_user(data.user_id), data.cli, data.method)
+        except LoginError as exc:
+            raise _refused(exc) from None
+
+    @app.post("/v1/login/state", dependencies=[Depends(auth)])
+    async def login_state(data: StatusIn) -> dict:
+        return app.state.runner.logins.state(_user(data.user_id), data.cli)
+
+    @app.post("/v1/login/code", dependencies=[Depends(auth)])
+    async def login_code(body: dict) -> dict:
+        try:
+            data = LoginCodeIn.model_validate(body)
+        except ValidationError:
+            # Never echo the body back: it carries the code.
+            raise HTTPException(status_code=422, detail={"error": "invalid_code"}) from None
+        try:
+            return await app.state.runner.logins.submit_code(_user(data.user_id), data.cli, data.code)
+        except ValueError as exc:
+            detail = {"error": "invalid_code", "message": str(exc)}
+            raise HTTPException(status_code=422, detail=detail) from None
+        except LoginError as exc:
+            raise _refused(exc) from None
+
+    @app.post("/v1/login/cancel", dependencies=[Depends(auth)])
+    async def login_cancel(data: StatusIn) -> dict:
+        return await app.state.runner.logins.cancel(_user(data.user_id), data.cli)
+
+    @app.post("/v1/logout", dependencies=[Depends(auth)])
+    async def logout(data: StatusIn) -> dict:
+        return await app.state.runner.logout(_user(data.user_id), data.cli)
+
     @app.post("/v1/sessions/check", dependencies=[Depends(auth)])
     async def check_session(data: SessionIn) -> dict:
         user_id = _user(data.user_id)
-        if not UUID_RE.match(data.session_id):
+        if not session_ok(data.cli, data.session_id):
             return {"exists": False}
         return {"exists": app.state.runner.has_session(user_id, data.cli, data.session_id)}
 

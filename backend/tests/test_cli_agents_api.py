@@ -130,7 +130,8 @@ async def test_status_keys_are_per_user_and_never_returned(cli_app, cli_client):
     r = await cli_client.put(
         f"{API}/cli-agents/claude/key", json={"api_key": "sk-ant-api03-alicesecretkey"}, headers=alice
     )
-    assert r.status_code == 200 and r.json() == {"cli": "claude", "has_api_key": True, "key_hint": "sk-…tkey"}
+    assert r.status_code == 200
+    assert r.json() == {"cli": "claude", "has_api_key": True, "key_hint": "sk-…tkey", "provider": None}
     over = (await cli_client.get(f"{API}/cli-agents", headers=alice)).json()
     assert over["enabled"] is True and "alicesecretkey" not in str(over)
     claude = next(c for c in over["clis"] if c["cli"] == "claude")

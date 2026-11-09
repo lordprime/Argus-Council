@@ -1,0 +1,41 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "permission": {
+    "*": "deny",
+    "read": "deny",
+    "edit": "deny",
+    "write": "deny",
+    "patch": "deny",
+    "apply_patch": "deny",
+    "multiedit": "deny",
+    "glob": "deny",
+    "grep": "deny",
+    "list": "deny",
+    "bash": "deny",
+    "shell": "deny",
+    "task": "deny",
+    "skill": "deny",
+    "lsp": "deny",
+    "todowrite": "deny",
+    "todoread": "deny",
+    "question": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "codesearch": "deny",
+    "external_directory": "deny",
+    "doom_loop": "deny",
+    "plan_enter": "deny",
+    "plan_exit": "deny",
+    "workflow_tool_approval": "deny"
+  },
+  "agent": {
+    "argus": {
+      "mode": "primary",
+      "description": "Argus Council seat: answers only, no tools.",
+      "permission": "deny"
+    }
+  }
+}

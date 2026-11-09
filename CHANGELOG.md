@@ -12,6 +12,39 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Six more CLI agents.** Seats can now also run on **GitHub Copilot CLI** (`copilot-cli`),
+  **Kiro CLI** (`kiro-cli`), **Qwen Code** (`qwen-cli`), **opencode** (`opencode-cli`), **Goose**
+  (`goose-cli`) and **Mistral Vibe** (`vibe-cli`). They work like Claude Code, Codex and the Gemini
+  CLI:
+  - each CLI's own tools are turned off, by flags, environment, or a root-owned policy file in the
+    runner image that users cannot override;
+  - the runner stops any turn where a CLI reports tools of its own;
+  - sessions are resumed, and usage limits trigger the seat's fallback.
+
+  How each one signs in:
+  - Copilot, Kiro and opencode sign in from Connections > CLI agents with device codes:
+    - Kiro with AWS Builder ID, Google or GitHub;
+    - opencode with GitHub Copilot or ChatGPT.
+  - Qwen Code, Goose and Vibe use per-user API keys. For Qwen Code, opencode and Goose you also
+    choose which model provider the key is for (migration 0023 adds `cli_credentials.provider`).
+
+  The new CLIs are off until an operator lists them in `ARGUS_CLI_AGENTS_ALLOWED`. The runner
+  image pins:
+  - `@github/copilot` 1.0.108, `@qwen-code/qwen-code` 0.27.1 and `opencode-ai` 1.19.5;
+  - Kiro CLI 3.1.0 and Goose 1.57.0, by SHA-256;
+  - `mistral-vibe` 3.1.0, hash-pinned.
+
+  Cursor CLI, Amazon Q Developer CLI, Charm Crush and Amp were evaluated and left out (see
+  docs/cli-agents.md).
+- **Sign CLI agents in from the web UI.** Connections > CLI agents has **Sign in** and **Sign out**
+  for Claude Code, Codex and the Gemini CLI.
+  - The runner starts the CLI's own login in your runner HOME. The page shows only the vendor link
+    and one-time code the CLI prints, and passes a pasted authorization code straight to the CLI.
+  - Tokens stay in the runner as before. Argus never contacts the vendors' sign-in services or reads
+    the login.
+  - Only you can sign in your own CLIs: interactive sessions only, rate-limited, audited.
+  - No sign-in when `ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false`.
+  - `./scripts/agent-login.sh` remains for operators.
 - **Live browser.** Agents can browse the web read-only in a real browser, and you can watch each
   agent's browser live in the run view. Opt in with the browser compose profile
   (`COMPOSE_PROFILES=browser`, `ARGUS_BROWSER_URL`; `deploy.sh` generates `ARGUS_BROWSER_TOKEN`).

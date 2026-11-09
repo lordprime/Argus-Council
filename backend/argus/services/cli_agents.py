@@ -21,15 +21,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.core.config import Settings
 from argus.core.crypto import SecretBox
-from argus.core.errors import ArgusError
+from argus.core.errors import ArgusError, ServiceUnavailable
 from argus.core.logging import get_logger
 from argus.db.base import utcnow
 from argus.db.models import CliCredential, CliSession
-from argus.providers.cli.client import RunnerTransport, RunnerUnavailable, build_runner
+from argus.providers.cli.client import RunnerRefused, RunnerTransport, RunnerUnavailable, build_runner
 from argus.providers.cli.errors import CLIError
 from argus.providers.cli.provider import CLI_PROVIDERS, SUGGESTED_MODELS, CLIProvider, cli_for_provider
 from argus.providers.health import key_hint
-from argus.runner.specs import CLI_NAMES, LOGIN_COMMANDS
+from argus.runner.clis import login_spec_for, plugin
+from argus.runner.specs import CLI_NAMES, LOGIN_COMMANDS, PLUGIN_CLIS
 
 log = get_logger(__name__)
 
@@ -38,14 +39,63 @@ CLI_KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "codex": "CODEX_API_KEY", "gemini"
 POLICY_NOTICE = (
     "Each vendor's terms govern how its CLI may be used. Subscription logins (Claude Pro/Max, ChatGPT "
     "Plus/Pro, a Google account) are for the account owner's own use; on an instance shared by several "
-    "people, use API keys. Argus never sees or stores your vendor login: the CLI signs in by itself inside "
-    "the runner, in your own runner home."
+    "people, use API keys. Signing in here starts the CLI's own sign-in in your private runner home: Argus "
+    "shows you only the link and code the CLI prints and passes the code you paste straight to the CLI. "
+    "Argus never contacts the vendor's sign-in service itself and never reads, stores or forwards your "
+    "vendor login."
 )
 
 
 class CLIAgentsDisabled(ArgusError):
     status_code = 403
     code = "cli_agents_disabled"
+
+
+class InvalidKeyProvider(ArgusError):
+    status_code = 422
+    code = "invalid_key_provider"
+
+
+def _plugin_attr(cli: str, attr: str, default: Any) -> Any:
+    if cli not in PLUGIN_CLIS:
+        return default
+    try:
+        return getattr(plugin(cli), attr)
+    except ModuleNotFoundError:
+        return default
+
+
+def key_providers(cli: str) -> list[str]:
+    return list(_plugin_attr(cli, "key_providers", {}))
+
+
+def cli_label(cli: str) -> str:
+    return CLI_LABELS.get(cli) or _plugin_attr(cli, "label", cli)
+
+
+def cli_key_env(cli: str) -> str:
+    if cli in CLI_KEY_ENV:
+        return CLI_KEY_ENV[cli]
+    env = _plugin_attr(cli, "key_env", "")
+    if env:
+        return env
+    providers = _plugin_attr(cli, "key_providers", {})
+    names = sorted({k for tmpl in providers.values() for k in tmpl if k.endswith(("_KEY", "_TOKEN"))})
+    return " / ".join(names) or "API key"
+
+
+class CLISubscriptionDisabled(ArgusError):
+    status_code = 403
+    code = "cli_subscription_disabled"
+
+
+class CLILoginRefused(ArgusError):
+    """The runner refused a sign-in step; the status and code come from the runner."""
+
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status
+        self.code = f"cli_login_{code}"
 
 
 class CLIAgents:
@@ -103,8 +153,12 @@ class CLIAgents:
 
     # ------------------------------------------------------------------ CLIBackend
     async def api_key(self, owner_id: uuid.UUID, cli: str) -> str | None:
+        return (await self.credential(owner_id, cli))[0]
+
+    async def credential(self, owner_id: uuid.UUID, cli: str) -> tuple[str | None, str | None]:
+        """The user's API key for this CLI and, for harness CLIs, the provider it belongs to."""
         if self.sessionmaker is None:
-            return None
+            return None, None
         async with self.sessionmaker() as s:
             row = (
                 await s.execute(
@@ -112,12 +166,12 @@ class CLIAgents:
                 )
             ).scalar_one_or_none()
         if row is None:
-            return None
+            return None, None
         try:
-            return self.box.decrypt(row.api_key_enc)
+            return self.box.decrypt(row.api_key_enc), row.provider
         except ValueError:
             log.warning("cli_agents.key_undecryptable", cli=cli)
-            return None
+            return None, None
 
     async def session_owned(self, owner_id: uuid.UUID, cli: str, session_id: str) -> bool:
         if self.sessionmaker is None:
@@ -169,7 +223,14 @@ class CLIAgents:
             await s.commit()
 
     # ------------------------------------------------------------------ management (API)
-    async def set_key(self, db: AsyncSession, owner_id: uuid.UUID, cli: str, api_key: str) -> CliCredential:
+    async def set_key(
+        self, db: AsyncSession, owner_id: uuid.UUID, cli: str, api_key: str, provider: str | None = None
+    ) -> CliCredential:
+        providers = key_providers(cli)
+        if providers and provider not in providers:
+            raise InvalidKeyProvider(f"Choose which provider this key is for: {', '.join(providers)}")
+        if not providers and provider:
+            raise InvalidKeyProvider(f"The {cli} CLI takes a single kind of key; no provider needed")
         row = (
             await db.execute(
                 select(CliCredential).where(CliCredential.owner_id == owner_id, CliCredential.cli == cli)
@@ -180,6 +241,7 @@ class CLIAgents:
             db.add(row)
         row.api_key_enc = self.box.encrypt(api_key)
         row.key_hint = key_hint(api_key)
+        row.provider = provider or None
         await db.flush()
         return row
 
@@ -196,12 +258,11 @@ class CLIAgents:
         return True
 
     async def overview(self, db: AsyncSession, owner_id: uuid.UUID, *, probe: bool = True) -> dict[str, Any]:
-        keys = {
-            r.cli: r.key_hint
-            for r in (
-                await db.execute(select(CliCredential).where(CliCredential.owner_id == owner_id))
-            ).scalars()
-        }
+        rows = list(
+            (await db.execute(select(CliCredential).where(CliCredential.owner_id == owner_id))).scalars()
+        )
+        keys = {r.cli: r.key_hint for r in rows}
+        key_provider_of = {r.cli: r.provider for r in rows}
         versions: dict[str, str | None] = {}
         runner_error: str | None = None
         if self.enabled and probe:
@@ -219,11 +280,15 @@ class CLIAgents:
                     status = await self.transport.status(str(owner_id), cli)
                 except RunnerUnavailable as exc:
                     status["detail"] = str(exc)
+            try:
+                login_spec = login_spec_for(cli)
+            except ModuleNotFoundError:
+                login_spec = None
             clis.append(
                 {
                     "cli": cli,
                     "provider": f"{cli}-cli",
-                    "label": CLI_LABELS[cli],
+                    "label": cli_label(cli),
                     "enabled": self.allowed(cli),
                     "version": versions.get(cli),
                     "installed": bool(versions.get(cli)) if versions else None,
@@ -233,9 +298,13 @@ class CLIAgents:
                     "status_detail": (status.get("detail") or "")[:300],
                     "has_api_key": cli in keys,
                     "key_hint": keys.get(cli),
-                    "key_env": CLI_KEY_ENV[cli],
+                    "key_env": cli_key_env(cli),
+                    "key_providers": key_providers(cli),
+                    "key_provider": key_provider_of.get(cli),
                     "login_command": f"./scripts/agent-login.sh <your-email> {cli}",
-                    "cli_login_command": LOGIN_COMMANDS[cli],
+                    "cli_login_command": LOGIN_COMMANDS.get(cli),
+                    "login_flow": login_spec.flow if login_spec else None,
+                    "login_methods": list(login_spec.methods) if login_spec else [],
                     "suggested_models": list(SUGGESTED_MODELS[cli]),
                 }
             )
@@ -246,6 +315,47 @@ class CLIAgents:
             "notice": POLICY_NOTICE,
             "clis": clis,
         }
+
+    # ------------------------------------------------------------------ sign-in (own user only)
+    def _login_gate(self, cli: str, *, signing_in: bool) -> RunnerTransport:
+        if not self.allowed(cli):
+            raise CLIAgentsDisabled(f"The {cli} CLI agent is disabled on this instance")
+        if signing_in and not self.allow_subscription:
+            raise CLISubscriptionDisabled(
+                "Account sign-in is disabled on this instance (ARGUS_CLI_AGENTS_ALLOW_SUBSCRIPTION=false); "
+                "use an API key"
+            )
+        assert self.transport is not None
+        return self.transport
+
+    async def _login_call(self, call: Any) -> dict[str, Any]:
+        try:
+            return await call
+        except RunnerUnavailable as exc:
+            raise ServiceUnavailable(f"The agent runner is unreachable: {exc}") from None
+        except RunnerRefused as exc:
+            raise CLILoginRefused(exc.status, exc.code, exc.message) from None
+
+    async def login_start(self, owner_id: uuid.UUID, cli: str, method: str | None) -> dict[str, Any]:
+        transport = self._login_gate(cli, signing_in=True)
+        return await self._login_call(transport.login_start(str(owner_id), cli, method))
+
+    async def login_state(self, owner_id: uuid.UUID, cli: str) -> dict[str, Any]:
+        transport = self._login_gate(cli, signing_in=False)
+        return await self._login_call(transport.login_state(str(owner_id), cli))
+
+    async def login_code(self, owner_id: uuid.UUID, cli: str, code: str) -> dict[str, Any]:
+        transport = self._login_gate(cli, signing_in=True)
+        return await self._login_call(transport.login_code(str(owner_id), cli, code))
+
+    async def login_cancel(self, owner_id: uuid.UUID, cli: str) -> dict[str, Any]:
+        transport = self._login_gate(cli, signing_in=False)
+        return await self._login_call(transport.login_cancel(str(owner_id), cli))
+
+    async def logout(self, owner_id: uuid.UUID, cli: str) -> dict[str, Any]:
+        """Sign the CLI out (always allowed, so a user can remove a login even with sign-in off)."""
+        transport = self._login_gate(cli, signing_in=False)
+        return await self._login_call(transport.logout(str(owner_id), cli))
 
     async def list_sessions(
         self, db: AsyncSession, owner_id: uuid.UUID, cli: str | None = None

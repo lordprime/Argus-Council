@@ -274,6 +274,9 @@ class FakeBackend:
     async def api_key(self, owner_id, cli):
         return self.key
 
+    async def credential(self, owner_id, cli):
+        return self.key, None
+
     async def session_owned(self, owner_id, cli, session_id):
         return (owner_id, cli, session_id) in self.owned
 
@@ -448,3 +451,30 @@ async def test_streamed_text_hides_tool_call_markup():
     provider = CLIProvider("claude", uuid.UUID(USER), FakeBackend(FakeTransport([turn])))
     shown = [e.text async for e in provider.stream(request([Message.user("go")])) if e.type == "text"]
     assert "".join(shown) == "Saving "
+
+
+async def test_session_total_usage_is_counted_per_turn():
+    """Goose reports token totals for the whole session; each turn is billed only for its own share."""
+    owner = uuid.UUID(USER)
+
+    def goose_turn(text: str, inp: int, out: int):
+        def script(spec):
+            yield {
+                "type": "message",
+                "message": {"id": "m", "role": "assistant", "content": [{"type": "text", "text": text}]},
+            }
+            yield {"type": "complete", "total_tokens": inp + out, "input_tokens": inp, "output_tokens": out}
+            yield {"type": "argus.exit", "ok": True, "exit_code": 0, "session_id": spec.session_id}
+
+        return script
+
+    transport = FakeTransport([goose_turn("one", 100, 10), goose_turn("two", 250, 30)])
+    provider = CLIProvider("goose", owner, FakeBackend(transport, key="sk-or-v1-test"))
+    meta = {"run_id": "run-g", "member_id": "seat-g"}
+    msgs = [Message.system("sys"), Message.user("go")]
+    first = await provider.complete(request(msgs, **meta))
+    assert (first.usage.input_tokens, first.usage.output_tokens) == (100, 10)
+    msgs += [first.as_message(), Message.user("more")]
+    second = await provider.complete(request(msgs, **meta))
+    assert transport.calls[1].resume is True
+    assert (second.usage.input_tokens, second.usage.output_tokens) == (150, 20)

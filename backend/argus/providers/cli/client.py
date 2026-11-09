@@ -21,6 +21,16 @@ class RunnerUnavailable(Exception):
     pass
 
 
+class RunnerRefused(Exception):
+    """The runner refused a sign-in request (busy, nothing to answer, bad code, unknown method)."""
+
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+
+
 class RunnerTransport(Protocol):
     def invoke(self, spec: InvokeSpec) -> AsyncIterator[dict[str, Any]]: ...
 
@@ -33,6 +43,16 @@ class RunnerTransport(Protocol):
     async def sessions(self, user_id: str, cli: str) -> list[dict[str, Any]]: ...
 
     async def purge(self, user_id: str) -> bool: ...
+
+    async def login_start(self, user_id: str, cli: str, method: str | None = None) -> dict[str, Any]: ...
+
+    async def login_state(self, user_id: str, cli: str) -> dict[str, Any]: ...
+
+    async def login_code(self, user_id: str, cli: str, code: str) -> dict[str, Any]: ...
+
+    async def login_cancel(self, user_id: str, cli: str) -> dict[str, Any]: ...
+
+    async def logout(self, user_id: str, cli: str) -> dict[str, Any]: ...
 
 
 def _body(spec: InvokeSpec) -> dict[str, Any]:
@@ -99,6 +119,17 @@ class RemoteRunner:
         finally:
             if self.client is None:
                 await client.aclose()
+        if resp.status_code in (409, 422, 429):
+            try:
+                detail = resp.json().get("detail") or {}
+            except ValueError:
+                detail = {}
+            detail = detail if isinstance(detail, dict) else {}
+            raise RunnerRefused(
+                resp.status_code,
+                str(detail.get("error") or "refused")[:40],
+                str(detail.get("message") or "The runner refused the request.")[:300],
+            )
         if resp.status_code != 200:
             raise RunnerUnavailable(f"runner returned HTTP {resp.status_code}")
         return resp.json()
@@ -123,6 +154,21 @@ class RemoteRunner:
     async def purge(self, user_id: str) -> bool:
         data = await self._call("DELETE", f"/v1/users/{user_id}")
         return bool(data.get("purged"))
+
+    async def login_start(self, user_id: str, cli: str, method: str | None = None) -> dict[str, Any]:
+        return await self._call("POST", "/v1/login/start", {"user_id": user_id, "cli": cli, "method": method})
+
+    async def login_state(self, user_id: str, cli: str) -> dict[str, Any]:
+        return await self._call("POST", "/v1/login/state", {"user_id": user_id, "cli": cli})
+
+    async def login_code(self, user_id: str, cli: str, code: str) -> dict[str, Any]:
+        return await self._call("POST", "/v1/login/code", {"user_id": user_id, "cli": cli, "code": code})
+
+    async def login_cancel(self, user_id: str, cli: str) -> dict[str, Any]:
+        return await self._call("POST", "/v1/login/cancel", {"user_id": user_id, "cli": cli})
+
+    async def logout(self, user_id: str, cli: str) -> dict[str, Any]:
+        return await self._call("POST", "/v1/logout", {"user_id": user_id, "cli": cli}, wait_s=60)
 
 
 class LocalRunner:
@@ -151,6 +197,33 @@ class LocalRunner:
 
     async def purge(self, user_id: str) -> bool:
         return await self._runner.purge(user_id)
+
+    async def login_start(self, user_id: str, cli: str, method: str | None = None) -> dict[str, Any]:
+        from argus.runner.login import LoginError
+
+        try:
+            return await self._runner.logins.start(user_id, cli, method)
+        except LoginError as exc:
+            raise RunnerRefused(429 if exc.code == "busy" else 409, exc.code, exc.message) from None
+
+    async def login_state(self, user_id: str, cli: str) -> dict[str, Any]:
+        return self._runner.logins.state(user_id, cli)
+
+    async def login_code(self, user_id: str, cli: str, code: str) -> dict[str, Any]:
+        from argus.runner.login import LoginError
+
+        try:
+            return await self._runner.logins.submit_code(user_id, cli, code)
+        except ValueError as exc:
+            raise RunnerRefused(422, "invalid_code", str(exc)) from None
+        except LoginError as exc:
+            raise RunnerRefused(409, exc.code, exc.message) from None
+
+    async def login_cancel(self, user_id: str, cli: str) -> dict[str, Any]:
+        return await self._runner.logins.cancel(user_id, cli)
+
+    async def logout(self, user_id: str, cli: str) -> dict[str, Any]:
+        return await self._runner.logout(user_id, cli)
 
 
 def build_runner(settings: Any) -> RunnerTransport | None:

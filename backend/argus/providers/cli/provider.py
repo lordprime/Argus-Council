@@ -31,16 +31,38 @@ from argus.providers.cli.toolproto import (
 from argus.providers.pricing import estimate_cost
 from argus.providers.types import CompletionRequest, CompletionResponse, Message, StreamEvent, Usage
 from argus.runner.process import redact
-from argus.runner.specs import UUID_RE, InvokeSpec
+from argus.runner.specs import CLI_ASSIGNED_SESSIONS, CLI_NAMES, PLUGIN_CLIS, InvokeSpec, session_ok
 
 log = get_logger(__name__)
 
-CLI_PROVIDERS: dict[str, str] = {"claude-cli": "claude", "codex-cli": "codex", "gemini-cli": "gemini"}
-SUGGESTED_MODELS: dict[str, tuple[str, ...]] = {
+CLI_PROVIDERS: dict[str, str] = {f"{cli}-cli": cli for cli in CLI_NAMES}
+_BUILTIN_MODELS: dict[str, tuple[str, ...]] = {
     "claude": ("sonnet", "opus", "haiku", "default"),
     "codex": ("default",),
     "gemini": ("default", "gemini-2.5-pro", "gemini-2.5-flash"),
 }
+
+
+class _SuggestedModels(dict):  # type: ignore[type-arg]
+    """Model suggestions per CLI; plugin CLIs declare theirs in argus/runner/clis/<name>.py."""
+
+    def get(self, cli: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:  # type: ignore[override]
+        if cli in _BUILTIN_MODELS:
+            return _BUILTIN_MODELS[cli]
+        if cli in PLUGIN_CLIS:
+            from argus.runner.clis import plugin
+
+            try:
+                return plugin(cli).suggested_models
+            except ModuleNotFoundError:
+                return default
+        return default
+
+    def __getitem__(self, cli: str) -> tuple[str, ...]:
+        return self.get(cli)
+
+
+SUGGESTED_MODELS = _SuggestedModels()
 
 
 def cli_for_provider(name: str) -> str | None:
@@ -56,6 +78,8 @@ class CLIBackend(Protocol):
 
     async def api_key(self, owner_id: uuid.UUID, cli: str) -> str | None: ...
 
+    async def credential(self, owner_id: uuid.UUID, cli: str) -> tuple[str | None, str | None]: ...
+
     async def session_owned(self, owner_id: uuid.UUID, cli: str, session_id: str) -> bool: ...
 
     async def remember_session(
@@ -69,6 +93,7 @@ class SeatSession:
     sent: list[str] = field(default_factory=list)  # hashes of the conversation the CLI has seen
     system: str = ""
     reported_cost: float | None = None  # claude reports a cumulative cost per session
+    usage_total: Usage | None = None  # CLIs that report session totals: last turn's totals
     pinned: bool = False
 
 
@@ -101,8 +126,9 @@ class CLIProvider(Provider):
             seat = SeatSession()
             pinned = None if own else meta.get("cli_session")
             if pinned:
-                pinned = str(pinned).lower()
-                if not UUID_RE.match(pinned) or not await self._owns(pinned):
+                pinned = str(pinned)
+                pinned = pinned if pinned.startswith("ses_") else pinned.lower()
+                if not session_ok(self.cli, pinned) or not await self._owns(pinned):
                     raise CLIError(
                         "The seat's CLI session does not exist for this user",
                         provider=self.name,
@@ -156,9 +182,9 @@ class CLIProvider(Provider):
         if not prompt.strip():
             prompt = "Continue."
         session_id = seat.session_id if seat else None
-        if seat and not resume and self.cli in ("claude", "gemini"):
+        if seat and not resume and self.cli not in CLI_ASSIGNED_SESSIONS:
             session_id = str(uuid.uuid4())
-        api_key = await self.backend.api_key(self.owner_id, self.cli)
+        api_key, key_provider = await self.backend.credential(self.owner_id, self.cli)
         if not api_key and not self.backend.allow_subscription:
             raise CLIError(
                 f"{self.cli} needs an API key on this instance (subscription logins are disabled)",
@@ -171,12 +197,13 @@ class CLIProvider(Provider):
             prompt=prompt,
             system_prompt="" if resume else system,
             model=request.model,
-            effort=request.effort if self.cli == "claude" else None,
+            effort=request.effort if _supports_effort(self.cli) else None,
             session_id=session_id,
             resume=resume,
             persist=seat is not None,
             run_key=_run_key(meta) if seat is not None else None,
             api_key=api_key,
+            key_provider=key_provider if api_key else None,
             timeout_s=self.backend.timeout_s,
         )
         parser = make_parser(self.cli)
@@ -214,6 +241,18 @@ class CLIProvider(Provider):
         content, calls = extract_tool_calls(result.text, allowed)
         model = request.model if request.model and request.model != "default" else (result.model or self.cli)
         usage = result.usage
+        if _session_total_usage(self.cli):
+            total = usage
+            prev = seat.usage_total if seat is not None and resume else None
+            if prev is not None:
+                usage = Usage(
+                    input_tokens=max(0, total.input_tokens - prev.input_tokens),
+                    output_tokens=max(0, total.output_tokens - prev.output_tokens),
+                    cache_read_tokens=max(0, total.cache_read_tokens - prev.cache_read_tokens),
+                    cache_write_tokens=max(0, total.cache_write_tokens - prev.cache_write_tokens),
+                )
+            if seat is not None:
+                seat.usage_total = total
         estimate = estimate_cost(result.model or model, usage)
         turn_cost = estimate
         if result.reported_cost_usd is not None:
@@ -248,15 +287,34 @@ class CLIProvider(Provider):
         )
         if seat is not None and key is not None:
             new_id = result.session_id or session_id
-            if new_id and UUID_RE.match(new_id):
+            if new_id and session_ok(self.cli, new_id):
+                new_id = new_id if new_id.startswith("ses_") else new_id.lower()
                 if new_id != seat.session_id:
                     await self.backend.remember_session(
-                        self.owner_id, self.cli, new_id.lower(), key[0], str(meta.get("member_id"))
+                        self.owner_id, self.cli, new_id, key[0], str(meta.get("member_id"))
                     )
-                seat.session_id = new_id.lower()
+                seat.session_id = new_id
             seat.sent = [*hashes, message_hash(Message(role="assistant", content=content))]
             seat.system = system if not resume else seat.system or system
         yield StreamEvent(type="done", response=response)
+
+
+def _session_total_usage(cli: str) -> bool:
+    if cli not in PLUGIN_CLIS:
+        return False
+    from argus.runner.clis import plugin
+
+    return plugin(cli).usage_is_session_total
+
+
+def _supports_effort(cli: str) -> bool:
+    if cli == "claude":
+        return True
+    if cli in PLUGIN_CLIS:
+        from argus.runner.clis import plugin
+
+        return plugin(cli).supports_effort
+    return False
 
 
 def _run_key(meta: dict[str, Any]) -> str:

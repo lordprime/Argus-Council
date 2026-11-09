@@ -510,7 +510,7 @@ class MemoryItem(IdMixin, TimestampMixin, Base):
 
 
 class CliCredential(IdMixin, TimestampMixin, Base):
-    """A user's API key for one vendor CLI (claude, codex, gemini), encrypted at rest.
+    """A user's API key for one vendor CLI (claude, codex, gemini, ...), encrypted at rest.
 
     Injected only into that user's own CLI processes in the agent runner; never returned by the
     API and never included in account exports.
@@ -523,6 +523,8 @@ class CliCredential(IdMixin, TimestampMixin, Base):
     cli: Mapped[str] = mapped_column(String(16))
     api_key_enc: Mapped[str] = mapped_column(Text)
     key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Harness CLIs (qwen, opencode, goose): the model provider the key belongs to.
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class CliSession(IdMixin, TimestampMixin, Base):

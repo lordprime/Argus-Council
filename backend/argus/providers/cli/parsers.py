@@ -257,4 +257,13 @@ class GeminiParser(BaseParser):
 
 
 def make_parser(cli: str) -> BaseParser:
-    return {"claude": ClaudeParser, "codex": CodexParser, "gemini": GeminiParser}[cli]()
+    builtin = {"claude": ClaudeParser, "codex": CodexParser, "gemini": GeminiParser}
+    if cli in builtin:
+        return builtin[cli]()
+    import importlib
+
+    from argus.runner.specs import PLUGIN_CLIS
+
+    if cli not in PLUGIN_CLIS:
+        raise KeyError(cli)
+    return importlib.import_module(f"argus.providers.cli.vendors.{cli}").Parser()

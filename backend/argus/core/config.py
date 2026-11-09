@@ -174,7 +174,9 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             v = [c.strip().lower() for c in v.split(",") if c.strip()]
         if isinstance(v, list):
-            unknown = sorted({str(c) for c in v} - {"claude", "codex", "gemini"})
+            from argus.runner.specs import CLI_NAMES
+
+            unknown = sorted({str(c) for c in v} - set(CLI_NAMES))
             if unknown:
                 raise ValueError(f"unknown CLI agents: {', '.join(unknown)}")
         return v
