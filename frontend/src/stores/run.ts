@@ -28,7 +28,23 @@ export interface ToolCallItem {
   durationMs?: number;
   /** ts of tool.call.completed */
   endTs?: string;
+  /** Skills in effect for the calling member when the call started (absent in older runs). */
+  activeSkills?: string[];
 }
+
+/** A skill a member loaded (`skill.loaded`) or read a file of (`skill.read`). */
+export type SkillUse = {
+  name: string;
+  version: string;
+  memberId: string;
+  kind: "loaded" | "read";
+  /** The skill file read (`skill.read`); null for a load. */
+  path: string | null;
+  /** Where the content was saved among the run's artifacts; null when it was not saved. */
+  artifactPath: string | null;
+  seq: number;
+  ts: string;
+};
 
 export interface InterceptInfo {
   id: string;
@@ -162,6 +178,8 @@ export interface RunState {
   autoMode: AutoMode | null;
   /** Claims, challenges, positions and the co-signed conclusion (debate.* events). */
   debate: DebateState;
+  /** Skills loaded and skill files read, in event order. */
+  skills: SkillUse[];
   /** Helpers spawned during the run (members with `ephemeral`), by member id. */
   helpers: Record<string, HelperInfo>;
   /** What each member is working on right now (`member.live`, ephemeral). */
@@ -215,6 +233,7 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     subcouncils: {},
     autoMode: null,
     debate: emptyDebate(),
+    skills: [],
     helpers: {},
     live: {},
     contextSaved: { raw: 0, sent: 0, tasks: 0 },
@@ -393,6 +412,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       push(s, {
         kind: "tool", id: d.tool_call_id, ...base, thoughtEventId: ev.causation_id, tool: d.tool, source: d.source,
         args: d.args, status: "running", output: "",
+        ...(Array.isArray(d.active_skills) && d.active_skills.length ? { activeSkills: d.active_skills as string[] } : {}),
       });
       break;
     case "tool.call.output": {
@@ -547,6 +567,16 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       s.graph = { nodes: cur.nodes + Number(d.nodes ?? 0), edges: cur.edges + Number(d.edges ?? 0) };
       break;
     }
+    case "skill.loaded":
+    case "skill.read": {
+      const loaded = ev.type === "skill.loaded";
+      s.skills = [...(s.skills ?? []), {
+        name: String(d.name ?? ""), version: String(d.version ?? ""), memberId: String(d.member_id ?? ev.actor?.member_id ?? ""),
+        kind: loaded ? "loaded" : "read", path: loaded ? null : (d.path ?? null), artifactPath: d.artifact_path ?? null, seq: ev.seq, ts: ev.ts,
+      }];
+      push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    }
     case "board.note":
       break; // the board's A2A row already shows the note
     default:
@@ -561,7 +591,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
  */
 export function reduceAll(state: RunState, events: RunEvent[]): RunState {
   const s: RunState = {
-    ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {}, debate: state.debate ?? emptyDebate(),
+    ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {}, debate: state.debate ?? emptyDebate(), skills: state.skills ?? [],
     helpers: state.helpers ?? {}, live: state.live ?? {}, contextSaved: state.contextSaved ?? { raw: 0, sent: 0, tasks: 0 },
     graph: state.graph ?? { nodes: 0, edges: 0 },
   };

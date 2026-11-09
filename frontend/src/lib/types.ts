@@ -317,8 +317,9 @@ export interface LedgerEntry {
   seq: number;
   ts: string;
   /** "http": an agent's outbound web request (web_fetch, web_search, market and news tools). */
+  /** skill: a member loading a skill or reading one of its files (direction internal, peer name@version). */
   /** acp: historic rows only (ACP was removed; old ledger entries remain). */
-  protocol: "mcp" | "a2a" | "acp" | "http";
+  protocol: "mcp" | "a2a" | "acp" | "http" | "skill";
   /** internal: between the members of one council (A2A inside Argus). */
   direction: "inbound" | "outbound" | "internal";
   peer: string;

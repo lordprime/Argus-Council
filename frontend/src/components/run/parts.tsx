@@ -29,10 +29,11 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { Badge, Button, IconButton, touchTarget } from "@/components/ui";
+import { Tag } from "@/components/ui/patterns";
 import { Markdown } from "@/components/ui/Markdown";
 import { RoleAvatar, roleStyle } from "@/components/ui/role";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
@@ -244,6 +245,41 @@ function ViolationRow({ d }: { d: Record<string, any> }) { // eslint-disable-lin
   );
 }
 
+/** A skill the member loaded, or a file of one it read; the saved text expands in place. */
+function SkillRow({ runId, type, d }: { runId?: string; type: string; d: Record<string, any> }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const saved = typeof d.artifact_path === "string" && d.artifact_path ? (d.artifact_path as string) : null;
+  const read = type === "skill.read";
+  const hasTrace = "artifact_path" in d; // older runs recorded only the load
+  useEffect(() => {
+    if (!open || !saved || !runId || content != null) return;
+    api.get<string>(`${V1}/runs/${runId}/artifacts/content?path=${encodeURIComponent(saved)}`).then(setContent, setErr);
+  }, [open, saved, runId, content]);
+  return (
+    <Row icon={Sparkles}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span>
+          {read ? "Read " : "Loaded skill "}
+          {read && <span className="font-mono">{String(d.path)}</span>}
+          {read && " of skill "}
+          <span className="font-mono">{d.name}</span>
+        </span>
+        {d.version && <span className="text-xs text-fg-subtle">v{d.version}</span>}
+        {saved ? (
+          <Button size="sm" variant="ghost" icon={open ? ChevronDown : ChevronRight} aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Show"}</Button>
+        ) : hasTrace && <span className="text-xs text-fg-subtle">Content not saved</span>}
+      </div>
+      {open && saved && (err ? <p role="alert" className="text-xs text-danger mt-1">{errorMessage(err)}</p>
+        : content == null ? <p className="text-xs text-fg-subtle mt-1">Loading</p>
+        : <pre tabIndex={0} role="region" aria-label={`Content of ${d.name}`}
+            className="font-mono text-xs whitespace-pre-wrap break-words max-h-80 overflow-auto bg-surface-2 rounded-md p-2 mt-1">{content}</pre>)}
+    </Row>
+  );
+}
+
 function Row({ icon: Icon, tone, children }: { icon: typeof Bot; tone?: string; children: ReactNode }) {
   return (
     <div className={cn("flex items-start gap-2 text-sm px-1", tone ?? "text-fg-muted")}>
@@ -428,6 +464,7 @@ export function ToolChip({ t, onSelect }: { t: ToolCallItem; onSelect: () => voi
       <button className="w-full flex items-center gap-2 px-2.5 h-8 text-left" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Icon className="size-3.5 text-fg-subtle shrink-0" aria-label={t.source} />
         <span className="font-mono truncate">{t.tool}<span className="text-fg-subtle">({argSummary})</span></span>
+        {t.activeSkills?.map((n) => <Tag key={n} title={`Skill in effect: ${n}`} className="shrink-0">{n}</Tag>)}
         <Badge tone={tone} className="ml-auto">{t.status}</Badge>
         {t.durationMs != null && <span className="text-xs text-fg-subtle tabular">{t.durationMs}ms</span>}
       </button>
@@ -521,8 +558,10 @@ export function VoteCard({ v, members }: { v: VoteItem; members: Member[] }) {
   );
 }
 
-export function SimpleRow({ item, onOpenArtifact, members = [], debate }: {
+export function SimpleRow({ item, onOpenArtifact, members = [], debate, runId }: {
   item: SimpleItem;
+  /** For skill rows, which fetch the saved content of the skill. */
+  runId?: string;
   onOpenArtifact: (path: string) => void;
   /** For debate and helper rows, which name members by id. */
   members?: Member[];
@@ -614,7 +653,7 @@ export function SimpleRow({ item, onOpenArtifact, members = [], debate }: {
           </Row>
         );
       }
-      if (item.type === "skill.loaded") return <Row icon={Sparkles}>Loaded skill <span className="font-mono">{d.name}</span></Row>;
+      if (item.type === "skill.loaded" || item.type === "skill.read") return <SkillRow runId={runId} type={item.type} d={d} />;
       if (item.type === "knowledge.linked") {
         const names = ((d.names as string[] | undefined) ?? []).join(", ") || "a knowledge base";
         return <Row icon={BookOpen}>{d.action === "unlinked" ? "Unlinked" : "Linked"} knowledge: <span className="font-medium">{names}</span></Row>;

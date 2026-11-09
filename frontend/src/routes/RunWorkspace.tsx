@@ -16,6 +16,7 @@ import {
 } from "@/components/run/parts";
 import { AutoModeControl } from "@/components/run/AutoModeControl";
 import { DebatePanel } from "@/components/run/debate";
+import { SkillsView } from "@/components/run/SkillsView";
 import { Reasoning, ThoughtText } from "@/components/run/thought";
 import { BudgetControl } from "@/components/run/BudgetControl";
 import { ResumeRunButton } from "@/components/run/ResumeRunButton";
@@ -49,10 +50,11 @@ const RunGantt = lazy(() => import("@/components/viz/gantt/RunGantt"));
 const CommsHeatmap = lazy(() => import("@/components/viz/heatmap/CommsHeatmap"));
 const RunRoute = lazy(() => import("@/components/viz/route/RunRoute"));
 
-type RunView = "timeline" | "debate" | "map" | "gantt" | "heatmap" | "route";
+type RunView = "timeline" | "debate" | "skills" | "map" | "gantt" | "heatmap" | "route";
 const VIEWS: { value: RunView; label: string; component?: ComponentType<VizProps> }[] = [
   { value: "timeline", label: "Timeline" },
   { value: "debate", label: "Debate" },
+  { value: "skills", label: "Skills" },
   { value: "map", label: "Map", component: CouncilMap },
   { value: "gantt", label: "Gantt", component: RunGantt },
   { value: "heatmap", label: "Heatmap", component: CommsHeatmap },
@@ -286,7 +288,7 @@ function Timeline({ runId, density, focus, onSelect, selected, reveal, onReveale
               : it.kind === "tool" ? <ToolChip t={it} onSelect={() => onSelect(it.id)} />
               : it.kind === "approval" ? <ApprovalCard runId={runId} a={it} />
               : it.kind === "vote" ? <VoteCard v={it} members={members} />
-              : <SimpleRow item={it} members={members} debate={debate}
+              : <SimpleRow item={it} runId={runId} members={members} debate={debate}
                   onOpenArtifact={() => onSelect(`artifact:${(it.data as { path?: string }).path}`)} />}
           </article>
         ))}
@@ -634,6 +636,8 @@ export default function RunWorkspace() {
                     reveal={reveal} onRevealed={() => setReveal(null)} />
                 ) : view === "debate" ? (
                   <div className="flex-1 min-h-0 overflow-auto"><DebatePanel runId={runId} state={state} live={live && viewId === runId} /></div>
+                ) : view === "skills" ? (
+                  <div className="flex-1 min-h-0 overflow-auto"><SkillsView run={state} /></div>
                 ) : (() => {
                   const View = VIEWS.find((v) => v.value === view)?.component;
                   return View ? (
