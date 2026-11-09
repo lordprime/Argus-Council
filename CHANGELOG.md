@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 (`overrides/main.html`), the tip on the docs home page (`docs/index.md`) and the `copyright` line in
 `mkdocs.yml`, and runs `scripts/gen-openapi.sh`.
 
-## [0.1.4] - Unreleased
+## [0.1.4] - 2026-11-10
 
 ### Added
 
