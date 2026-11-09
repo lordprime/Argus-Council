@@ -81,56 +81,64 @@ class UseSkill(Tool):
         name: str = Field(max_length=64)
 
     async def run(self, args: Args, ctx: ToolCallContext) -> ToolResult:
-        pkg = ctx.run.skills.get(args.name)
-        if pkg is None:
-            available = ", ".join(sorted(ctx.run.skills)) or "none"
-            err = f"No skill named '{args.name}'. Available: {available}"
-            await ledger_skill(
-                ctx,
-                "use_skill",
-                args.name,
-                None,
-                f"skills/{args.name}/SKILL.md",
-                args.model_dump(),
-                {"error": err},
-                "error",
-            )
-            return ToolResult.error(err)
-        files = "\n".join(f"- {p}" for p in sorted(pkg.files)) or "(none)"
-        tools = ", ".join(pkg.allowed_tools) or "any permitted tool"
-        text = (
-            f"# Skill: {pkg.name} (v{pkg.version})\n\n## When to use\n{pkg.description}\n\n"
-            f"## Instructions\n{pkg.body}\n\n"
-            f"---\nBundled resources (read with skill_read):\n{files}\nTools this skill expects: {tools}"
-        )
-        artifact_path, sha = await save_skill_text(ctx, f"skills/{pkg.name}/SKILL.md", text)
-        mark_active(ctx, pkg.name)
+        return await load_skill(ctx, args.name)
+
+
+async def load_skill(ctx: ToolCallContext, name: str, *, auto: bool = False) -> ToolResult:
+    """Load a skill for the calling member: what ``use_skill`` does, and what the runtime does by
+    itself (``auto``) for the skills a task calls for. Traced either way: artifact, ledger, event."""
+    args = UseSkill.Args(name=name)
+    pkg = ctx.run.skills.get(args.name)
+    if pkg is None:
+        available = ", ".join(sorted(ctx.run.skills)) or "none"
+        err = f"No skill named '{args.name}'. Available: {available}"
         await ledger_skill(
             ctx,
             "use_skill",
-            pkg.name,
-            pkg.version,
-            f"skills/{pkg.name}/SKILL.md",
+            args.name,
+            None,
+            f"skills/{args.name}/SKILL.md",
             args.model_dump(),
-            {"sha256": sha, "bytes": len(text.encode())},
-            "ok",
+            {"error": err},
+            "error",
         )
-        await ctx.run.sink.emit(
-            "skill.loaded",
-            {
-                "skill_id": pkg.name,
-                "name": pkg.name,
-                "member_id": ctx.member_id,
-                "version": pkg.version,
-                "tool_call_id": ctx.tool_call_id,
-                "artifact_path": artifact_path,
-                "sha256": sha,
-                "bytes": len(text.encode()),
-                "files": sorted(pkg.files),
-                "expected_tools": list(pkg.allowed_tools),
-            },
-        )
-        return ToolResult(text, data={"skill": pkg.name})
+        return ToolResult.error(err)
+    files = "\n".join(f"- {p}" for p in sorted(pkg.files)) or "(none)"
+    tools = ", ".join(pkg.allowed_tools) or "any permitted tool"
+    text = (
+        f"# Skill: {pkg.name} (v{pkg.version})\n\n## When to use\n{pkg.description}\n\n"
+        f"## Instructions\n{pkg.body}\n\n"
+        f"---\nBundled resources (read with skill_read):\n{files}\nTools this skill expects: {tools}"
+    )
+    artifact_path, sha = await save_skill_text(ctx, f"skills/{pkg.name}/SKILL.md", text)
+    mark_active(ctx, pkg.name)
+    await ledger_skill(
+        ctx,
+        "use_skill",
+        pkg.name,
+        pkg.version,
+        f"skills/{pkg.name}/SKILL.md",
+        args.model_dump(),
+        {"sha256": sha, "bytes": len(text.encode())},
+        "ok",
+    )
+    await ctx.run.sink.emit(
+        "skill.loaded",
+        {
+            "skill_id": pkg.name,
+            "name": pkg.name,
+            "member_id": ctx.member_id,
+            "version": pkg.version,
+            "tool_call_id": ctx.tool_call_id,
+            "artifact_path": artifact_path,
+            "sha256": sha,
+            "bytes": len(text.encode()),
+            "files": sorted(pkg.files),
+            "expected_tools": list(pkg.allowed_tools),
+            "auto": auto,
+        },
+    )
+    return ToolResult(text, data={"skill": pkg.name})
 
 
 class SkillRead(Tool):

@@ -152,7 +152,8 @@ async def test_protocol_calls_are_announced_on_the_run_stream(client, auth, app,
     run = await wait_status(client, auth, r.json()["id"], timeout=30)
     assert run["status"] == "completed", run
     evs = await events_of(client, auth, run["id"])
-    calls = [e["data"] for e in evs if e["type"] == "protocol.call"]
+    # Skill loads are ledgered too (auto-loaded skills included); this test is about MCP and A2A.
+    calls = [e["data"] for e in evs if e["type"] == "protocol.call" and e["data"]["protocol"] != "skill"]
     assert [(c["protocol"], c["direction"]) for c in calls] == [("mcp", "outbound"), ("a2a", "outbound")]
     tool_ids = {e["data"]["tool_call_id"] for e in evs if e["type"] == "tool.call.started"}
     assert all(c["ledger_id"] and c["hash"] and c["tool_call_id"] in tool_ids for c in calls)

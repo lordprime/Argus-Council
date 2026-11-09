@@ -65,7 +65,15 @@ async def test_offline_research_run_end_to_end(client, auth, app):
     detail = (await client.get(f"{API}/{run['id']}", headers=auth)).json()
     assert detail["result"].startswith("# Solid-state batteries")
     arts = (await client.get(f"{API}/{run['id']}/artifacts", headers=auth)).json()["artifacts"]
-    assert [a["path"] for a in arts] == ["exports/solid-state-batteries.pdf", "report.json", "report.md"]
+    paths = [a["path"] for a in arts]
+    assert [p for p in paths if not p.startswith("skills/")] == [
+        "exports/solid-state-batteries.pdf",
+        "report.json",
+        "report.md",
+    ]
+    # Skills the research tasks call for are loaded without the model asking (and saved as traced).
+    assert "skills/research-report/SKILL.md" in paths
+    assert any(e["type"] == "skill.loaded" and e["data"].get("auto") for e in evs)
     content = await client.get(
         f"{API}/{run['id']}/artifacts/content", params={"path": "report.md"}, headers=auth
     )

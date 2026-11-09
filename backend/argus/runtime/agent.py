@@ -338,8 +338,9 @@ class AgentRunner:
                 for p in sorted(self.ctx.skills.values(), key=lambda p: p.name)
             )
             parts.append(
-                "\nAvailable skills (call use_skill with the name to load full instructions "
-                f"before relying on one):\n{index}"
+                "\nAvailable skills. Skills that fit your task are loaded into it for you; before "
+                "doing any other work a listed skill covers, call use_skill with its name and follow "
+                f"it:\n{index}"
             )
         if self._allowed("knowledge_search"):
             linked = self.ctx.extra.get("linked_knowledge") or []
@@ -1058,12 +1059,49 @@ class AgentRunner:
         )
         return outcome
 
+    async def _auto_skills(self, task: str, step_title: str, step_id: str | None) -> str:
+        """Load the skills this task calls for (see ``argus.skills.auto``) and return their text.
+
+        Only for tasks that may use tools, and only for members allowed ``use_skill``: the load is
+        the same as the tool's (artifact, ledger row, ``skill.loaded`` marked ``auto``), so the
+        trace and the Skills view show it either way.
+        """
+        if self._tool_mode != "all" or not self.ctx.skills or not self._allowed("use_skill"):
+            return ""
+        from argus.skills.auto import pick_skills
+        from argus.tools.base import ToolCallContext
+        from argus.tools.skills import load_skill
+
+        names = pick_skills(
+            self.ctx.skills, mode=self.ctx.mode, role=self.member.role, text=f"{step_title}\n{task}"
+        )
+        texts = []
+        for name in names:
+            tctx = ToolCallContext(
+                self.ctx, self.member.id, self.member.name, self.member.role, step_id, f"auto-skill-{name}"
+            )
+            try:
+                result = await load_skill(tctx, name, auto=True)
+            except Exception as exc:  # a skill is help, never a reason to fail the task
+                log.warning("skill.autoload_failed", skill=name, error=type(exc).__name__)
+                continue
+            if not result.is_error:
+                texts.append(result.content)
+        return "\n\n".join(texts)
+
     async def _run_task(
         self, task: str, *, step_id: str | None, step_title: str, context: str, phase: str
     ) -> AgentOutcome:
         rails = self.ctx.engine.rails
-        task_message = (f"Context from the council so far:\n{context}\n\n" if context else "") + (
-            f"Your task:\n{task}"
+        skills_text = await self._auto_skills(task, step_title, step_id)
+        task_message = (
+            (f"Context from the council so far:\n{context}\n\n" if context else "")
+            + (
+                f"Skills loaded for this task (they fit it; follow their instructions):\n\n{skills_text}\n\n"
+                if skills_text
+                else ""
+            )
+            + f"Your task:\n{task}"
         )
         messages: list[Message] = [Message.system(self._system_prompt()), Message.user(task_message)]
         self._summary = ""

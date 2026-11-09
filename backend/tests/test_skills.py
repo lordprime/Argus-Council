@@ -232,7 +232,8 @@ async def test_agent_loads_skill_in_run(client, auth, app):
     run, evs = await _run(client, auth, app, "sk")
     assert run["status"] == "completed"
     assert "- my-skill: Does a thing." in prompts[0] and "- research-report:" in prompts[0]
-    loaded = [e for e in evs if e["type"] == "skill.loaded"]
+    # The model's own use_skill call (skills matched to the task are also auto-loaded around it).
+    loaded = [e for e in evs if e["type"] == "skill.loaded" and not e["data"].get("auto")]
     assert loaded and loaded[0]["data"]["name"] == "my-skill"
     assert any("Step 1. Do it." in t for t in tool_results) and any("REF-A" in t for t in tool_results)
 
@@ -254,7 +255,8 @@ async def test_guardrails_hide_denied_skills(client, auth, app):
     app.state.llm.system["sk2"] = MockProvider("sk2", responder=responder)
     _, evs = await _run(client, auth, app, "sk2", {"skills": {"deny": ["latex-*"]}})
     assert "latex-paper" not in prompts[0] and "research-report" in prompts[0]
-    assert not [e for e in evs if e["type"] == "skill.loaded"]
+    # A denied skill is never loaded, by the model or automatically (allowed ones may be auto-loaded).
+    assert not [e for e in evs if e["type"] == "skill.loaded" and e["data"]["name"].startswith("latex")]
     done = [e for e in evs if e["type"] == "tool.call.completed"]
     assert done[0]["data"]["status"] == "error" and "No skill named" in done[0]["data"]["result_preview"]
     await asyncio.sleep(0)
