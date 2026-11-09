@@ -43,7 +43,9 @@ chmod 1777 "$TEST_DIR/sock"
 : >"$TEST_DIR/empty.env"
 
 # Compose interpolates the whole file: the services this test does not start still need values.
-export ARGUS_TEST_DIR="$TEST_DIR" ARGUS_TEST_UID="$(id -u)" ARGUS_TEST_GID="$(id -g)"
+ARGUS_TEST_UID="$(id -u)"
+ARGUS_TEST_GID="$(id -g)"
+export ARGUS_TEST_DIR="$TEST_DIR" ARGUS_TEST_UID ARGUS_TEST_GID
 export COMPOSE_PROFILES=browser ARGUS_IMAGE_REPO="${ARGUS_IMAGE_REPO:-argus-council}"
 export ARGUS_VERSION="${ARGUS_VERSION:-browser-test}"
 export POSTGRES_PASSWORD=unused REDIS_PASSWORD=unused ARGUS_SECRET_KEY=unused ARGUS_SANDBOX_TOKEN=unused
