@@ -74,7 +74,9 @@ LABEL org.opencontainers.image.title="argus-council-runner" \
       org.opencontainers.image.source="https://github.com/lordprime/Argus-Council" \
       org.opencontainers.image.licenses="MIT"
 
-ENV PATH="/opt/clis/bin:/opt/clis/node_modules/.bin:/opt/vibe/bin:/opt/venv/bin:$PATH" \
+# The app's venv comes first: /opt/vibe/bin also holds python and uvicorn (Mistral Vibe's own
+# environment), and they must not start the runner. Only the `vibe` command is wanted from it.
+ENV PATH="/opt/venv/bin:/opt/clis/bin:/opt/clis/node_modules/.bin:/opt/vibe/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ARGUS_ENV=production \
@@ -108,4 +110,4 @@ WORKDIR /home/runner
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect('/run/argus-runner/runner.sock'); s.sendall(b'GET /health HTTP/1.0\\r\\nHost: runner\\r\\n\\r\\n'); sys.exit(0 if b' 200 ' in s.recv(64) else 1)"]
 
-CMD ["uvicorn", "argus.runner.server:app", "--uds", "/run/argus-runner/runner.sock", "--no-server-header"]
+CMD ["/opt/venv/bin/uvicorn", "argus.runner.server:app", "--uds", "/run/argus-runner/runner.sock", "--no-server-header"]

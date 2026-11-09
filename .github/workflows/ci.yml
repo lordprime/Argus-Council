@@ -139,6 +139,9 @@ jobs:
               --network none argus-council/runner:ci "$cli" --version
           done
           test "$(docker run --rm argus-council/runner:ci id -u)" = 10002
+          # The runner's own app must be what `python` and the default command start (not a CLI's venv).
+          docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp --network none argus-council/runner:ci \
+            python -c "import argus.runner.server; print('runner app imports')"
           for p in /etc/gemini-cli/policies/argus-deny-all.toml /etc/kiro/managed-settings.json \
                    /etc/qwen-code/settings.json /etc/opencode/opencode.json; do
             docker run --rm argus-council/runner:ci python -c "import os,stat,sys; p=sys.argv[1]; s=os.stat(p); assert s.st_uid == 0 and not s.st_mode & (stat.S_IWOTH | stat.S_IWGRP), p; print(p, 'ok')" "$p"
