@@ -11,7 +11,6 @@ import argus.api.v1.connections as conn_api
 import argus.services.connections as conns
 from argus.db.models import McpServer, RemoteAgent
 from argus.protocols.a2a_client import A2AClient
-from argus.protocols.acp_client import AcpClient
 from argus.protocols.mcp_client import McpClient
 from argus.services.connections import (
     APPROVAL_RISK,
@@ -150,53 +149,14 @@ async def test_attach_honours_trust_and_ledgers_discovery(client, auth, app, mon
     assert (await client.get("/api/v1/ledger/verify", headers=auth)).json()["ok"] is True
 
 
-async def test_remote_agent_approval_and_acp_rename(client, auth, app, monkeypatch):
-    r = await client.post(
-        "/api/v1/remote-agents",
-        headers=auth,
-        json={"name": "acp1", "protocol": "acp", "url": "https://acp.example.com", "agent_name": "one"},
-    )
-    agent = r.json()
-    assert r.status_code == 201 and agent["requires_approval"] is True and agent["card"] == {}
+async def test_remote_agent_approval_and_card_refresh(client, auth, app, monkeypatch):
     r = await client.post(
         "/api/v1/remote-agents",
         headers=auth,
         json={"name": "a2a1", "protocol": "a2a", "url": "http://test/a2a", "requires_approval": False},
     )
     a2a = r.json()
-    assert a2a["requires_approval"] is False
-
-    # ACP refresh is ledgered (failure and success)
-    listing = {"agents": [{"name": "two", "description": "Second agent"}]}
-
-    class FakeAcp(AcpClient):
-        def __init__(self, base_url, token=None, timeout=60.0, client=None):
-            transport = httpx.MockTransport(lambda req: httpx.Response(200, json=listing))
-            super().__init__(base_url, token, timeout, client=httpx.AsyncClient(transport=transport))
-
-    monkeypatch.setattr(conn_api, "AcpClient", FakeAcp)
-    r = await client.post(f"/api/v1/remote-agents/{agent['id']}/refresh", headers=auth)
-    assert r.status_code == 502 and "one" in r.text
-    r = await client.patch(f"/api/v1/remote-agents/{agent['id']}", headers=auth, json={"agent_name": "two"})
-    assert r.json()["agent_name"] == "two"
-    r = await client.post(f"/api/v1/remote-agents/{agent['id']}/refresh", headers=auth)
-    assert (
-        r.status_code == 200 and r.json()["card"]["name"] == "two" and r.json()["requires_approval"] is True
-    )
-    assert r.json()["description"] == "Second agent"
-    acp = await _ledger(client, auth, protocol="acp")
-    assert [(e["method"], e["direction"], e["status"]) for e in acp] == [
-        ("agents:list", "outbound", "ok")
-    ] * 2
-
-    r = await client.patch(
-        f"/api/v1/remote-agents/{agent['id']}", headers=auth, json={"requires_approval": False}
-    )
-    assert r.json()["requires_approval"] is False and r.json()["card"]["name"] == "two"
-    r = await client.patch(f"/api/v1/remote-agents/{agent['id']}", headers=auth, json={"agent_name": "three"})
-    assert r.json()["card"] == {} and r.json()["requires_approval"] is False
-    r = await client.patch(f"/api/v1/remote-agents/{a2a['id']}", headers=auth, json={"agent_name": "x"})
-    assert r.status_code == 400
+    assert r.status_code == 201 and a2a["requires_approval"] is False and a2a["card"] == {}
 
     # A2A card refresh is ledgered and keeps the approval setting
     class LoopA2A(A2AClient):

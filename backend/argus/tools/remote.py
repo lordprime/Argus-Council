@@ -1,4 +1,4 @@
-"""Tools backed by other systems: external MCP servers and remote A2A / ACP agents."""
+"""Tools backed by other systems: external MCP servers and remote A2A agents."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from argus.core.logging import get_logger
 from argus.core.netguard import DEFAULT_MAX_RESPONSE_BYTES, guarded_client
 from argus.protocols.a2a_client import A2AClient, task_text
-from argus.protocols.acp_client import AcpClient, run_text
 from argus.protocols.mcp_client import McpClient, render_result, tool_name
 from argus.providers.types import ToolSpec
 from argus.runtime.events import Actor
@@ -125,7 +124,7 @@ class RemoteAgentTool(Tool):
             for n, a in sorted(agents.items())
         )
         self.description = (
-            "Delegate a self-contained task to a remote agent over A2A/ACP and get its answer. "
+            "Delegate a self-contained task to a remote agent over A2A and get its answer. "
             f"Available: {listing}"
         )[:1024]
 
@@ -141,23 +140,16 @@ class RemoteAgentTool(Tool):
         t0 = time.monotonic()
         status, response = "ok", None
         try:
-            if agent["protocol"] == "a2a":
-                client = A2AClient(agent["url"], agent.get("token"), client=_peer_client(agent))
-                try:
-                    response = await client.run_to_completion(args.message, timeout_s=self.timeout_s)
-                finally:
-                    await client.aclose()
-                text = task_text(response)
-                status = (
-                    response.get("status", {}).get("state", "ok") if response.get("kind") == "task" else "ok"
-                )
-            else:
-                client2 = AcpClient(agent["url"], agent.get("token"), client=_peer_client(agent))
-                try:
-                    response = await client2.run(agent["agent_name"], args.message, timeout_s=self.timeout_s)
-                finally:
-                    await client2.aclose()
-                text, status = run_text(response), response.get("status", "ok")
+            if agent["protocol"] != "a2a":
+                status = "error"
+                return ToolResult.error(f"Remote agent '{args.agent}' uses an unsupported protocol")
+            client = A2AClient(agent["url"], agent.get("token"), client=_peer_client(agent))
+            try:
+                response = await client.run_to_completion(args.message, timeout_s=self.timeout_s)
+            finally:
+                await client.aclose()
+            text = task_text(response)
+            status = response.get("status", {}).get("state", "ok") if response.get("kind") == "task" else "ok"
             return ToolResult(text, is_error=status in ("failed", "canceled", "cancelled"))
         except Exception as exc:
             status, response = "error", {"error": str(exc)[:300]}
@@ -168,7 +160,7 @@ class RemoteAgentTool(Tool):
                 protocol=agent["protocol"],
                 direction="outbound",
                 peer=agent["url"],
-                method="message/send" if agent["protocol"] == "a2a" else "runs:async",
+                method="message/send",
                 status=str(status)[:16],
                 request={"agent": args.agent, "message": args.message},
                 response=json.loads(json.dumps(response, default=str)) if response else None,

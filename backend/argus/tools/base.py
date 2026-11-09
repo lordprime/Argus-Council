@@ -78,7 +78,7 @@ class Tool(abc.ABC):
     description: str
     Args: type[BaseModel]
     risk: frozenset[str] = frozenset()
-    source: str = "builtin"  # builtin | mcp | skill | a2a | acp
+    source: str = "builtin"  # builtin | mcp | skill | a2a
     # Read-only: may run at the same time as the other parallel-safe calls of one turn (see
     # ``runs_in_parallel``). Every council (A2A) tool is parallel-safe whatever this says.
     parallel_safe: bool = False

@@ -1,4 +1,4 @@
-"""Hash-chained ledger of every MCP / A2A / ACP interaction.
+"""Hash-chained ledger of every MCP / A2A interaction.
 
 Each entry stores digests (not raw payloads) of the request and response plus
 metadata, and ``hash = sha256(prev_hash || canonical(entry))``. Editing or

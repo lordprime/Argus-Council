@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # The offline, deterministic ``mock`` provider. Unset: on only for ``env=test`` (the test suite),
     # so real installs never offer it as a provider or model.
     enable_mock_provider: bool | None = None
-    # Webhooks, HTTP MCP servers and remote A2A/ACP agents: private/loopback targets are refused
+    # Webhooks, HTTP MCP servers and remote A2A agents: private/loopback targets are refused
     # unless the operator opts in. Link-local (cloud metadata) addresses are refused regardless.
     connections_allow_private_urls: bool = False
     # web_fetch (driven by model output, so by whatever content the agents read): a run's guardrails
@@ -123,12 +123,12 @@ class Settings(BaseSettings):
     # Protocols
     mcp_allow_stdio: bool = False  # stdio MCP servers spawn local processes; admins only when enabled
     protocol_timeout_s: float = 60.0
-    # Inbound blocking calls (MCP start_run wait_seconds, A2A blocking, ACP sync) waiting at once in
+    # Inbound blocking calls (MCP start_run wait_seconds, A2A blocking) waiting at once in
     # this process; beyond it, calls return the run's current state and the client polls.
     protocol_max_blocking_waits: int = Field(default=100, ge=0)
     protocol_max_wait_s: float = Field(default=600.0, gt=0, le=3600)
     remote_agent_timeout_s: float = 600.0
-    # Largest response body read from an MCP server, A2A/ACP agent or webhook receiver (bytes).
+    # Largest response body read from an MCP server, A2A agent or webhook receiver (bytes).
     protocol_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
 
     # Runs

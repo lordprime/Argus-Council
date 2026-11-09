@@ -304,7 +304,6 @@ async def attach_connections(
             table[a.name] = {
                 "protocol": a.protocol,
                 "url": a.url,
-                "agent_name": a.agent_name,
                 "description": a.description,
                 "token": box.decrypt(a.token_enc) if a.token_enc else None,
                 "requires_approval": agent_requires_approval(a),

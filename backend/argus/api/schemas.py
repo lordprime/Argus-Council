@@ -476,28 +476,22 @@ class McpServerPatch(BaseModel):
 
 class RemoteAgentIn(BaseModel):
     name: str = _CONN_NAME
-    protocol: Literal["a2a", "acp"]
-    url: str = Field(max_length=500, description="A2A JSON-RPC endpoint or ACP base URL")
-    agent_name: str | None = Field(default=None, max_length=120, description="Required for ACP")
+    protocol: Literal["a2a"]
+    url: str = Field(max_length=500, description="A2A JSON-RPC endpoint")
     token: str | None = Field(default=None, max_length=4000)
     description: str = Field(default="", max_length=2000)
     enabled: bool = True
     requires_approval: bool = Field(default=True, description="Delegating to this agent needs approval")
 
-    @model_validator(mode="after")
-    def _acp_name(self) -> RemoteAgentIn:
-        if self.protocol == "acp" and not self.agent_name:
-            raise ValueError("agent_name is required for ACP agents")
-        return self
-
 
 class RemoteAgentPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str | None = Field(default=None, max_length=500)
     token: str | None = Field(default=None, max_length=4000)
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool | None = None
     requires_approval: bool | None = None
-    agent_name: str | None = Field(default=None, min_length=1, max_length=120, description="ACP only")
 
 
 # ---------------------------------------------------------------- webhooks

@@ -22,9 +22,6 @@ async def test_read_only_key_cannot_write_over_protocols(client, auth):
     assert r["error"]["code"] == -32010
     assert "result" in (await rpc(client, ro, "tasks/get", {"id": task["id"]}, path="/a2a")).json()
 
-    r = await client.post(f"/acp/runs/{task['id']}/cancel", headers={"Authorization": f"Bearer {ro}"})
-    assert r.status_code == 403
-
     for tool, args in (
         ("cancel_run", {"run_id": task["id"]}),
         ("intervene", {"run_id": task["id"], "kind": "pause"}),

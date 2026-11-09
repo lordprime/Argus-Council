@@ -1,4 +1,4 @@
-"""External MCP servers, remote A2A/ACP agents, and the protocol ledger."""
+"""External MCP servers, remote A2A agents, and the protocol ledger."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from argus.core.crypto import SecretBox
 from argus.core.errors import ArgusError, Conflict, Forbidden, NotFound
 from argus.db.models import LedgerEntry, McpServer, RemoteAgent
 from argus.protocols.a2a_client import A2AClient
-from argus.protocols.acp_client import AcpClient
 from argus.services import ledger
 from argus.services.connections import (
     DEFAULT_TRUST,
@@ -68,7 +67,6 @@ def _agent_out(a: RemoteAgent) -> dict[str, Any]:
         "name": a.name,
         "protocol": a.protocol,
         "url": a.url,
-        "agent_name": a.agent_name,
         "description": a.description,
         "enabled": a.enabled,
         "requires_approval": agent_requires_approval(a),
@@ -214,7 +212,6 @@ async def create_agent(
         name=data.name,
         protocol=data.protocol,
         url=validate_base_url(data.url, settings.connections_allow_private_urls, require_dns=False),
-        agent_name=data.agent_name,
         token_enc=SecretBox(settings).encrypt(data.token) if data.token else None,
         description=data.description,
         enabled=data.enabled,
@@ -240,15 +237,6 @@ async def update_agent(
         )
     if "requires_approval" in values:
         set_agent_card(agent, requires_approval=bool(values.pop("requires_approval")))
-    if "agent_name" in values:
-        name = values.pop("agent_name")
-        if agent.protocol != "acp":
-            raise ArgusError("agent_name only applies to ACP agents")
-        if not name:
-            raise ArgusError("agent_name is required for ACP agents")
-        if name != agent.agent_name:
-            agent.agent_name = name
-            set_agent_card(agent, {})  # the cached card described the previous agent
     for k, v in values.items():
         setattr(agent, k, v)
     await db.flush()
@@ -264,7 +252,7 @@ async def delete_agent(agent_id: uuid.UUID, principal: CurrentPrincipal, db: DbD
 async def refresh_agent(
     agent_id: uuid.UUID, request: Request, principal: CurrentPrincipal, db: DbDep, settings: SettingsDep
 ) -> dict:
-    """Fetch the A2A agent card, or confirm the ACP agent exists, and cache it (both ledgered)."""
+    """Fetch the A2A agent card and cache it (ledgered)."""
     agent = await _get(db, RemoteAgent, principal.id, agent_id)
     token = SecretBox(settings).decrypt(agent.token_enc) if agent.token_enc else None
     maker = request.app.state.db.sessionmaker
@@ -292,29 +280,7 @@ async def refresh_agent(
             finally:
                 await client.aclose()
         else:
-            client2 = AcpClient(
-                agent.url,
-                token,
-                timeout=settings.protocol_timeout_s,
-                client=outbound_client(settings, settings.protocol_timeout_s),
-            )
-            try:
-                listing = await ledgered(
-                    maker,
-                    principal.id,
-                    client2.agents,
-                    protocol="acp",
-                    peer=agent.url,
-                    method="agents:list",
-                    request={"path": "/agents"},
-                    detail=detail,
-                )
-            finally:
-                await client2.aclose()
-            found = {a.get("name"): a for a in listing}
-            if agent.agent_name not in found:
-                raise UpstreamError(f"ACP server has no agent named '{agent.agent_name}'")
-            card = found[agent.agent_name]
+            raise ArgusError(f"Unsupported remote agent protocol '{agent.protocol}'")
     except ArgusError:
         raise
     except Exception as exc:

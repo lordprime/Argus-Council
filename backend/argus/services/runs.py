@@ -1,4 +1,4 @@
-"""Run creation shared by the REST API and the MCP / A2A / ACP protocol layers."""
+"""Run creation shared by the REST API and the MCP / A2A protocol layers."""
 
 from __future__ import annotations
 
@@ -218,7 +218,7 @@ async def create_and_start_run(
     await manager.start(run.id)
     await db.refresh(run)
     # refresh() opened a transaction; end it so the pooled connection goes back to the pool. Callers
-    # (blocking MCP/A2A/ACP calls) may now wait minutes for the run without pinning a connection.
+    # (blocking MCP/A2A calls) may now wait minutes for the run without pinning a connection.
     await db.commit()
     return run
 
@@ -328,7 +328,7 @@ def wait_seconds(value: Any, default: float) -> float:
 
 
 async def wait_for_run(state: Any, run: Run, timeout_s: float, *, protocol: str) -> Run:
-    """Blocking-call wait for ``run`` (MCP ``wait_seconds``, A2A ``blocking``, ACP ``sync``).
+    """Blocking-call wait for ``run`` (MCP ``wait_seconds``, A2A ``blocking``).
 
     The wait is capped by ``ARGUS_PROTOCOL_MAX_WAIT_S``. When ``ARGUS_PROTOCOL_MAX_BLOCKING_WAITS``
     callers are already waiting, the run's current state is returned at once (the client polls).

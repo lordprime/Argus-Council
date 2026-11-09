@@ -1,4 +1,4 @@
-"""H3: blocking MCP/A2A/ACP calls wait without holding pooled DB connections, and are bounded."""
+"""H3: blocking MCP/A2A calls wait without holding pooled DB connections, and are bounded."""
 
 from __future__ import annotations
 
@@ -163,16 +163,3 @@ async def test_a2a_wait_is_clamped_and_validated(app, client, api_key, gated):
         assert "result" in r.json(), r.json()
         assert time.monotonic() - t0 < 5
         assert r.json()["result"]["status"]["state"] in ("submitted", "working")
-
-
-async def test_acp_sync_wait_uses_configured_cap(app, client, api_key, gated):
-    app.state.settings.protocol_max_wait_s = 0.3
-    t0 = time.monotonic()
-    r = await client.post(
-        "/acp/runs",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"agent_name": "argus-chat", "mode": "sync", "input": [{"parts": [{"content": "x"}]}]},
-    )
-    assert r.status_code == 200, r.text
-    assert time.monotonic() - t0 < 5
-    assert r.json()["status"] in ("created", "in-progress")

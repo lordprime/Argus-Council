@@ -283,16 +283,18 @@ class McpServer(IdMixin, TimestampMixin, Base):
 
 
 class RemoteAgent(IdMixin, TimestampMixin, Base):
-    """A remote agent reachable over A2A or ACP that councils may delegate to."""
+    """A remote agent reachable over A2A that councils may delegate to."""
 
     __tablename__ = "remote_agents"
     __table_args__ = (UniqueConstraint("owner_id", "name"),)
 
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(40))
-    protocol: Mapped[str] = mapped_column(String(8))  # a2a | acp
+    protocol: Mapped[str] = mapped_column(String(8))  # a2a
     url: Mapped[str] = mapped_column(String(500))
-    agent_name: Mapped[str | None] = mapped_column(String(120), nullable=True)  # ACP agent name
+    agent_name: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )  # legacy; dropped by a later migration
     token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     card: Mapped[dict[str, Any]] = mapped_column(default=dict)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -309,7 +311,7 @@ class LedgerEntry(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     seq: Mapped[int] = mapped_column(Integer)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    protocol: Mapped[str] = mapped_column(String(8))  # mcp | a2a | acp
+    protocol: Mapped[str] = mapped_column(String(8))  # mcp | a2a
     direction: Mapped[str] = mapped_column(String(8))  # inbound | outbound
     peer: Mapped[str] = mapped_column(String(500))
     method: Mapped[str] = mapped_column(String(120))

@@ -194,7 +194,7 @@ async def test_router_guards_user_providers_with_the_setting(client, auth, app, 
 
 # ------------------------------------------------------------------ revoked sessions everywhere
 async def test_signed_out_token_rejected_on_protocols_and_stream(client, auth):
-    """SEC-05 residual: /mcp, /a2a, /acp and the SSE stream also honour session revocation."""
+    """SEC-05 residual: /mcp, /a2a and the SSE stream also honour session revocation."""
     run = (
         await client.post("/api/v1/runs", headers=auth, json={"topic": "t", "mode": "chat", "size": 2})
     ).json()
@@ -208,5 +208,4 @@ async def test_signed_out_token_rejected_on_protocols_and_stream(client, auth):
         "/a2a", headers=h, json={"jsonrpc": "2.0", "id": 1, "method": "tasks/get", "params": params}
     )
     assert r.status_code == 401
-    assert (await client.get("/acp/agents", headers=h)).status_code == 401
     assert (await client.get(f"/api/v1/runs/{run['id']}/events/stream", headers=h)).status_code == 401

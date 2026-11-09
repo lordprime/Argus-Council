@@ -55,7 +55,7 @@ from argus.core.metrics import (
 from argus.core.security import hash_password
 from argus.db.models import User
 from argus.db.session import Database
-from argus.protocols import a2a, acp, mcp_server
+from argus.protocols import a2a, mcp_server
 from argus.runtime.events import build_broker
 from argus.runtime.manager import RunManager
 from argus.services.audit import audit
@@ -306,5 +306,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Agent protocols
     app.include_router(mcp_server.router)
     app.include_router(a2a.router)
-    app.include_router(acp.router)
     return app

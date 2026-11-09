@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from argus.protocols.a2a_client import A2AClient, task_text
-from argus.protocols.acp_client import AcpClient, run_text
 from argus.protocols.mcp_client import HttpMcpClient, McpClientError, StdioMcpClient, render_result, tool_name
 from argus.providers.mock import MockProvider, council_responder
 from tests.test_runs import events_of, wait_status
@@ -241,40 +240,6 @@ async def test_a2a_errors(client, api_key):
     ] == -32601
 
 
-# ------------------------------------------------------------------ ACP
-async def test_acp_agents_and_runs(client, auth, app, api_key):
-    await client.post(
-        "/api/v1/councils", headers=auth, json={"name": "Deep Dive", "mode": "research", "size": 4}
-    )
-    acp = AcpClient("http://test/acp", api_key, client=asgi_client(app))
-    names = {a["name"] for a in await acp.agents()}
-    assert {"argus-research", "argus-coding", "argus-chat", "council-deep-dive"} <= names
-    run = await acp.run("argus-chat", "What is ACP?", poll_s=0.05)
-    assert run["status"] == "completed" and run_text(run).startswith("# What is ACP?")
-    sync = await client.post(
-        "/acp/runs",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "agent_name": "council-deep-dive",
-            "mode": "sync",
-            "input": [
-                {"role": "user", "parts": [{"content_type": "text/plain", "content": "Battery recycling"}]}
-            ],
-        },
-    )
-    assert sync.json()["status"] == "completed" and sync.json()["output"][0]["parts"][0]["content"]
-    assert (await client.get("/acp/agents/nope", headers=auth)).status_code == 404
-    r = await client.post(
-        "/acp/runs",
-        headers=auth,
-        json={"agent_name": "argus-chat", "mode": "stream", "input": [{"parts": [{"content": "x"}]}]},
-    )
-    assert r.status_code == 400
-    await acp.aclose()
-    ledger = (await client.get("/api/v1/ledger", headers=auth, params={"protocol": "acp"})).json()["entries"]
-    assert {e["method"] for e in ledger} >= {"runs:async", "runs:sync"}
-
-
 # ------------------------------------------------------------------ connections + agents using them
 async def test_connections_api_validation(client, auth):
     r = await client.post(
@@ -294,13 +259,6 @@ async def test_connections_api_validation(client, auth):
         },
     )
     assert r.status_code == 201 and r.json()["header_names"] == ["Authorization"] and "s3cret" not in r.text
-    assert (
-        await client.post(
-            "/api/v1/remote-agents",
-            headers=auth,
-            json={"name": "a", "protocol": "acp", "url": "https://x.io"},
-        )
-    ).status_code == 422
     r = await client.post(
         "/api/v1/remote-agents",
         headers=auth,
@@ -323,7 +281,7 @@ async def test_connections_api_validation(client, auth):
 
 @pytest.fixture
 def loopback(app, monkeypatch):
-    """Route outbound MCP/A2A/ACP HTTP from the server back into the same app."""
+    """Route outbound MCP/A2A HTTP from the server back into the same app."""
     import argus.services.connections as conns
     import argus.tools.remote as remote
 
