@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from argus.browser.client import ActionRejected, BrowserBusy, RemoteBrowser, SessionLost
+from argus.browser.engine import MAX_PAGE_CHARS, TRUNCATED_NOTE, wrap_boundaries
+from argus.browser.limits import SLOT_WAIT_S, START_TIMEOUT_S
 from argus.core.config import Settings
 from argus.runtime.guardrails import GuardrailEngine, Guardrails
 from argus.tools import browser as browser_mod
@@ -19,6 +22,15 @@ JPEG = base64.b64encode(b"\xff\xd8jpeg").decode()
 
 async def public(host):
     return ["93.184.216.34"]
+
+
+async def _note_timeout(req, out):
+    out.append(req.extensions["timeout"]["read"])
+
+
+def wrapped(url="https://example.com/", title="Ex", text='- link "Docs" [ref=e1]'):
+    """A page as the service returns it: the text inside fresh boundary markers."""
+    return page(url, title, wrap_boundaries(text, None, origin="https://example.com"))
 
 
 def page(url="https://example.com/", title="Ex", snapshot="- link @e1", shot=JPEG, error=None):
@@ -287,12 +299,25 @@ async def test_busy_and_lost_sessions():
 
 
 async def test_ledger_rows_and_no_http_row():
-    tool, _ = make()
+    tool, _ = make(FakeBrowser([wrapped(), wrapped(), page(error="Element not found")]))
     ctx = Ctx()
     await tool.invoke({"action": "open", "url": "https://example.com/"}, ctx)
     rows = [r for r in ctx.ledger if r["method"] == "open"]
     assert rows and rows[0]["protocol"] == "browser" and rows[0]["peer"] == "example.com"
     assert rows[0]["direction"] == "outbound"
+    # The row attests to what was read: the target, and the hash of the page text (no markers).
+    assert rows[0]["request"] == {"action": "open", "target": "https://example.com/"}
+    sha = hashlib.sha256(b'- link "Docs" [ref=e1]').hexdigest()
+    assert rows[0]["response"] == {"url": "https://example.com/", "title": "Ex", "text_sha256": sha}
+    await tool.invoke({"action": "click", "ref": "e1"}, ctx)
+    click = next(r for r in ctx.ledger if r["method"] == "click")
+    assert click["request"] == {"action": "click", "target": "e1"}
+    assert click["response"]["text_sha256"] == sha  # same text, fresh nonce: same hash
+    await tool.invoke({"action": "snapshot"}, ctx)
+    failed = next(r for r in ctx.ledger if r["method"] == "snapshot")
+    assert failed["request"] == {"action": "snapshot"} and failed["response"] == {
+        "error": "Element not found"
+    }
     assert any(r["method"] == "session.open" for r in ctx.ledger)
     assert all(r["protocol"] == "browser" for r in ctx.ledger)
     from argus.runtime.agent import _LEDGERED_SOURCES
@@ -311,6 +336,12 @@ def test_tool_absent_without_browser_url():
     assert browser_tools(Settings(browser_url=None)) == []
     tools = browser_tools(Settings(browser_url="http://browser:8000", browser_token="t"))
     assert [t.name for t in tools] == ["browse"]
+    client = tools[0].browser
+    # Longer than the service's worst case: the action budget, and a slot wait plus a Chrome start.
+    assert client.timeout_s > Settings().browser_action_timeout_s
+    assert client.open_timeout_s > SLOT_WAIT_S + START_TIMEOUT_S
+    slow = browser_tools(Settings(browser_url="http://b", browser_token="t", browser_action_timeout_s=120))
+    assert slow[0].browser.timeout_s > 120 and slow[0].browser.open_timeout_s >= slow[0].browser.timeout_s
 
 
 async def test_pages_are_captured_to_the_library(monkeypatch):
@@ -323,6 +354,59 @@ async def test_pages_are_captured_to_the_library(monkeypatch):
     tool, _ = make(capture=True)
     await tool.invoke({"action": "open", "url": "https://example.com/"}, Ctx())
     assert seen == [("https://example.com/", "Ex", "- link @e1")]
+
+
+async def test_capture_and_citation_use_the_unwrapped_text_once_per_url(monkeypatch):
+    """The boundary nonce is new on every action: it must not reach the library or the citation,
+    and the interactive snapshot after each action is captured once per URL, not every time."""
+    seen = []
+
+    async def capture(self, ctx, url, title, text):
+        seen.append((url, text))
+
+    monkeypatch.setattr(Browse, "_capture", capture)
+    full = "Docs\nThe whole page text."
+    fake = FakeBrowser(
+        [
+            wrapped(),
+            wrapped(),
+            wrapped(),
+            wrapped(text=full),
+            wrapped(text=full),
+            wrapped(text=full + " Updated."),
+        ]
+    )
+    tool, _ = make(fake, capture=True)
+    ctx = Ctx()
+    res = await tool.invoke({"action": "open", "url": "https://example.com/"}, ctx)
+    await tool.invoke({"action": "scroll"}, ctx)
+    await tool.invoke({"action": "snapshot"}, ctx)
+    assert seen == [("https://example.com/", '- link "Docs" [ref=e1]')]
+    await tool.invoke({"action": "get_text"}, ctx)
+    await tool.invoke({"action": "get_text"}, ctx)  # same text again: not re-ingested
+    await tool.invoke({"action": "get_text"}, ctx)  # changed: captured
+    assert [t for _, t in seen] == ['- link "Docs" [ref=e1]', full, full + " Updated."]
+    assert all("AGENT_BROWSER_PAGE_CONTENT" not in t for _, t in seen)
+    cited = next(d for t, d in ctx.events if t == "citation.added")
+    assert cited["snippet"] == '- link "Docs" [ref=e1]'
+    # The model still gets the page inside its boundary markers.
+    assert (
+        "--- AGENT_BROWSER_PAGE_CONTENT nonce=" in res.content
+        and "--- END_AGENT_BROWSER_PAGE_CONTENT" in res.content
+    )
+
+
+async def test_oversized_snapshot_keeps_its_end_marker():
+    """A snapshot over the tool's cap is cut inside the boundary, never through the END line."""
+    huge = wrapped(text="z" * (MAX_PAGE_CHARS * 2))  # as if the service had not capped it
+    end = huge["snapshot"].splitlines()[-1]
+    tool, _ = make(FakeBrowser([huge]))
+    res = await tool.invoke({"action": "open", "url": "https://example.com/"}, Ctx())
+    assert not res.is_error
+    body = res.content.removesuffix("\n\n(screenshot kept)")
+    assert body.splitlines()[-1] == end
+    assert body.splitlines()[-2] == TRUNCATED_NOTE
+    assert len(body) < MAX_PAGE_CHARS * 2
 
 
 async def test_client_maps_requests_and_statuses():
@@ -341,10 +425,13 @@ async def test_client_maps_requests_and_statuses():
         return httpx.Response(204)
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = RemoteBrowser("http://browser", "tok", http)
+    client = RemoteBrowser("http://browser", "tok", http, timeout_s=45, open_timeout_s=65)
+    timeouts = []
+    http.event_hooks["request"] = [lambda req: _note_timeout(req, timeouts)]
     assert await client.open_session("r1", "m1") == "s9"
     out = await client.act("s9", "click", {"ref": "@e1"})
     assert out["url"] == "u"
+    assert timeouts[:2] == [65, 45]  # a new session may wait for a slot and a Chrome start
     with pytest.raises(SessionLost):
         await client.act("gone", "snapshot", {})
     await client.close_session("s9")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import re
 import time
 from typing import Any, Literal
@@ -19,6 +20,8 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from argus.browser.client import ActionRejected, BrowserBusy, RemoteBrowser, SessionLost
+from argus.browser.engine import MAX_PAGE_CHARS, cap_boundaries, unwrap_boundaries
+from argus.browser.limits import DEFAULT_ACTION_TIMEOUT_S, client_timeouts
 from argus.core.logging import get_logger
 from argus.runtime.events import Actor
 from argus.tools.base import Tool, ToolCallContext, ToolResult
@@ -38,7 +41,19 @@ from argus.tools.web import (
 log = get_logger(__name__)
 
 _URL = re.compile(_URL_SHAPE, re.IGNORECASE)
-MAX_SNAPSHOT_CHARS = 30_000
+# What the model gets back from one action, boundary markers included. The service already caps the
+# page text (MAX_PAGE_CHARS) inside the boundary; this is a backstop that also cuts inside it.
+MAX_SNAPSHOT_CHARS = MAX_PAGE_CHARS + 2_000
+
+
+def page_text(snapshot: str) -> str:
+    """The page's own text: the snapshot without the service's boundary markers, whose nonce is new
+    every time (so they must not reach citations, the knowledge library or a content hash)."""
+    return unwrap_boundaries(snapshot)
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 class SessionRestarted(Exception):
@@ -85,9 +100,32 @@ class Browse(Tool):
         return Actor(kind="agent", member_id=ctx.member_id, name=ctx.member_name, role=ctx.role)
 
     async def _ledger(
-        self, ctx: ToolCallContext, method: str, peer: str, status: str, t0: float, **detail: Any
+        self,
+        ctx: ToolCallContext,
+        method: str,
+        peer: str,
+        status: str,
+        t0: float,
+        *,
+        target: str | None = None,
+        text: str | None = None,
+        **detail: Any,
     ) -> None:
-        """Best effort: the ledger is a record, never a reason to fail the call."""
+        """Best effort: the ledger is a record, never a reason to fail the call.
+
+        The request names the action and its target (URL or ref); a successful response carries the
+        page's URL and title and the SHA-256 of the page text that was read, so the chained row
+        attests to what the agent saw.
+        """
+        request: dict[str, Any] = {"action": method}
+        if target is not None:
+            request["target"] = target
+        if detail.get("error"):
+            response: dict[str, Any] = {"error": detail.get("error")}
+        elif text is not None:
+            response = {"url": detail.get("url"), "title": detail.get("title"), "text_sha256": _sha(text)}
+        else:
+            response = {}
         try:
             await record_call(
                 ctx,
@@ -96,8 +134,8 @@ class Browse(Tool):
                 peer=peer,
                 method=method,
                 status=status,
-                request={"action": method},
-                response={"error": detail.get("error")} if detail.get("error") else {},
+                request=request,
+                response=response,
                 latency_ms=int((time.monotonic() - t0) * 1000),
                 detail={
                     "member_id": detail.get("member_id") or ctx.member_id,
@@ -215,9 +253,10 @@ class Browse(Tool):
                 "latency_ms": int((time.monotonic() - t0) * 1000),
             },
         )
+        text = page_text(cap_boundaries(res.get("snapshot") or "", MAX_SNAPSHOT_CHARS)) if ok else None
         await self._ledger(
             ctx, action, host, "ok" if ok else "error", t0,
-            session_id=session_id, url=url, title=title, error=err,
+            target=target, text=text, session_id=session_id, url=url, title=title, error=err,
         )  # fmt: skip
 
     async def _step_back(self, ctx: ToolCallContext) -> bool:
@@ -256,6 +295,19 @@ class Browse(Tool):
                 await s.commit()
         except Exception as exc:  # the library is best-effort; never fail the read over it
             log.warning("knowledge.capture_failed", url=url, error=type(exc).__name__)
+
+    @staticmethod
+    def _should_capture(ctx: ToolCallContext, action: str, url: str, text: str) -> bool:
+        """At most one library capture per URL per run from the interactive snapshot that follows
+        every action; a ``get_text`` read (the page's full text) is captured again only when its text
+        changed. Keyed on the unwrapped text, so the boundary nonce never makes a page look new."""
+        captured: dict[str, tuple[str, str]] = ctx.run.extra.setdefault("browser_captured", {})
+        kind, sha = ("text" if action == "get_text" else "snapshot"), _sha(text)
+        prev = captured.get(url)
+        if prev is not None and (kind == "snapshot" or prev == (kind, sha)):
+            return False
+        captured[url] = (kind, sha)
+        return True
 
     async def _screenshot(self, ctx: ToolCallContext, b64: str | None, url: str) -> bool:
         if not b64:
@@ -332,7 +384,8 @@ class Browse(Tool):
 
         url = res.get("url") or ""
         title = res.get("title") or ""
-        snapshot = (res.get("snapshot") or "")[:MAX_SNAPSHOT_CHARS]
+        snapshot = cap_boundaries(res.get("snapshot") or "", MAX_SNAPSHOT_CHARS)  # END line kept
+        text = page_text(snapshot)
         error = res.get("error")
         host = urlparse(url).hostname or (urlparse(args.url).hostname if args.url else None) or "browser"
 
@@ -357,7 +410,7 @@ class Browse(Tool):
             await report(False, str(error)[:300])
             return ToolResult(f"Browser error: {error}", is_error=True, data={"url": url, "peer": host})
 
-        if looks_like_challenge(title, snapshot, snapshot):
+        if looks_like_challenge(title, text, text):
             msg = blocked_message(HTTPStatusBlocked(403, host, challenge=True), url)
             await report(False, msg[:300])
             return ToolResult(msg, is_error=True, data={"url": url, "peer": host})
@@ -369,9 +422,9 @@ class Browse(Tool):
         kept = False
         if url and (action == "open" or changed):
             kept = await self._screenshot(ctx, res.get("screenshot_b64"), url)
-        if self.capture and url and snapshot:
-            await self._capture(ctx, url, title, snapshot)
-        source = await cite(ctx, url, title, snapshot)
+        if self.capture and url and text.strip() and self._should_capture(ctx, action, url, text):
+            await self._capture(ctx, url, title, text)
+        source = await cite(ctx, url, title, text)
         header = f"[Source {source['n']}] {source['title']} — {url}"
         text = header + "\n\n" + snapshot + ("\n\n(screenshot kept)" if kept else "")
         return ToolResult(text, data={"source": source["source_id"], "url": url, "peer": host})
@@ -382,10 +435,12 @@ def browser_tools(settings: Any) -> list[Tool]:
     if not url:
         return []
     token = settings.browser_token.get_secret_value() if getattr(settings, "browser_token", None) else ""
-    timeout = float(getattr(settings, "browser_action_timeout_s", 30)) + 15
+    action_s, open_s = client_timeouts(
+        float(getattr(settings, "browser_action_timeout_s", DEFAULT_ACTION_TIMEOUT_S))
+    )
     return [
         Browse(
-            RemoteBrowser(url, token, timeout_s=timeout),
+            RemoteBrowser(url, token, timeout_s=action_s, open_timeout_s=open_s),
             capture=bool(getattr(settings, "knowledge_capture_enabled", True)),
             screenshots_per_member=int(getattr(settings, "browser_screenshots_per_member", 50)),
         )

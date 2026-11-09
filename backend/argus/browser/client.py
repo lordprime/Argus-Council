@@ -35,7 +35,13 @@ class RemoteBrowser:
     """``url`` is ``http(s)://host:port`` or ``unix:/path/to/socket`` (as for the sandbox client)."""
 
     def __init__(
-        self, url: str, token: str, client: httpx.AsyncClient | None = None, *, timeout_s: float = 60.0
+        self,
+        url: str,
+        token: str,
+        client: httpx.AsyncClient | None = None,
+        *,
+        timeout_s: float = 60.0,
+        open_timeout_s: float | None = None,
     ) -> None:
         self.uds: str | None = None
         if url.startswith("unix:"):
@@ -44,10 +50,11 @@ class RemoteBrowser:
         self.url = url.rstrip("/")
         self.token = token
         self.client = client
-        self.timeout_s = timeout_s
+        self.timeout_s = timeout_s  # an action, a close
+        self.open_timeout_s = max(open_timeout_s or timeout_s, timeout_s)  # may wait for a slot, then start
 
-    def _client(self, read_timeout: float | None = None) -> httpx.AsyncClient:
-        timeout = httpx.Timeout(read_timeout or self.timeout_s, connect=5.0)
+    def _client(self) -> httpx.AsyncClient:
+        timeout = httpx.Timeout(self.timeout_s, connect=5.0)
         if self.uds:
             return httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=self.uds), timeout=timeout)
         return httpx.AsyncClient(timeout=timeout)
@@ -56,16 +63,26 @@ class RemoteBrowser:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}
 
-    async def _request(self, method: str, path: str, **kw: Any) -> httpx.Response:
+    async def _request(
+        self, method: str, path: str, *, read_s: float | None = None, **kw: Any
+    ) -> httpx.Response:
         client = self.client or self._client()
+        timeout = httpx.Timeout(read_s or self.timeout_s, connect=5.0)
         try:
-            return await client.request(method, f"{self.url}{path}", headers=self._headers, **kw)
+            return await client.request(
+                method, f"{self.url}{path}", headers=self._headers, timeout=timeout, **kw
+            )
         finally:
             if self.client is None:
                 await client.aclose()
 
     async def open_session(self, run_id: str, member_id: str) -> str:
-        resp = await self._request("POST", "/sessions", json={"run_id": run_id, "member_id": member_id})
+        resp = await self._request(
+            "POST",
+            "/sessions",
+            json={"run_id": run_id, "member_id": member_id},
+            read_s=self.open_timeout_s,
+        )
         if resp.status_code == 503:
             raise BrowserBusy()
         if resp.status_code != 201:

@@ -31,6 +31,13 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from argus.browser.limits import (
+    ACTION_SHARE,
+    DEFAULT_ACTION_TIMEOUT_S,
+    START_TIMEOUT_S,
+    action_timeout_from_env,
+)
+
 log = logging.getLogger(__name__)
 
 ACTIONS = ("open", "snapshot", "click", "scroll", "get_text", "back", "forward", "wait")
@@ -103,6 +110,9 @@ _REF = re.compile(r"^@?(e\d{1,6})$")
 _TAB_ID = re.compile(r"^t(\d{1,6})$")
 _DIRECTIONS = ("up", "down", "left", "right")
 _BOUNDARY_START = "AGENT_BROWSER_PAGE_CONTENT"
+# Page text one action returns, before the boundary markers are added (they always fit after it).
+MAX_PAGE_CHARS = 30_000
+TRUNCATED_NOTE = "[truncated]"
 
 
 @dataclass
@@ -342,16 +352,27 @@ def _strip_cli_markers(text: str, nonce: str | None) -> str:
     return text
 
 
-def wrap_boundaries(text: str, boundary: dict[str, Any] | None, *, origin: str) -> str:
+def _cap(text: str, max_chars: int | None) -> str:
+    if max_chars is None or len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars)] + "\n" + TRUNCATED_NOTE
+
+
+def wrap_boundaries(
+    text: str, boundary: dict[str, Any] | None, *, origin: str, max_chars: int | None = None
+) -> str:
     """Put page text inside content boundary markers carrying a fresh, service-owned nonce.
 
     Always wraps, whatever the text contains: page text that imitates a marker (or forges an END
-    line) stays inside, because only the service knows the nonce of the real END line.
+    line) stays inside, because only the service knows the nonce of the real END line. Text over
+    ``max_chars`` is cut *before* wrapping, with a truncation note inside the boundary, so the END
+    line is never what gets cut off.
     """
     if not text:
         return text
     cli_nonce = (boundary or {}).get("nonce")
     text = _strip_cli_markers(text, cli_nonce if isinstance(cli_nonce, str) else None)
+    text = _cap(text, max_chars)
     nonce = secrets.token_hex(16)
     origin = re.sub(r"\s+", "", origin or str((boundary or {}).get("origin") or ""))[:200]
     return (
@@ -359,6 +380,41 @@ def wrap_boundaries(text: str, boundary: dict[str, Any] | None, *, origin: str) 
         f"{text}\n"
         f"--- END_{_BOUNDARY_START} nonce={nonce} ---"
     )
+
+
+_START_LINE = re.compile(rf"^--- {_BOUNDARY_START} nonce=([0-9a-f]+) origin=\S* ---$")
+
+
+def split_boundaries(text: str) -> tuple[str, str, str] | None:
+    """``(start line, page text, END line)`` of text wrapped by :func:`wrap_boundaries`, or None.
+
+    Only the service's own pair counts: the first and last lines, with the same nonce.
+    """
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return None
+    m = _START_LINE.match(lines[0])
+    if not m or lines[-1] != f"--- END_{_BOUNDARY_START} nonce={m.group(1)} ---":
+        return None
+    return lines[0], "\n".join(lines[1:-1]), lines[-1]
+
+
+def unwrap_boundaries(text: str) -> str:
+    """The page text inside the service's boundary markers (the text itself when it is not wrapped)."""
+    parts = split_boundaries(text)
+    return parts[1] if parts else text
+
+
+def cap_boundaries(text: str, max_chars: int) -> str:
+    """Wrapped text cut to about ``max_chars``, inside the boundary: the END line always survives."""
+    if len(text) <= max_chars:
+        return text
+    parts = split_boundaries(text)
+    if parts is None:
+        return _cap(text, max_chars)
+    start, inner, end = parts
+    room = max_chars - len(start) - len(end) - len(TRUNCATED_NOTE) - 3
+    return f"{start}\n{_cap(inner, room)}\n{end}"
 
 
 def parse_tab_ids(data: Any) -> list[str]:
@@ -580,7 +636,7 @@ class CdpGuard:
             try:
                 await asyncio.wait_for(self.call(method, params, session_id), 10)
             except Exception as exc:  # the target went away, or Chrome refused: nothing to guard
-                log.debug("CDP guard %s failed: %s", method, exc)
+                log.warning("CDP guard %s failed: %s", method, exc)
                 return
 
     async def close(self) -> None:
@@ -626,10 +682,10 @@ class AgentBrowserEngine:
         binary: str = "agent-browser",
         chrome: str = "chrome",
         proxy: str = "http://egress:3128",
-        action_timeout_s: float = 25.0,
+        action_timeout_s: float = DEFAULT_ACTION_TIMEOUT_S,
         work_root: str | None = None,
         chrome_extra_args: Sequence[str] = (),
-        start_timeout_s: float = 20.0,
+        start_timeout_s: float = START_TIMEOUT_S,
     ) -> None:
         self.binary = binary
         self.chrome = chrome
@@ -648,7 +704,7 @@ class AgentBrowserEngine:
             binary=env.get("ARGUS_BROWSER_AGENT_BIN", "agent-browser"),
             chrome=env.get("ARGUS_BROWSER_CHROME_BIN", "chrome"),
             proxy=env.get("ARGUS_BROWSER_PROXY", "http://egress:3128"),
-            action_timeout_s=float(env.get("ARGUS_BROWSER_ACTION_TIMEOUT_S", "25")),
+            action_timeout_s=action_timeout_from_env(env),
             work_root=env.get("ARGUS_BROWSER_WORKDIR") or None,
             chrome_extra_args=shlex.split(env.get("ARGUS_BROWSER_CHROME_EXTRA_ARGS", "")),
         )
@@ -778,7 +834,7 @@ class AgentBrowserEngine:
         def left(share: float = 1.0) -> float:
             return max(0.0, (deadline - loop.time()) * share)
 
-        reply = await self._cli(s, command, limit_s=self.action_timeout_s * 0.6)
+        reply = await self._cli(s, command, limit_s=self.action_timeout_s * ACTION_SHARE)
         error = reply.error
         if error and error.startswith("timed out"):
             error = (
@@ -808,7 +864,7 @@ class AgentBrowserEngine:
         return ActionResult(
             url=url,
             title=title,
-            snapshot=wrap_boundaries(content, boundary, origin=origin),
+            snapshot=wrap_boundaries(content, boundary, origin=origin, max_chars=MAX_PAGE_CHARS),
             screenshot=screenshot,
             error=error,
         )

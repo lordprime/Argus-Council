@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from argus.browser.engine import ACTIONS, ActionResult, Engine, SessionGone, build_command
+from argus.browser.limits import SLOT_WAIT_S
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class SessionManager:
         max_sessions: int,
         per_run: int,
         idle_timeout_s: float,
-        wait_s: float = 30,
+        wait_s: float = SLOT_WAIT_S,
     ) -> None:
         self.engine = engine
         self.max_sessions = max_sessions

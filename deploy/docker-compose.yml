@@ -114,6 +114,8 @@ services:
       # A Unix socket on a shared volume again: the browser has no network route to the API.
       ARGUS_BROWSER_URL: ${ARGUS_BROWSER_URL:-}
       ARGUS_BROWSER_TOKEN: ${ARGUS_BROWSER_TOKEN:-}
+      # The same value goes to the browser service: its budget per action, which the API outwaits.
+      ARGUS_BROWSER_ACTION_TIMEOUT_S: ${ARGUS_BROWSER_ACTION_TIMEOUT_S:-30}
       # Only the web proxy (and localhost) reach the API, so trust its X-Forwarded-For for client IPs.
       FORWARDED_ALLOW_IPS: "*"
       # System-wide LLM providers (users can also add their own in the UI)
@@ -241,6 +243,8 @@ services:
       ARGUS_BROWSER_MAX_SESSIONS: ${ARGUS_BROWSER_MAX_SESSIONS:-4}
       ARGUS_BROWSER_SESSIONS_PER_RUN: ${ARGUS_BROWSER_SESSIONS_PER_RUN:-2}
       ARGUS_BROWSER_IDLE_TIMEOUT_S: ${ARGUS_BROWSER_IDLE_TIMEOUT_S:-300}
+      # Shared with the api service (see there), so both sides agree on how long an action may take.
+      ARGUS_BROWSER_ACTION_TIMEOUT_S: ${ARGUS_BROWSER_ACTION_TIMEOUT_S:-30}
       # The only way out. The service refuses to start a browser without a proxy.
       ARGUS_BROWSER_PROXY: http://egress:3128
       # Chrome's own sandbox needs user namespaces, which the default seccomp profile refuses (and

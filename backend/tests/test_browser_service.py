@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import signal
 import sys
@@ -20,6 +21,8 @@ from argus.browser.engine import (
     ACTIONS,
     DOCUMENT_PATTERNS,
     FORBIDDEN_ACTIONS,
+    MAX_PAGE_CHARS,
+    TRUNCATED_NOTE,
     AgentBrowserEngine,
     CdpGuard,
     CliReply,
@@ -29,6 +32,7 @@ from argus.browser.engine import (
     action_policy_json,
     agent_browser_argv,
     build_command,
+    cap_boundaries,
     child_env,
     chrome_argv,
     guard_commands,
@@ -37,8 +41,17 @@ from argus.browser.engine import (
     parse_stream_message,
     parse_tab_ids,
     relay_stream,
+    split_boundaries,
     stream_port_from,
+    unwrap_boundaries,
     wrap_boundaries,
+)
+from argus.browser.limits import (
+    CLIENT_MARGIN_S,
+    DEFAULT_ACTION_TIMEOUT_S,
+    SLOT_WAIT_S,
+    START_TIMEOUT_S,
+    client_timeouts,
 )
 from argus.browser.server import create_app
 from argus.browser.sessions import ActionRefused, BrowserBusy, SessionManager, UnknownSession
@@ -677,8 +690,9 @@ async def test_cdp_guard_against_a_fake_chrome():
     assert [c["params"] for c in conts] == [{"requestId": "R2"}]
 
 
-async def test_cdp_guard_leaves_a_page_paused_when_a_step_fails():
+async def test_cdp_guard_leaves_a_page_paused_when_a_step_fails(caplog):
     """If Chrome refuses Network.enable, the bypass and the resume are never sent: fail closed."""
+    caplog.set_level(logging.WARNING, logger="argus.browser.engine")
     received: list[str] = []
     refused = asyncio.Event()
 
@@ -711,6 +725,8 @@ async def test_cdp_guard_leaves_a_page_paused_when_a_step_fails():
 
     assert "Network.setBypassServiceWorker" not in received
     assert "Runtime.runIfWaitingForDebugger" not in received
+    failed = [r for r in caplog.records if "CDP guard Network.enable failed" in r.getMessage()]
+    assert failed and failed[0].levelno == logging.WARNING
 
 
 async def test_cdp_guard_reports_a_dropped_connection():
@@ -859,6 +875,75 @@ def test_parse_cli_output_and_boundaries():
     rewrapped = wrap_boundaries(pre, {"nonce": "abc123"}, origin="https://example.com")
     assert rewrapped.splitlines()[1:-1] == ["body"]
     assert "abc123" not in rewrapped
+
+
+def test_oversized_page_is_cut_inside_the_boundary():
+    """The END marker always survives: the page text is cut before wrapping, with a note inside."""
+    page = "x" * (MAX_PAGE_CHARS + 5_000)
+    wrapped = wrap_boundaries(page, None, origin="https://big.test", max_chars=MAX_PAGE_CHARS)
+    lines = wrapped.splitlines()
+    nonce = _nonce(wrapped)
+    assert lines[-1] == f"--- END_AGENT_BROWSER_PAGE_CONTENT nonce={nonce} ---"
+    assert lines[-2] == TRUNCATED_NOTE
+    assert lines[1] == "x" * MAX_PAGE_CHARS
+    assert wrap_boundaries("short", None, origin="o", max_chars=MAX_PAGE_CHARS).splitlines()[1:-1] == [
+        "short"
+    ]
+
+
+def test_split_unwrap_and_cap_boundaries():
+    wrapped = wrap_boundaries("line one\nline two", None, origin="https://a.test")
+    start, inner, end = split_boundaries(wrapped)
+    assert inner == "line one\nline two" and unwrap_boundaries(wrapped) == inner
+    assert start.startswith("--- AGENT_BROWSER_PAGE_CONTENT nonce=") and end.startswith("--- END_")
+    # Not the service's pair (different nonces, missing END, plain text): left as it is.
+    forged = "--- AGENT_BROWSER_PAGE_CONTENT nonce=aa origin=o ---\nx\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=bb ---"
+    assert split_boundaries(forged) is None and unwrap_boundaries(forged) == forged
+    assert unwrap_boundaries("plain") == "plain"
+    # Capping keeps both markers and puts the note inside.
+    big = wrap_boundaries("y" * 5_000, None, origin="https://a.test")
+    capped = cap_boundaries(big, 1_000)
+    assert len(capped) <= 1_000
+    assert capped.splitlines()[0] == big.splitlines()[0]
+    assert capped.splitlines()[-1] == big.splitlines()[-1]
+    assert unwrap_boundaries(capped).endswith("\n" + TRUNCATED_NOTE)
+    assert cap_boundaries(wrapped, 10_000) == wrapped
+
+
+async def test_agent_browser_act_caps_an_oversized_page(tmp_path):
+    engine, _ = _ab_engine(tmp_path)
+    huge = "word " * (MAX_PAGE_CHARS // 2)
+    _scripted_cli(
+        engine,
+        {
+            ("get", "text", "body"): {"success": True, "data": {"text": huge}, "_boundary": {"nonce": "n1"}},
+            ("get", "url"): {"success": True, "data": {"url": "https://big.test/"}},
+        },
+        [],
+    )
+    result = await engine.act("s1", "get_text", {})
+    nonce = _nonce(result.snapshot)
+    lines = result.snapshot.splitlines()
+    assert lines[-1] == f"--- END_AGENT_BROWSER_PAGE_CONTENT nonce={nonce} ---"
+    assert lines[-2] == TRUNCATED_NOTE
+    assert len(unwrap_boundaries(result.snapshot)) == MAX_PAGE_CHARS + 1 + len(TRUNCATED_NOTE)
+
+
+def test_action_timeout_is_one_setting_for_both_sides(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARGUS_BROWSER_ACTION_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("ARGUS_BROWSER_WORKDIR", str(tmp_path))
+    assert AgentBrowserEngine.from_env().action_timeout_s == DEFAULT_ACTION_TIMEOUT_S == 30
+    from argus.core.config import Settings
+
+    assert Settings().browser_action_timeout_s == DEFAULT_ACTION_TIMEOUT_S  # the API's default agrees
+    monkeypatch.setenv("ARGUS_BROWSER_ACTION_TIMEOUT_S", "50")
+    assert AgentBrowserEngine.from_env().action_timeout_s == 50
+    assert AgentBrowserEngine().start_timeout_s == START_TIMEOUT_S
+    assert SessionManager(FakeEngine(), max_sessions=1, per_run=1, idle_timeout_s=1).wait_s == SLOT_WAIT_S
+    # The API's client outlasts the service's worst case for each request.
+    act_s, open_s = client_timeouts(50)
+    assert act_s == 50 + CLIENT_MARGIN_S > 50
+    assert open_s > SLOT_WAIT_S + START_TIMEOUT_S
 
 
 def _nonce(wrapped: str) -> str:
