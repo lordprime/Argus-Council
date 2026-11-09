@@ -655,6 +655,26 @@ export function SimpleRow({ item, onOpenArtifact, members = [], debate, runId }:
         );
       }
       if (item.type === "skill.loaded" || item.type === "skill.read") return <SkillRow runId={runId} type={item.type} d={d as SkillLoadedData | SkillReadData} />;
+      if (item.type === "browser.action") {
+        const bad = d.ok === false;
+        return (
+          <Row icon={Globe} tone={bad ? "text-warning" : undefined}>
+            {item.actor.name} browser: <span className="font-mono">{d.action}</span>
+            {d.target ? <> <span className="font-mono break-all">{String(d.target)}</span></> : null}
+            {d.url && d.url !== d.target ? <span className="text-fg-subtle"> on {String(d.url)}</span> : null}
+            {bad && <>: {d.error ?? "failed"}</>}
+          </Row>
+        );
+      }
+      if (item.type === "browser.snapshot.saved") {
+        return (
+          <Row icon={Globe}>
+            {d.kept === false
+              ? <>Screenshot not kept (limit reached) of {String(d.url)}</>
+              : <>Saved screenshot {d.n} of {String(d.url)}</>}
+          </Row>
+        );
+      }
       if (item.type === "knowledge.linked") {
         const names = ((d.names as string[] | undefined) ?? []).join(", ") || "a knowledge base";
         return <Row icon={BookOpen}>{d.action === "unlinked" ? "Unlinked" : "Linked"} knowledge: <span className="font-medium">{names}</span></Row>;

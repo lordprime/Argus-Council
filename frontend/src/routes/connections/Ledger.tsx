@@ -155,6 +155,7 @@ export default function Ledger() {
           <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
             { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" },
             { value: "skill", label: "Skill", hint: "Skills the agents loaded and the skill files they read" },
+            { value: "browser", label: "Browser", hint: "Pages the agents opened in their browsers, and what they did there" },
             { value: "http", label: "HTTP", hint: "The agents' outbound web requests (web_fetch, web_search, market data, news)" },
           ]} />
           <Segmented label="Purpose" value={purpose} onChange={setPurpose} options={[

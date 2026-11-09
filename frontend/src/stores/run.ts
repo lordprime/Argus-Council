@@ -32,6 +32,19 @@ export interface ToolCallItem {
   activeSkills?: string[];
 }
 
+/** What one member's browser did in this run (`browser.*` events). */
+export type BrowserTrail = {
+  sessionId: string;
+  url: string;
+  title: string;
+  actions: { seq: number; action: string; target: string | null; url: string; ok: boolean; error: string | null }[];
+  shots: { path: string; url: string; n: number }[];
+  open: boolean;
+};
+
+/** Actions kept per member; older ones drop off. */
+const BROWSER_ACTIONS_CAP = 200;
+
 /** A skill a member loaded (`skill.loaded`) or read a file of (`skill.read`). */
 export type SkillUse = {
   name: string;
@@ -180,6 +193,8 @@ export interface RunState {
   debate: DebateState;
   /** Skills loaded and skill files read, in event order. */
   skills: SkillUse[];
+  /** Each browsing member's session, actions and saved screenshots, by member id. */
+  browser: Record<string, BrowserTrail>;
   /** Helpers spawned during the run (members with `ephemeral`), by member id. */
   helpers: Record<string, HelperInfo>;
   /** What each member is working on right now (`member.live`, ephemeral). */
@@ -234,6 +249,7 @@ export function emptyRun(runId: string, members: Member[] = []): RunState {
     autoMode: null,
     debate: emptyDebate(),
     skills: [],
+    browser: {},
     helpers: {},
     live: {},
     contextSaved: { raw: 0, sent: 0, tasks: 0 },
@@ -578,6 +594,36 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
       push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
       break;
     }
+    case "browser.session.opened":
+    case "browser.session.closed":
+    case "browser.action":
+    case "browser.snapshot.saved": {
+      const id = String(d.member_id ?? ev.actor?.member_id ?? "");
+      if (id) {
+        const cur: BrowserTrail = s.browser?.[id] ?? { sessionId: "", url: "", title: "", actions: [], shots: [], open: false };
+        let next: BrowserTrail = cur;
+        if (ev.type === "browser.session.opened") next = { ...cur, sessionId: String(d.session_id ?? ""), open: true };
+        else if (ev.type === "browser.session.closed") next = d.session_id === cur.sessionId || !cur.sessionId ? { ...cur, open: false } : cur;
+        else if (ev.type === "browser.action") {
+          const url = String(d.url ?? "");
+          next = {
+            ...cur,
+            sessionId: cur.sessionId || String(d.session_id ?? ""),
+            url: url || cur.url,
+            title: d.title ? String(d.title) : cur.title,
+            actions: [...cur.actions, {
+              seq: ev.seq, action: String(d.action ?? ""), target: d.target == null ? null : String(d.target), url,
+              ok: d.ok !== false, error: d.error ? String(d.error) : null,
+            }].slice(-BROWSER_ACTIONS_CAP),
+          };
+        } else if (d.kept !== false && d.path) {
+          next = { ...cur, shots: [...cur.shots, { path: String(d.path), url: String(d.url ?? ""), n: Number(d.n ?? cur.shots.length + 1) }] };
+        }
+        s.browser = { ...(s.browser ?? {}), [id]: next };
+      }
+      if (!ev.ephemeral) push(s, { kind: "system", id: ev.id, ...base, type: ev.type, data: d });
+      break;
+    }
     case "board.note":
       break; // the board's A2A row already shows the note
     default:
@@ -592,7 +638,7 @@ export function applyEvent(s: RunState, ev: RunEvent): void {
  */
 export function reduceAll(state: RunState, events: RunEvent[]): RunState {
   const s: RunState = {
-    ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {}, debate: state.debate ?? emptyDebate(), skills: state.skills ?? [],
+    ...state, comms: state.comms ?? [], subcouncils: state.subcouncils ?? {}, debate: state.debate ?? emptyDebate(), skills: state.skills ?? [], browser: state.browser ?? {},
     helpers: state.helpers ?? {}, live: state.live ?? {}, contextSaved: state.contextSaved ?? { raw: 0, sent: 0, tasks: 0 },
     graph: state.graph ?? { nodes: 0, edges: 0 },
   };

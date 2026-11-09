@@ -15,6 +15,7 @@ import {
   VoteCard,
 } from "@/components/run/parts";
 import { AutoModeControl } from "@/components/run/AutoModeControl";
+import { BrowserView } from "@/components/run/BrowserView";
 import { DebatePanel } from "@/components/run/debate";
 import { SkillsView } from "@/components/run/SkillsView";
 import { Reasoning, ThoughtText } from "@/components/run/thought";
@@ -50,11 +51,12 @@ const RunGantt = lazy(() => import("@/components/viz/gantt/RunGantt"));
 const CommsHeatmap = lazy(() => import("@/components/viz/heatmap/CommsHeatmap"));
 const RunRoute = lazy(() => import("@/components/viz/route/RunRoute"));
 
-type RunView = "timeline" | "debate" | "skills" | "map" | "gantt" | "heatmap" | "route";
+type RunView = "timeline" | "debate" | "skills" | "browser" | "map" | "gantt" | "heatmap" | "route";
 const VIEWS: { value: RunView; label: string; component?: ComponentType<VizProps> }[] = [
   { value: "timeline", label: "Timeline" },
   { value: "debate", label: "Debate" },
   { value: "skills", label: "Skills" },
+  { value: "browser", label: "Browser" },
   { value: "map", label: "Map", component: CouncilMap },
   { value: "gantt", label: "Gantt", component: RunGantt },
   { value: "heatmap", label: "Heatmap", component: CommsHeatmap },
@@ -534,7 +536,11 @@ export default function RunWorkspace() {
   const setShowReasoning = useUi((u) => u.setShowReasoning);
   const [focus, setFocus] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [view, setViewState] = useState<RunView>(loadView);
+  const [viewPref, setViewState] = useState<RunView>(loadView);
+  // The Browser view exists only once a member has opened a browser session.
+  const hasBrowser = Object.keys(state.browser ?? {}).length > 0;
+  const view: RunView = viewPref === "browser" && !hasBrowser ? "timeline" : viewPref;
+  const views = useMemo(() => VIEWS.filter((v) => v.value !== "browser" || hasBrowser), [hasBrowser]);
   const [reveal, setReveal] = useState<string | null>(null);
   // Below xl the inspector is a right drawer opened by selecting an item; below md the council rail is a
   // bottom sheet (audit C-03). The breakpoints match the grid columns below.
@@ -602,7 +608,7 @@ export default function RunWorkspace() {
             )}
             <div className="flex flex-col min-h-0 min-w-0">
               <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-surface">
-                <SegmentedTabs label="Run visualisation" value={view} onChange={setView} options={VIEWS} idPrefix="run-view" panelId="run-view-panel" />
+                <SegmentedTabs label="Run visualisation" value={view} onChange={setView} options={views} idPrefix="run-view" panelId="run-view-panel" />
                 {view === "timeline" && <>
                 <label htmlFor="density" className="text-xs text-fg-subtle">Show</label>
                 <select id="density" value={density} onChange={(e) => setDensity(e.target.value as Density)}
@@ -636,6 +642,8 @@ export default function RunWorkspace() {
                     reveal={reveal} onRevealed={() => setReveal(null)} />
                 ) : view === "debate" ? (
                   <div className="flex-1 min-h-0 overflow-auto"><DebatePanel runId={runId} state={state} live={live && viewId === runId} /></div>
+                ) : view === "browser" ? (
+                  <div className="flex-1 min-h-0 overflow-auto"><BrowserView runId={runId} run={state} live={live && viewId === runId} /></div>
                 ) : view === "skills" ? (
                   <div className="flex-1 min-h-0 overflow-auto"><SkillsView run={state} /></div>
                 ) : (() => {
