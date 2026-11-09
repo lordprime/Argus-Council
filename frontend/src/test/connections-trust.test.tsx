@@ -131,21 +131,17 @@ describe("MCP server trust", () => {
   });
 });
 
-const ACP: RemoteAgent = {
-  id: "a1", name: "partner", protocol: "acp", url: "https://acp.example.com/acp", agent_name: "writer", description: "",
-  enabled: true, has_token: false, requires_approval: true, created_at: "2026-01-01T00:00:00Z",
-  card: { name: "writer", description: "Writes", metadata: { capabilities: [{ name: "Drafting" }] } },
-};
 const A2A: RemoteAgent = {
-  ...ACP, id: "a2", name: "research", protocol: "a2a", url: "https://agent.example.com/a2a", agent_name: null, requires_approval: false,
+  id: "a2", name: "research", protocol: "a2a", url: "https://agent.example.com/a2a", description: "",
+  enabled: true, has_token: false, requires_approval: false, created_at: "2026-01-01T00:00:00Z",
   card: { name: "Research", skills: [{ id: "s1", name: "Search" }, { id: "s2", name: "Summarize" }], capabilities: { streaming: true, pushNotifications: false } },
 };
 
 describe("Remote agent approval", () => {
-  it("edits the ACP agent name and approval, summarizes cards and reports refreshes", async () => {
+  it("edits approval, summarizes cards and reports refreshes", async () => {
     const fetchMock = mockFetch((url, init) => {
-      if (url === "/api/v1/remote-agents" && !init.method) return json({ agents: [ACP, A2A] });
-      if (url === "/api/v1/remote-agents/a1" && init.method === "PATCH") return json({ ...ACP, agent_name: "editor", card: {} });
+      if (url === "/api/v1/remote-agents" && !init.method) return json({ agents: [A2A] });
+      if (url === "/api/v1/remote-agents/a2" && init.method === "PATCH") return json({ ...A2A, requires_approval: true });
       if (url === "/api/v1/remote-agents/a2/refresh") return json(A2A);
       return undefined;
     });
@@ -162,33 +158,22 @@ describe("Remote agent approval", () => {
     expect(await within(a2a).findByText(/^Refreshed · \d+ ms$/)).toBeInTheDocument();
     expect(within(a2a).getByRole("status")).toHaveTextContent("2 skills, capabilities: streaming");
 
-    const acp = screen.getByRole("article", { name: "partner" });
-    expect(within(acp).getByText("Needs approval")).toBeInTheDocument();
-    await userEvent.click(within(acp).getByRole("button", { name: "Edit partner" }));
+    await userEvent.click(within(a2a).getByRole("button", { name: "Edit research" }));
     const dialog = await screen.findByRole("dialog");
-    const nameField = within(dialog).getByLabelText("Agent name");
-    expect(nameField).toHaveValue("writer");
-    await userEvent.clear(nameField);
-    await userEvent.type(nameField, "editor");
     await userEvent.click(within(dialog).getByRole("switch", { name: "Require approval before delegating" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/remote-agents/a1", expect.objectContaining({ method: "PATCH" })));
-    expect(bodyOf(fetchMock, "/api/v1/remote-agents/a1", "PATCH")).toMatchObject({ agent_name: "editor", requires_approval: false });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/remote-agents/a2", expect.objectContaining({ method: "PATCH" })));
+    const patch = bodyOf(fetchMock, "/api/v1/remote-agents/a2", "PATCH");
+    expect(patch).toMatchObject({ requires_approval: true });
+    expect(patch).not.toHaveProperty("agent_name");
   });
 
-  it("does not offer an agent name for A2A agents", async () => {
-    const fetchMock = mockFetch((url, init) => {
-      if (url === "/api/v1/remote-agents" && !init.method) return json({ agents: [A2A] });
-      if (url === "/api/v1/remote-agents/a2" && init.method === "PATCH") return json(A2A);
-      return undefined;
-    });
+  it("does not offer an agent name when editing", async () => {
+    mockFetch((url, init) => (url === "/api/v1/remote-agents" && !init.method ? json({ agents: [A2A] }) : undefined));
     renderAt("/connections/agents", <RemoteAgents />);
     await userEvent.click(await screen.findByRole("button", { name: "Edit research" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByLabelText("Agent name")).not.toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/remote-agents/a2", expect.objectContaining({ method: "PATCH" })));
-    expect(bodyOf(fetchMock, "/api/v1/remote-agents/a2", "PATCH")).not.toHaveProperty("agent_name");
   });
 });
 

@@ -169,20 +169,30 @@ describe("McpServers", () => {
 });
 
 describe("RemoteAgents", () => {
-  it("requires an agent name for ACP and shows Argus's own endpoints", async () => {
-    mockFetch((url) => (url === "/api/v1/remote-agents" ? json({ agents: [] }) : undefined));
+  it("remote agent form has no protocol choice and posts a2a", async () => {
+    const fetchMock = mockFetch((url, init) => {
+      if (url === "/api/v1/remote-agents" && !init.method) return json({ agents: [] });
+      if (url === "/api/v1/remote-agents" && init.method === "POST") return json({ id: "a1", name: "partner", protocol: "a2a" }, 201);
+      return undefined;
+    });
     renderAt("/connections/agents", <RemoteAgents />);
     expect(await screen.findByText("No remote agents yet")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "A2A agent card URL" })).toHaveTextContent("/.well-known/agent-card.json");
-    expect(screen.getByRole("region", { name: "ACP base URL" })).toHaveTextContent(/\/acp$/);
+    expect(screen.queryByRole("region", { name: "ACP base URL" })).toBeNull();
 
     await userEvent.click(screen.getAllByRole("button", { name: "Add agent" })[0]!);
     const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("radio", { name: "ACP" }));
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).queryByLabelText("Agent name")).toBeNull();
     await userEvent.type(within(dialog).getByLabelText("Name"), "partner");
-    await userEvent.type(within(dialog).getByLabelText("ACP base URL"), "https://acp.example.com/acp");
+    await userEvent.type(within(dialog).getByLabelText("A2A endpoint URL"), "https://agent.example.com/a2a");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add agent" }));
-    expect(within(dialog).getAllByText(/ACP needs the agent's name/).length).toBeGreaterThan(0);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/remote-agents", expect.objectContaining({ method: "POST" })));
+    const post = fetchMock.mock.calls.find(([u, i]) => u === "/api/v1/remote-agents" && i?.method === "POST");
+    const body = JSON.parse(String(post?.[1]?.body));
+    expect(body.protocol).toBe("a2a");
+    expect(body).not.toHaveProperty("agent_name");
+    expect(screen.queryByText("ACP")).toBeNull();
   });
 });
 
@@ -233,5 +243,17 @@ describe("Ledger", () => {
     expect(within(table).getByText("http")).toBeInTheDocument();
     expect(within(table).getByText("www.pewresearch.org")).toBeInTheDocument();
     expect(within(table).getByText("web_fetch")).toBeInTheDocument();
+  });
+});
+
+describe("Ledger historic ACP rows", () => {
+  it("shows historic ACP rows as removed and offers no ACP filter", async () => {
+    mockFetch((url) => {
+      if (url.startsWith("/api/v1/ledger")) return json({ entries: [entry(1, { protocol: "acp" as LedgerEntry["protocol"] })] });
+      return undefined;
+    });
+    renderAt("/connections/ledger", <Ledger />);
+    expect(await screen.findByText("ACP (removed)")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "ACP" })).toBeNull();
   });
 });

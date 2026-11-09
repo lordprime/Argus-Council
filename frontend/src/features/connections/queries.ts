@@ -197,9 +197,8 @@ export function effectiveToolRisk(s: { risk: string[]; trust: McpTrust; require_
 // ---------------------------------------------------------------- remote agents
 export interface AgentCreate {
   name: string;
-  protocol: "a2a" | "acp";
+  protocol: "a2a";
   url: string;
-  agent_name?: string | null;
   token?: string | null;
   description: string;
   enabled: boolean;
@@ -212,8 +211,6 @@ export interface AgentPatch {
   description?: string;
   enabled?: boolean;
   requires_approval?: boolean;
-  /** ACP only (the backend answers 400 for A2A). Changing it clears the cached card. */
-  agent_name?: string;
 }
 
 /** Agent fields added with approval gating; optional so older servers still render (backend default true). */
@@ -232,7 +229,7 @@ export interface RefreshResult {
   agent?: RemoteAgent;
   error?: string;
 }
-/** Refresh the A2A card (`agent-card`) or confirm the ACP agent (`agents:list`); resolves with a summary either way. */
+/** Refresh the A2A agent card; resolves with a summary either way. */
 export function useRefreshAgent() {
   const qc = useQueryClient();
   return useMutation({
@@ -256,37 +253,31 @@ export interface CardSummary {
   version: string;
   description: string;
   skills: { id: string; name: string; description: string }[];
-  /** Declared capabilities that are on (A2A `capabilities`, ACP `metadata.capabilities`). */
+  /** Declared capabilities that are on (A2A `capabilities`). */
   capabilities: string[];
   inputModes: string[];
   outputModes: string[];
 }
 
-/** Normalizes an A2A agent card or an ACP agent manifest. Remote data is untrusted: strings only, never markup. */
+/** Normalizes an A2A agent card. Remote data is untrusted: strings only, never markup. */
 export function summarizeCard(card: Record<string, unknown> | undefined): CardSummary | null {
   if (!card || !Object.keys(card).length) return null;
   const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
   const strs = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
-  const meta = obj(card.metadata);
   const skills = (Array.isArray(card.skills) ? card.skills : []).map((x, i) => {
     const s = obj(x);
     return { id: str(s.id) || String(i), name: str(s.name) || str(s.id), description: str(s.description) };
   });
   const capObj = obj(card.capabilities);
-  const capabilities = [
-    ...Object.entries(capObj).filter(([, v]) => v === true).map(([k]) => k),
-    ...(Array.isArray(meta.capabilities)
-      ? meta.capabilities.map((c) => str(obj(c).name) || str(c)).filter(Boolean)
-      : []),
-  ];
+  const capabilities = Object.entries(capObj).filter(([, v]) => v === true).map(([k]) => k);
   return {
     name: str(card.name),
     version: str(card.version),
     description: str(card.description),
     skills,
     capabilities,
-    inputModes: [...strs(card.defaultInputModes), ...strs(card.input_content_types)],
-    outputModes: [...strs(card.defaultOutputModes), ...strs(card.output_content_types)],
+    inputModes: strs(card.defaultInputModes),
+    outputModes: strs(card.defaultOutputModes),
   };
 }
 

@@ -11,7 +11,7 @@ import { countOverrides, effective, setOverride, type Dict } from "@/features/co
 export const APPROVAL_KEYS: { key: string; label: string; hint: string }[] = [
   { key: "shell", label: "Shell commands", hint: "Any command run in the sandbox." },
   { key: "network_write", label: "Network writes", hint: "POST/PUT requests and uploads." },
-  { key: "remote_agent", label: "Remote agents", hint: "Delegating work over A2A or ACP." },
+  { key: "remote_agent", label: "Remote agents", hint: "Delegating work over A2A." },
   { key: "package_install", label: "Installing packages", hint: "pip, npm and similar." },
   { key: "fs_write", label: "File writes", hint: "Creating or changing files in the workspace." },
 ];

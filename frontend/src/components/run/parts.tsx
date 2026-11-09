@@ -416,7 +416,7 @@ export function ThoughtCard({ runId, t, live, selected, onSelect }: {
   );
 }
 
-const SOURCE_ICON: Record<string, typeof Wrench> = { builtin: Wrench, mcp: Plug, skill: Sparkles, a2a: Globe, acp: Globe };
+const SOURCE_ICON: Record<string, typeof Wrench> = { builtin: Wrench, mcp: Plug, skill: Sparkles, a2a: Globe };
 
 export function ToolChip({ t, onSelect }: { t: ToolCallItem; onSelect: () => void }) {
   const [open, setOpen] = useState(false);

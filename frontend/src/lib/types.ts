@@ -304,9 +304,8 @@ export interface McpServerInfo {
 export interface RemoteAgentInfo {
   id: string;
   name: string;
-  protocol: "a2a" | "acp";
+  protocol: "a2a";
   url: string;
-  agent_name: string | null;
   description: string;
   enabled: boolean;
   has_token: boolean;
@@ -318,6 +317,7 @@ export interface LedgerEntry {
   seq: number;
   ts: string;
   /** "http": an agent's outbound web request (web_fetch, web_search, market and news tools). */
+  /** acp: historic rows only (ACP was removed; old ledger entries remain). */
   protocol: "mcp" | "a2a" | "acp" | "http";
   /** internal: between the members of one council (A2A inside Argus). */
   direction: "inbound" | "outbound" | "internal";

@@ -1,4 +1,4 @@
-import { Bot, Globe, KeyRound, Network, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Bot, Globe, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { ConnectionsPage } from "@/components/connections/ConnectionsNav";
@@ -15,7 +15,6 @@ import {
   EmptyState,
   ErrorState,
   IconButton,
-  Segmented,
   TextArea,
   TextField,
   Toggle,
@@ -35,7 +34,6 @@ import { useRemoteAgents } from "@/lib/queries";
 import { toast } from "@/stores/toast";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
-type Protocol = "a2a" | "acp";
 
 const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
 
@@ -49,10 +47,8 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
   const create = useCreateAgent();
   const update = useUpdateAgent();
   const mutation = existing ? update : create;
-  const [protocol, setProtocol] = useState<Protocol>(existing?.protocol ?? "a2a");
   const [name, setName] = useState(existing?.name ?? "");
   const [url, setUrl] = useState(existing?.url ?? "");
-  const [agentName, setAgentName] = useState(existing?.agent_name ?? "");
   const [description, setDescription] = useState(existing?.description ?? "");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   const [requiresApproval, setRequiresApproval] = useState(existing?.requires_approval ?? true);
@@ -64,7 +60,6 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
     if (!NAME_RE.test(name)) errors.name = "Lowercase letters, digits, '-' or '_' (max 40)";
     else if (takenNames.includes(name)) errors.name = `An agent named ${name} already exists`;
   }
-  if (protocol === "acp" && !agentName.trim()) errors.agentName = "ACP needs the agent's name on that server";
   if (!/^https?:\/\/\S+$/i.test(url.trim())) errors.url = "Enter an http(s) URL";
   const invalid = Object.keys(errors).length > 0;
   const show = (k: string) => (touched ? errors[k] : undefined);
@@ -77,13 +72,11 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
       if (existing) {
         const t = secretPatch(token);
         const patch: AgentPatch = { url: url.trim(), description, enabled, requires_approval: requiresApproval, ...(t !== undefined ? { token: t } : {}) };
-        if (existing.protocol === "acp" && agentName.trim() !== (existing.agent_name ?? "")) patch.agent_name = agentName.trim();
         await update.mutateAsync({ id: existing.id, patch });
         toast({ tone: "success", title: `Saved ${existing.name}` });
       } else {
         await create.mutateAsync({
-          name, protocol, url: url.trim(), description, enabled, requires_approval: requiresApproval,
-          agent_name: protocol === "acp" ? agentName.trim() : null,
+          name, protocol: "a2a", url: url.trim(), description, enabled, requires_approval: requiresApproval,
           token: secretPatch(token) ?? null,
         });
         toast({ tone: "success", title: `Added ${name}`, body: "Use Refresh card to check the connection." });
@@ -100,24 +93,13 @@ function AgentDialog({ open, onOpenChange, existing, takenNames }: {
       <form onSubmit={submit} noValidate className="flex flex-col gap-4">
         {touched && invalid && <Callout tone="danger" title="Fix the highlighted fields">{Object.values(errors).join(" · ")}</Callout>}
         {!existing && (
-          <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
-            { value: "a2a", label: "A2A", hint: "Agent2Agent JSON-RPC with an agent card", icon: Globe },
-            { value: "acp", label: "ACP", hint: "Agent Communication Protocol REST server", icon: Network },
-          ]} />
-        )}
-        {!existing && (
           <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} spellCheck={false}
             hint="Short id used in councils, e.g. partner-research" error={show("name")} />
         )}
-        <TextField label={protocol === "a2a" ? "A2A endpoint URL" : "ACP base URL"} type="url" inputMode="url" value={url}
+        <TextField label="A2A endpoint URL" type="url" inputMode="url" value={url}
           onChange={(e) => setUrl(e.target.value)} spellCheck={false} error={show("url")}
-          placeholder={protocol === "a2a" ? "https://agent.example.com/a2a" : "https://agents.example.com/acp"}
-          hint={protocol === "a2a" ? "The JSON-RPC endpoint. The agent card is read from /.well-known/agent-card.json on the same host." : "Argus calls /agents and /runs under this URL."} />
-        {protocol === "acp" && (
-          <TextField label="Agent name" value={agentName} onChange={(e) => setAgentName(e.target.value)} spellCheck={false} maxLength={120}
-            hint={existing ? "The agent's name on the ACP server. Changing it clears the cached card; refresh afterwards." : "The agent's name on the ACP server"}
-            error={show("agentName")} />
-        )}
+          placeholder="https://agent.example.com/a2a"
+          hint="The JSON-RPC endpoint. The agent card is read from /.well-known/agent-card.json on the same host." />
         <SecretField label="Bearer token (optional)" stored={Boolean(existing?.has_token)} action={token} onChange={setToken} />
         <TextArea label="Description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} rows={3}
           hint="Shown to the council chair when it decides whom to delegate to. Filled from the agent card if left blank." />
@@ -189,16 +171,11 @@ function RefreshSummary({ r }: { r: RefreshResult }) {
   const n = sum?.skills.length ?? 0;
   return (
     <Callout tone="success" title={`Refreshed · ${r.latencyMs} ms`}>
-      {r.agent?.protocol === "acp" ? "The ACP server lists this agent." : "Fetched the agent card."}
+      Fetched the agent card.
       {sum && ` ${n} ${n === 1 ? "skill" : "skills"}${sum.capabilities.length ? `, capabilities: ${sum.capabilities.join(", ")}` : ""}.`}
     </Callout>
   );
 }
-
-const PROTOCOL: Record<Protocol, { label: string; tone: "info" | "accent"; title: string }> = {
-  a2a: { label: "A2A", tone: "info", title: "Agent2Agent (JSON-RPC with an agent card)" },
-  acp: { label: "ACP", tone: "accent", title: "Agent Communication Protocol (REST)" },
-};
 
 function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgent; onEdit: () => void; onDelete: () => void }) {
   const refresh = useRefreshAgent();
@@ -220,8 +197,8 @@ function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgent; onEdit: () => void
           <p className="text-xs text-fg-subtle font-mono truncate">{a.url}</p>
         </div>
         <div className="flex flex-wrap gap-1">
-          <span title={PROTOCOL[a.protocol].title}>
-            <Badge tone={PROTOCOL[a.protocol].tone}><span className="sr-only">Protocol: </span>{PROTOCOL[a.protocol].label}</Badge>
+          <span title="Agent2Agent (JSON-RPC with an agent card)">
+            <Badge tone="info"><span className="sr-only">Protocol: </span>A2A</Badge>
           </span>
           {needsApproval ? <Badge tone="warning">Needs approval</Badge> : <Badge tone="neutral">No approval</Badge>}
           {!a.enabled && <Badge>Disabled</Badge>}
@@ -229,7 +206,6 @@ function AgentCard({ a, onEdit, onDelete }: { a: RemoteAgent; onEdit: () => void
       </div>
       {a.description && <p className="text-sm text-fg-muted">{a.description}</p>}
       <dl className="grid gap-3 sm:grid-cols-2">
-        {a.protocol === "acp" && <Meta label="Agent name" mono>{a.agent_name ?? "—"}</Meta>}
         <Meta label="Delegation">{needsApproval ? "Each delegation needs your approval" : "Runs without asking"}</Meta>
         <Meta label="Token">
           {a.has_token ? <span className="inline-flex items-center gap-1"><KeyRound className="size-3.5" aria-hidden />Stored · write-only</span> : "None"}
@@ -261,7 +237,7 @@ export default function RemoteAgents() {
   const origin = window.location.origin;
 
   return (
-    <ConnectionsPage title="Remote agents" description="Seat agents from other systems in your councils over A2A or ACP, and expose Argus to them."
+    <ConnectionsPage title="Remote agents" description="Seat agents from other systems in your councils over A2A, and expose Argus to them."
       actions={<Button variant="primary" icon={Plus} onClick={() => setDialog({})} disabled={q.isLoading}>Add agent</Button>}>
 
       <div className="flex flex-col gap-8">
@@ -278,7 +254,7 @@ export default function RemoteAgents() {
           ) : (
             <Card as="div">
               <EmptyState titleAs="h3" icon={Bot} title="No remote agents yet"
-                body="Paste an A2A endpoint to read its agent card, or add an ACP server and agent name." />
+                body="Paste an A2A endpoint to read its agent card." />
             </Card>
           )}
         </section>
@@ -290,11 +266,6 @@ export default function RemoteAgents() {
               <p className="text-sm font-medium">A2A agent card</p>
               <CopyBlock label="A2A agent card URL" value={`${origin}/.well-known/agent-card.json`} />
               <p className="text-xs text-fg-subtle">JSON-RPC endpoint: <span className="font-mono">{origin}/a2a</span></p>
-            </div>
-            <div className="flex flex-col gap-1.5 min-w-0">
-              <p className="text-sm font-medium">ACP base URL</p>
-              <CopyBlock label="ACP base URL" value={`${origin}/acp`} />
-              <p className="text-xs text-fg-subtle">Agents: argus-research, argus-coding, argus-chat, argus-general, plus council-&lt;name&gt; for each saved council.</p>
             </div>
           </Card>
         </section>

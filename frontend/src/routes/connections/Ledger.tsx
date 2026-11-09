@@ -14,7 +14,7 @@ type PurposeFilter = "all" | LedgerPurpose;
 const PURPOSE: Record<LedgerPurpose, { label: string; tone: "info" | "accent" | "neutral"; hint: string }> = {
   run: { label: "Run", tone: "info", hint: "Calls made while a council run was working" },
   discover: { label: "Discover", tone: "accent", hint: "Connection tests and tool discovery (initialize, tools/list)" },
-  refresh: { label: "Refresh", tone: "neutral", hint: "Agent card and ACP agent list refreshes" },
+  refresh: { label: "Refresh", tone: "neutral", hint: "Agent card refreshes" },
 };
 const LIMITS = [50, 100, 200, 500];
 
@@ -78,7 +78,9 @@ function Row({ e }: { e: LedgerEntry }) {
       <tr className={cn("hover:bg-surface-2", open && "bg-surface-2")}>
         <td className="px-3 py-2 tabular text-fg-subtle">{e.seq}</td>
         <td className="px-3 py-2 whitespace-nowrap tabular" title={e.ts}>{when(e.ts)}</td>
-        <td className="px-3 py-2"><Badge tone={e.protocol === "http" ? "neutral" : "accent"}>{e.protocol}</Badge></td>
+        <td className="px-3 py-2">{e.protocol === "acp" /* historic rows */
+          ? <Badge tone="neutral">ACP (removed)</Badge>
+          : <Badge tone={e.protocol === "http" ? "neutral" : "accent"}>{e.protocol}</Badge>}</td>
         <td className="px-3 py-2 whitespace-nowrap">
           <span className={cn("inline-flex items-center gap-1", inbound ? "text-info" : internal ? "text-accent" : "text-fg-muted")}
             title={internal ? "Between members of the council" : undefined}>
@@ -145,13 +147,13 @@ export default function Ledger() {
 
   return (
     <ConnectionsPage title="Protocol ledger"
-      description="A tamper-evident, hash-chained record of every MCP, A2A and ACP call in and out of Argus, and of the agents' outbound web requests.">
+      description="A tamper-evident, hash-chained record of every MCP and A2A call in and out of Argus, and of the agents' outbound web requests.">
       <div className="flex flex-col gap-4">
         <VerifyPanel />
         <FilterBar label="Filter ledger entries" canClear={filtered}
           onClear={() => { setProtocol("all"); setPurpose("all"); setRun(""); }}>
           <Segmented label="Protocol" value={protocol} onChange={setProtocol} options={[
-            { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" }, { value: "acp", label: "ACP" },
+            { value: "all", label: "All" }, { value: "mcp", label: "MCP" }, { value: "a2a", label: "A2A" },
             { value: "http", label: "HTTP", hint: "The agents' outbound web requests (web_fetch, web_search, market data, news)" },
           ]} />
           <Segmented label="Purpose" value={purpose} onChange={setPurpose} options={[
