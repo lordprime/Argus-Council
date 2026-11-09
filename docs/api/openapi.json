@@ -1655,7 +1655,13 @@
               "enum": [
                 "claude",
                 "codex",
-                "gemini"
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
               ],
               "type": "string",
               "title": "Cli"
@@ -1715,7 +1721,13 @@
               "enum": [
                 "claude",
                 "codex",
-                "gemini"
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
               ],
               "type": "string",
               "title": "Cli"
@@ -1763,7 +1775,13 @@
                   "enum": [
                     "claude",
                     "codex",
-                    "gemini"
+                    "gemini",
+                    "copilot",
+                    "kiro",
+                    "qwen",
+                    "opencode",
+                    "goose",
+                    "vibe"
                   ],
                   "type": "string"
                 },
@@ -1844,6 +1862,326 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CliSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cli-agents/{cli}/login": {
+      "get": {
+        "tags": [
+          "cli-agents"
+        ],
+        "summary": "Login State",
+        "description": "Your sign-in in progress for this CLI (``state: none`` when there is none).",
+        "operationId": "login_state_api_v1_cli_agents__cli__login_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cli",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
+              ],
+              "type": "string",
+              "title": "Cli"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Login State Api V1 Cli Agents  Cli  Login Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "cli-agents"
+        ],
+        "summary": "Login Start",
+        "description": "Start the CLI's own sign-in in your runner home; returns the link (and code) to act on.",
+        "operationId": "login_start_api_v1_cli_agents__cli__login_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cli",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
+              ],
+              "type": "string",
+              "title": "Cli"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliLoginStartIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Login Start Api V1 Cli Agents  Cli  Login Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "cli-agents"
+        ],
+        "summary": "Login Cancel",
+        "operationId": "login_cancel_api_v1_cli_agents__cli__login_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cli",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
+              ],
+              "type": "string",
+              "title": "Cli"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Login Cancel Api V1 Cli Agents  Cli  Login Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cli-agents/{cli}/login/code": {
+      "post": {
+        "tags": [
+          "cli-agents"
+        ],
+        "summary": "Login Code",
+        "description": "Pass the authorization code shown by the vendor to the CLI. Never stored or logged.",
+        "operationId": "login_code_api_v1_cli_agents__cli__login_code_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cli",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
+              ],
+              "type": "string",
+              "title": "Cli"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliLoginCodeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Login Code Api V1 Cli Agents  Cli  Login Code Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cli-agents/{cli}/logout": {
+      "post": {
+        "tags": [
+          "cli-agents"
+        ],
+        "summary": "Logout",
+        "description": "Sign this CLI out of your vendor account (the CLI's own sign-out).",
+        "operationId": "logout_api_v1_cli_agents__cli__logout_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cli",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "copilot",
+                "kiro",
+                "qwen",
+                "opencode",
+                "goose",
+                "vibe"
+              ],
+              "type": "string",
+              "title": "Cli"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logout Api V1 Cli Agents  Cli  Logout Post"
                 }
               }
             }
@@ -7788,6 +8126,19 @@
             "maxLength": 512,
             "minLength": 8,
             "title": "Api Key"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32,
+                "pattern": "^[a-z0-9_]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
           }
         },
         "type": "object",
@@ -7816,6 +8167,17 @@
               }
             ],
             "title": "Key Hint"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
           }
         },
         "type": "object",
@@ -7824,6 +8186,40 @@
           "has_api_key"
         ],
         "title": "CliKeyOut"
+      },
+      "CliLoginCodeIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "CliLoginCodeIn"
+      },
+      "CliLoginStartIn": {
+        "properties": {
+          "method": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32,
+                "pattern": "^[a-z_]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          }
+        },
+        "type": "object",
+        "title": "CliLoginStartIn"
       },
       "CliSessionOut": {
         "properties": {
