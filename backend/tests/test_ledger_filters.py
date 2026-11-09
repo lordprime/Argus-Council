@@ -85,3 +85,22 @@ async def test_ledger_protocol_filter_includes_agent_web_requests(client, auth, 
     assert [e["seq"] for e in (await _page(client, auth, protocol="http", purpose="run"))["entries"]] == [9]
     assert len((await _page(client, auth, protocol="mcp"))["entries"]) == 8
     assert (await client.get("/api/v1/ledger/verify", headers=auth)).json()["ok"] is True
+
+
+async def test_ledger_chain_verifies_with_historic_acp_entries(client, auth, app):
+    me = uuid.UUID((await client.get("/api/v1/auth/me", headers=auth)).json()["id"])
+    for protocol in ("acp", "a2a"):
+        await ledger.record(
+            app.state.db.sessionmaker,
+            owner_id=me,
+            protocol=protocol,
+            direction="outbound",
+            peer="https://agent.example.com",
+            method="run",
+            status="ok",
+            request={},
+            response={},
+        )
+    result = await ledger.verify(app.state.db.sessionmaker, me)
+    assert result["ok"] is True
+    assert result["entries"] == 2

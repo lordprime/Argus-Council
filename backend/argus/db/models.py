@@ -292,9 +292,6 @@ class RemoteAgent(IdMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(40))
     protocol: Mapped[str] = mapped_column(String(8))  # a2a
     url: Mapped[str] = mapped_column(String(500))
-    agent_name: Mapped[str | None] = mapped_column(
-        String(120), nullable=True
-    )  # legacy; dropped by a later migration
     token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     card: Mapped[dict[str, Any]] = mapped_column(default=dict)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -311,7 +308,9 @@ class LedgerEntry(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     seq: Mapped[int] = mapped_column(Integer)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    protocol: Mapped[str] = mapped_column(String(8))  # mcp | a2a
+    protocol: Mapped[str] = mapped_column(
+        String(8)
+    )  # mcp | a2a | http | browser | skill; historic rows may say acp
     direction: Mapped[str] = mapped_column(String(8))  # inbound | outbound
     peer: Mapped[str] = mapped_column(String(500))
     method: Mapped[str] = mapped_column(String(120))
