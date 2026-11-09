@@ -167,3 +167,63 @@ async def test_idle_tunnel_is_closed(echo):
         await r.readuntil(b"\r\n\r\n")
         assert await asyncio.wait_for(r.read(10), 3) == b""
         w.close()
+
+
+async def test_falls_back_to_the_next_vetted_address_when_the_first_refuses(echo):
+    attempts: list[str] = []
+
+    async def resolver(host):
+        return ["2001:4860:4860::8888", PUBLIC]
+
+    async def connect(host, port):
+        attempts.append(host)
+        if ":" in host:
+            raise ConnectionRefusedError
+        return await asyncio.open_connection("127.0.0.1", echo)
+
+    server = await egress.serve("127.0.0.1", 0, resolver=resolver, connect=connect)
+    async with server:
+        assert await connect_status(server.sockets[0].getsockname()[1], "x.test:443") == 200
+    assert attempts == ["2001:4860:4860::8888", PUBLIC]
+
+
+async def test_default_resolver_keeps_getaddrinfo_order(monkeypatch):
+    infos = [(0, 0, 0, "", (a, 0)) for a in ["2001:db8::1", "93.184.216.34", "2001:db8::1"]]
+    monkeypatch.setattr(egress.socket, "getaddrinfo", lambda *a, **k: infos)
+    assert await egress.default_resolver("x.test") == ["2001:db8::1", "93.184.216.34"]
+
+
+async def test_tunnel_stays_open_while_only_the_server_talks():
+    async def chatty(reader, writer):
+        for _ in range(8):
+            writer.write(b"x")
+            await writer.drain()
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(2)
+        writer.close()
+
+    upstream = await asyncio.start_server(chatty, "127.0.0.1", 0)
+    up_port = upstream.sockets[0].getsockname()[1]
+    _h, server, port = await start([PUBLIC], up_port, idle_timeout=0.35)
+    async with server, upstream:
+        r, w = await asyncio.open_connection("127.0.0.1", port)
+        w.write(b"CONNECT ok.test:443 HTTP/1.1\r\n\r\n")
+        await r.readuntil(b"\r\n\r\n")
+        got = b""
+        while len(got) < 8:  # 0.8 s of server-only traffic, longer than the 0.35 s idle period
+            chunk = await asyncio.wait_for(r.read(10), 3)
+            assert chunk, "tunnel was closed while the server was still sending"
+            got += chunk
+        assert await asyncio.wait_for(r.read(10), 3) == b""  # then both quiet: closed
+        w.close()
+
+
+async def test_huge_port_and_malformed_url_get_400(echo):
+    h, server, port = await start([PUBLIC], echo)
+    async with server:
+        assert await connect_status(port, "x.test:" + "9" * 5000) == 400
+        assert status(await exchange(port, b"GET http://[::1/ HTTP/1.1\r\nHost: x\r\n\r\n")) == 400
+        assert (
+            status(await exchange(port, b"GET http://x.test:" + b"9" * 5000 + b"/ HTTP/1.1\r\n\r\n")) == 400
+        )
+        assert h.connected == []

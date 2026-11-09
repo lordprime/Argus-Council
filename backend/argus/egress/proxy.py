@@ -40,7 +40,8 @@ _HOP_BY_HOP = {"connection", "proxy-connection", "proxy-authorization", "keep-al
 
 async def default_resolver(host: str) -> list[str]:
     infos = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
-    return sorted({str(i[4][0]) for i in infos})
+    # Keep getaddrinfo's own (RFC 6724) order: it puts the addresses most likely to be reachable first.
+    return list(dict.fromkeys(str(i[4][0]) for i in infos))
 
 
 class Refused(Exception):
@@ -65,7 +66,7 @@ def _parse_hostport(target: str, default_port: int | None) -> tuple[str, int]:
     if not host:
         raise Refused(400, "malformed target")
     if port_s:
-        if not port_s.isdigit() or not 0 < int(port_s) < 65536:
+        if not port_s.isdigit() or len(port_s) > 5 or not 0 < int(port_s) < 65536:
             raise Refused(400, "malformed port")
         port = int(port_s)
     elif default_port is not None:
@@ -75,8 +76,8 @@ def _parse_hostport(target: str, default_port: int | None) -> tuple[str, int]:
     return host.lower().rstrip("."), port
 
 
-async def _vet(host: str, resolver: Resolver) -> str:
-    """Resolve once and return the checked address to connect to."""
+async def _vet(host: str, resolver: Resolver) -> list[str]:
+    """Resolve once and return the checked addresses, in resolver order; all of them are allowed."""
     try:
         ipaddress.ip_address(host)
         ips = [host]
@@ -93,7 +94,7 @@ async def _vet(host: str, resolver: Resolver) -> str:
                 raise Refused(403, "destination resolves to a disallowed address")
         except ValueError:
             raise Refused(403, "destination resolves to a disallowed address") from None
-    return ips[0]
+    return ips
 
 
 async def _respond(writer: asyncio.StreamWriter, status: int, body: str = "") -> None:
@@ -107,15 +108,39 @@ async def _respond(writer: asyncio.StreamWriter, status: int, body: str = "") ->
         pass
 
 
-async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, idle: float) -> None:
+class _Activity:
+    """Last time either direction of a connection moved data."""
+
+    def __init__(self) -> None:
+        self.last = asyncio.get_running_loop().time()
+
+    def touch(self) -> None:
+        self.last = asyncio.get_running_loop().time()
+
+    def quiet_for(self) -> float:
+        return asyncio.get_running_loop().time() - self.last
+
+
+async def _pipe(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, idle: float, activity: _Activity | None = None
+) -> None:
+    """Copy until EOF, or until the whole connection (``activity``) has been quiet for ``idle``."""
+    activity = activity or _Activity()
     try:
         while True:
-            data = await asyncio.wait_for(reader.read(65536), idle)
+            try:
+                data = await asyncio.wait_for(reader.read(65536), max(idle - activity.quiet_for(), 0.01))
+            except TimeoutError:
+                if activity.quiet_for() >= idle:
+                    break
+                continue
             if not data:
                 break
+            activity.touch()
             writer.write(data)
             await writer.drain()
-    except (TimeoutError, OSError, asyncio.IncompleteReadError):
+            activity.touch()
+    except (OSError, asyncio.IncompleteReadError):
         pass
     finally:
         try:
@@ -131,10 +156,11 @@ async def _tunnel(
     b_writer: asyncio.StreamWriter,
     idle: float,
 ) -> None:
-    """Pipe both ways; the tunnel ends when either side closes or goes idle."""
+    """Pipe both ways; ends when either side closes or both directions have been quiet for ``idle``."""
+    activity = _Activity()
     tasks = [
-        asyncio.ensure_future(_pipe(a_reader, b_writer, idle)),
-        asyncio.ensure_future(_pipe(b_reader, a_writer, idle)),
+        asyncio.ensure_future(_pipe(a_reader, b_writer, idle, activity)),
+        asyncio.ensure_future(_pipe(b_reader, a_writer, idle, activity)),
     ]
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -164,11 +190,16 @@ async def _read_head(reader: asyncio.StreamReader) -> list[str]:
     return text[:-4].split("\r\n")
 
 
-async def _open(connect: Connector, ip: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    try:
-        return await asyncio.wait_for(connect(ip, port), CONNECT_TIMEOUT_S)
-    except (OSError, TimeoutError):
-        raise Refused(502, "upstream connection failed") from None
+async def _open(
+    connect: Connector, ips: list[str], port: int
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Try each vetted address in turn; only addresses that passed the check are ever dialled."""
+    for ip in ips:
+        try:
+            return await asyncio.wait_for(connect(ip, port), CONNECT_TIMEOUT_S)
+        except (OSError, TimeoutError):
+            continue
+    raise Refused(502, "upstream connection failed")
 
 
 async def _handle(
@@ -196,8 +227,8 @@ async def _handle(
             host, port = _parse_hostport(target, None)
             if port not in CONNECT_PORTS:
                 raise Refused(403, "only ports 80 and 443 are allowed")
-            ip = await _vet(host, resolver)
-            up_reader, up_writer = await _open(connect, ip, port)
+            ips = await _vet(host, resolver)
+            up_reader, up_writer = await _open(connect, ips, port)
             log.info("egress.allow", host=host, port=port, reason="connect")
             writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             await writer.drain()
@@ -205,24 +236,24 @@ async def _handle(
             return
 
         if method == "GET" and target.lower().startswith(("http://", "https://")):
-            url = urlsplit(target)
+            try:
+                url = urlsplit(target)
+                url_host, url_port, url_user, url_pass = url.hostname, url.port, url.username, url.password
+            except ValueError:
+                raise Refused(400, "malformed URL") from None
             if url.scheme.lower() != "http":
                 raise Refused(403, "only plain http is forwarded; use CONNECT for https")
-            if url.username or url.password or not url.hostname:
+            if url_user or url_pass or not url_host:
                 raise Refused(403, "credentials in URLs are not allowed")
-            try:
-                url_port = url.port
-            except ValueError:
-                raise Refused(400, "malformed port") from None
-            host, port = url.hostname.lower().rstrip("."), url_port or 80
+            host, port = url_host.lower().rstrip("."), url_port or 80
             if port != 80:
                 raise Refused(403, "plain http is only forwarded on port 80")
             if any(k.lower() == "transfer-encoding" for k, _ in headers) or any(
                 k.lower() == "content-length" and v not in ("", "0") for k, v in headers
             ):
                 raise Refused(400, "request bodies are not allowed")
-            ip = await _vet(host, resolver)
-            up_reader, up_writer = await _open(connect, ip, port)
+            ips = await _vet(host, resolver)
+            up_reader, up_writer = await _open(connect, ips, port)
             log.info("egress.allow", host=host, port=port, reason="get")
             path = (url.path or "/") + (f"?{url.query}" if url.query else "")
             host_header = f"[{host}]" if ":" in host else host
