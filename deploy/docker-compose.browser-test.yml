@@ -24,7 +24,7 @@ services:
 
   site: &site
     profiles: ["browser"]
-    image: python:3.12-slim-bookworm
+    image: python:3.15-slim-bookworm
     user: "${ARGUS_TEST_UID:-1000}:${ARGUS_TEST_GID:-1000}"
     command: ["python", "/srv/server.py"]
     read_only: true
